@@ -1,0 +1,6 @@
+
+runs
+
+# pixi environments
+.pixi
+*.egg-info
