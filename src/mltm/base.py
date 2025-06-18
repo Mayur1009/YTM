@@ -53,7 +53,6 @@ code_transform = get_kernel("cuda/code_transform.cu")
 code_clauses = get_kernel("cuda/code_clauses.cu")
 
 
-
 class CommonTsetlinMachine:
     def __init__(
         self,
@@ -69,7 +68,7 @@ class CommonTsetlinMachine:
         sr: float | None = None,
         encode_loc: bool = True,
         max_weight: int | None = None,
-		seed: int | None = None,
+        seed: int | None = None,
         grid=(16 * 13, 1, 1),
         block=(128, 1, 1),
     ):
@@ -105,6 +104,7 @@ class CommonTsetlinMachine:
         if seed is None:
             self.rng_gpu = curandom.XORWOWRandomNumberGenerator()
         else:
+
             def _custom_seed_getter(count):
                 return to_gpu(np.array([seed] * count, dtype=np.int32))
 
@@ -112,8 +112,6 @@ class CommonTsetlinMachine:
 
         self.negative_clauses = 1  # Default is 1, set to 0 in RegressionTsetlinMachine
         self.initialized = False
-
-
 
     #### FIT AND SCORE ####
     def _fit(self, X, encoded_Y, epochs=1, incremental=True):
