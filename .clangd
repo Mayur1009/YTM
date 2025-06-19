@@ -3,6 +3,8 @@ CompileFlags:
     - --cuda-path=/opt/cuda
     - -L/opt/cuda/lib
     - -I/opt/cuda/include
+    - -ferror-limit=0
+    - -DIS_NEOVIM_CLANGD_ENV
 
 SemanticTokens:
   DisabledKinds: [InactiveCode]
