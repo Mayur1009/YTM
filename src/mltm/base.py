@@ -52,7 +52,7 @@ def kernel_config(data_size, props, preferred_block_size=128):
     return (grid_size, 1, 1), (block_size, 1, 1)
 
 
-new_kernel = get_kernel("cuda/kernel.cu")
+kernel_str = get_kernel("cuda/kernel.cu")
 
 
 class CommonTsetlinMachine:
@@ -67,7 +67,7 @@ class CommonTsetlinMachine:
         append_negated: bool = True,
         encode_loc: bool = True,
         seed: int | None = None,
-        preferred_block_size: int = 128,
+        block_size: int = 128,
     ):
         # Initialize Hyperparams
         self.number_of_clauses = number_of_clauses
@@ -102,7 +102,7 @@ class CommonTsetlinMachine:
         self.negative_clauses = 1  # Default is 1, set to 0 in RegressionTsetlinMachine
         self.initialized = False
 
-        self.preferred_block_size = preferred_block_size
+        self.block_size = block_size
         self.device_props = get_device_properties()
 
     def _validate_fit_args(self, X, encoded_Y):
@@ -290,7 +290,7 @@ class CommonTsetlinMachine:
         #define MAX_TA_STATE {self.number_of_ta_states}
         #define ENCODE_LOC {self.encode_loc}
         """
-        mod_new_kernel = SourceModule(self.gpu_macro_string + new_kernel, no_extern_c=True)
+        mod_new_kernel = SourceModule(self.gpu_macro_string + kernel_str, no_extern_c=True)
 
         self.kernel_init = mod_new_kernel.get_function("initialize")
         self.kernel_init.prepare("PPP")
@@ -313,32 +313,32 @@ class CommonTsetlinMachine:
         self.initialize_config = kernel_config(
             self.number_of_clauses * self.number_of_literals,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
         self.encode_config = kernel_config(
             self.number_of_patches,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
         self.clause_eval_config = kernel_config(
             self.number_of_clauses * self.number_of_patches,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
         self.calc_class_sums_config = kernel_config(
             self.number_of_clauses,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
         self.calc_num_includes_config = kernel_config(
             self.number_of_clauses,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
         self.clause_update_config = kernel_config(
             self.number_of_clauses,
             self.device_props,
-            self.preferred_block_size,
+            self.block_size,
         )
 
         # Allocate GPU memory
