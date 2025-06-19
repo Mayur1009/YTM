@@ -1,5 +1,4 @@
 import pathlib
-import pickle
 import sys
 
 import numpy as np
@@ -63,37 +62,23 @@ class CommonTsetlinMachine:
         T: int,
         s: float,
         q: float = 1.0,
+        number_of_ta_states: int = 256,
         max_included_literals: int | None = None,
-        boost_true_positive_feedback: int = 1,
-        number_of_state_bits: int = 8,
         append_negated: bool = True,
-        r: float = 1.0,
-        sr: float | None = None,
         encode_loc: bool = True,
-        max_weight: int | None = None,
         seed: int | None = None,
-        grid=(16 * 13, 1, 1),
-        block=(128, 1, 1),
+        preferred_block_size: int = 128,
     ):
         # Initialize Hyperparams
         self.number_of_clauses = number_of_clauses
         self.number_of_clause_chunks = (number_of_clauses - 1) / 32 + 1
-        self.number_of_state_bits = number_of_state_bits
+        self.number_of_ta_states = number_of_ta_states
         self.T = T
         self.s = s
         self.q = q
         self.max_included_literals = max_included_literals
-        self.boost_true_positive_feedback = boost_true_positive_feedback
         self.append_negated = 1 if append_negated else 0
-        self.r = r
-        if sr is None:
-            self.sr = s
-        else:
-            self.sr = sr
         self.encode_loc = 1 if encode_loc else 0
-        self.max_weight = max_weight
-        self.grid = grid
-        self.block = block
 
         self.X_train = np.array([])
         self.X_test = np.array([])
@@ -117,6 +102,7 @@ class CommonTsetlinMachine:
         self.negative_clauses = 1  # Default is 1, set to 0 in RegressionTsetlinMachine
         self.initialized = False
 
+        self.preferred_block_size = preferred_block_size
         self.device_props = get_device_properties()
 
     def _validate_fit_args(self, X, encoded_Y):
@@ -154,23 +140,6 @@ class CommonTsetlinMachine:
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
-        # temp_ta_states = np.empty(self.number_of_clauses * self.number_of_features, dtype=np.uint32)
-        # temp_clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
-        # memcpy_dtoh(temp_ta_states, self.ta_state_gpu)
-        # memcpy_dtoh(temp_clause_weights, self.clause_weights_gpu)
-        # temp_ta_states = temp_ta_states.reshape((self.number_of_clauses, self.number_of_features))
-        # temp_clause_weights = temp_clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
-        # print(f'{temp_ta_states=}')
-        # print(f'{temp_clause_weights=}')
-        # breakpoint()
-
-        # clause_eval_block = (16, 16, 1) if self.number_of_clauses > 256 else (8, 8, 1)
-        # clause_eval_grid = (
-        #         min(32, (self.number_of_clauses + clause_eval_block[0] - 1) // clause_eval_block[0]),
-        #         min(32, (self.number_of_outputs + clause_eval_block[1] - 1) // clause_eval_block[1]),
-        #         1,
-        # )
-
         class_sum_base = np.zeros(self.number_of_outputs).astype(np.float32)
         selected_patch_ids_base = -1 * np.ones(self.number_of_clauses, dtype=np.int32)
         class_sum_sample = np.zeros(self.number_of_outputs, dtype=np.float32)
@@ -192,10 +161,6 @@ class CommonTsetlinMachine:
             )
             ctx.synchronize()
 
-            # temp_encoded_X = np.zeros_like(self.encoded_X_base, dtype=np.uint32)
-            # memcpy_dtoh(temp_encoded_X, encoded_X_gpu)
-            # temp_encoded_X = temp_encoded_X.reshape(self.number_of_patches, self.number_of_features)
-
             self.kernel_clause_eval.prepared_call(
                 *self.clause_eval_config,
                 self.rng_gpu.state,
@@ -215,28 +180,12 @@ class CommonTsetlinMachine:
             )
             ctx.synchronize()
 
-            # temp_class_sum2 = np.zeros(self.number_of_outputs, dtype=np.float32)
-            # memcpy_dtoh(temp_class_sum2, class_sum_gpu)
-            # pred = np.argmax(temp_class_sum2)
-            # true_label = np.argmax(self.encoded_Y[e, :])
-            # if pred == true_label:
-            #     num_correct_samples += 1
-            # print(f"{temp_class_sum2=}")
-            #
-            # temp_selected_patch_ids = np.zeros(self.number_of_clauses, dtype=np.int32)
-            # memcpy_dtoh(temp_selected_patch_ids, selected_patch_ids_gpu)
-            # print(f"{temp_selected_patch_ids=}")
-
             self.kernel_calc_num_includes.prepared_call(
                 *self.calc_num_includes_config,
                 self.ta_state_gpu,
                 num_includes_gpu,
             )
             ctx.synchronize()
-
-            # temp_num_includes = np.zeros(self.number_of_clauses, dtype=np.int32)
-            # memcpy_dtoh(temp_num_includes, num_includes_gpu)
-            # print(f"{temp_num_includes=}")
 
             self.kernel_clause_update.prepared_call(
                 *self.clause_update_config,
@@ -256,33 +205,6 @@ class CommonTsetlinMachine:
             pbar.set_postfix_str(
                 f"Correct: {num_correct_preds}/{e + 1} (Acc: {(num_correct_preds / (e + 1)) * 100:.4f}%)"
             )
-            # prob = np.abs(np.clip(class_sum_sample, -self.T, self.T) + encoded_Y[e]) / (2 * self.T)
-            #
-            # if (e + 1) % 1000 == 0:
-            #     pbar.set_postfix_str(f"Avg prob: {np.mean(prob):.4f}")
-
-            # if e % 20000 == 0:
-            #     breakpoint()
-
-            # temp_clause_weights = np.zeros(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
-            # memcpy_dtoh(temp_clause_weights, self.clause_weights_gpu)
-            # temp_clause_weights = temp_clause_weights.reshape(self.number_of_clauses, self.number_of_outputs)
-            # print(f"{temp_clause_weights=}")
-            #
-            # temp_ta_states = np.zeros(self.number_of_clauses * self.number_of_features, dtype=np.uint32)
-            # memcpy_dtoh(temp_ta_states, self.ta_state_gpu)
-            # temp_ta_states = temp_ta_states.reshape(self.number_of_clauses, self.number_of_features)
-            # print(f"{temp_ta_states=}")
-            #
-            #
-            # breakpoint()
-
-        # Free GPU memory
-        # encoded_X_gpu.free()
-        # encoded_Y_gpu.free()
-        # class_sum_gpu.free()
-        # selected_patch_ids_gpu.free()
-        # num_includes_gpu.free()
         return
 
     def _score(self, X):
@@ -317,8 +239,7 @@ class CommonTsetlinMachine:
             memcpy_htod(encoded_X_gpu, self.encoded_X_base)
 
             self.kernel_encode.prepared_call(
-                self.grid,
-                self.block,
+                *self.encode_config,
                 self.X_test_indptr_gpu,
                 self.X_test_indices_gpu,
                 encoded_X_gpu,
@@ -327,8 +248,7 @@ class CommonTsetlinMachine:
             ctx.synchronize()
 
             self.kernel_clause_eval.prepared_call(
-                self.grid,
-                self.block,
+                *self.clause_eval_config,
                 self.rng_gpu.state,
                 self.ta_state_gpu,
                 self.clause_weights_gpu,
@@ -338,8 +258,7 @@ class CommonTsetlinMachine:
             ctx.synchronize()
 
             self.kernel_calc_class_sums.prepared_call(
-                self.grid,
-                self.block,
+                *self.calc_class_sums_config,
                 selected_patch_ids_gpu,
                 self.clause_weights_gpu,
                 class_sum_gpu,
@@ -347,12 +266,6 @@ class CommonTsetlinMachine:
             ctx.synchronize()
 
             memcpy_dtoh(class_sums[e, :], class_sum_gpu)
-
-        # Free GPU memory
-        # encoded_X_gpu.free()
-        # encoded_Y_gpu.free()
-        # class_sum_gpu.free()
-        # selected_patch_ids_gpu.free()
 
         return class_sums
 
@@ -374,8 +287,7 @@ class CommonTsetlinMachine:
         #define APPEND_NEGATED {self.append_negated}
         #define NEGATIVE_CLAUSES {self.negative_clauses}
         #define CLASSES {self.number_of_outputs}
-        #define STATE_BITS {self.number_of_state_bits}
-        #define MAX_TA_STATE {(1 << self.number_of_state_bits) - 1}
+        #define MAX_TA_STATE {self.number_of_ta_states}
         #define ENCODE_LOC {self.encode_loc}
         """
         mod_new_kernel = SourceModule(self.gpu_macro_string + new_kernel, no_extern_c=True)
@@ -398,11 +310,36 @@ class CommonTsetlinMachine:
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
         self.kernel_clause_update.prepare("PPPPPPPP")
 
-        self.encode_config = kernel_config(self.number_of_patches, self.device_props)
-        self.clause_eval_config = kernel_config(self.number_of_clauses * self.number_of_patches, self.device_props)
-        self.calc_class_sums_config = kernel_config(self.number_of_clauses, self.device_props)
-        self.calc_num_includes_config = kernel_config(self.number_of_clauses, self.device_props)
-        self.clause_update_config = kernel_config(self.number_of_clauses, self.device_props)
+        self.initialize_config = kernel_config(
+            self.number_of_clauses * self.number_of_literals,
+            self.device_props,
+            self.preferred_block_size,
+        )
+        self.encode_config = kernel_config(
+            self.number_of_patches,
+            self.device_props,
+            self.preferred_block_size,
+        )
+        self.clause_eval_config = kernel_config(
+            self.number_of_clauses * self.number_of_patches,
+            self.device_props,
+            self.preferred_block_size,
+        )
+        self.calc_class_sums_config = kernel_config(
+            self.number_of_clauses,
+            self.device_props,
+            self.preferred_block_size,
+        )
+        self.calc_num_includes_config = kernel_config(
+            self.number_of_clauses,
+            self.device_props,
+            self.preferred_block_size,
+        )
+        self.clause_update_config = kernel_config(
+            self.number_of_clauses,
+            self.device_props,
+            self.preferred_block_size,
+        )
 
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
@@ -412,8 +349,7 @@ class CommonTsetlinMachine:
     #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
     def _init_default_vals(self):
         self.kernel_init.prepared_call(
-            self.grid,
-            self.block,
+            *self.initialize_config,
             self.rng_gpu.state,
             self.ta_state_gpu,
             self.clause_weights_gpu,
@@ -470,77 +406,11 @@ class CommonTsetlinMachine:
 
         self.encoded_X_base = encoded_X.reshape(-1)
 
-    # def _init_encoded_X_packed_base(self):
-    #     # Encoded X packed
-    #     encoded_X_packed = np.zeros(((self.number_of_patches - 1) // 32 + 1, self.number_of_features), dtype=np.uint32)
-    #     if self.append_negated:
-    #         for p_chunk in range((self.number_of_patches - 1) // 32 + 1):
-    #             for k in range(self.number_of_features // 2, self.number_of_features):
-    #                 encoded_X_packed[p_chunk, k] = ~np.uint32(0)
-    #
-    #     for patch_coordinate_y in range(self.dim[1] - self.patch_dim[1] + 1):
-    #         for patch_coordinate_x in range(self.dim[0] - self.patch_dim[0] + 1):
-    #             p = patch_coordinate_y * (self.dim[0] - self.patch_dim[0] + 1) + patch_coordinate_x
-    #             p_chunk = p // 32
-    #             p_pos = p % 32
-    #
-    #             for y_threshold in range(self.dim[1] - self.patch_dim[1]):
-    #                 patch_pos = y_threshold
-    #                 if patch_coordinate_y > y_threshold:
-    #                     encoded_X_packed[p_chunk, patch_pos] |= 1 << p_pos
-    #
-    #                     if self.append_negated:
-    #                         encoded_X_packed[p_chunk, patch_pos + self.number_of_features // 2] &= ~np.uint32(
-    #                             1 << p_pos
-    #                         )
-    #
-    #             for x_threshold in range(self.dim[0] - self.patch_dim[0]):
-    #                 patch_pos = (self.dim[1] - self.patch_dim[1]) + x_threshold
-    #                 if patch_coordinate_x > x_threshold:
-    #                     encoded_X_packed[p_chunk, patch_pos] |= 1 << p_pos
-    #
-    #                     if self.append_negated:
-    #                         encoded_X_packed[p_chunk, patch_pos + self.number_of_features // 2] &= ~np.uint32(
-    #                             1 << p_pos
-    #                         )
-    #
-    #     self.encoded_X_packed_base = encoded_X_packed.reshape(-1)
-
     #### CAUSE and WEIGHT OPERATIONS ####
-    def ta_action(self, clause, ta):
-        if np.array_equal(self.ta_state, np.array([])):
-            self.ta_state = np.empty(self.number_of_clauses * self.number_of_literals, dtype=np.uint32)
-            memcpy_dtoh(self.ta_state, self.ta_state_gpu)
-        ta_state = self.ta_state.reshape((self.number_of_clauses, self.number_of_literals))
-        return ta_state[clause, ta]
-
-    # def get_literals(self):
-    #     literals_gpu = mem_alloc(self.number_of_clauses * self.number_of_features * 4)
-    #     self.get_literals_gpu(
-    #         self.ta_state_gpu,
-    #         literals_gpu,
-    #         grid=self.grid,
-    #         block=self.block,
-    #     )
-    #     ctx.synchronize()
-    #
-    #     literals = np.empty((self.number_of_clauses * self.number_of_features), dtype=np.uint32)
-    #     memcpy_dtoh(literals, literals_gpu)
-    #     return literals.reshape((self.number_of_clauses, self.number_of_features)).astype(np.uint8)
-
-    # def get_ta_states(self):
-    #     ta_states_gpu = mem_alloc(self.number_of_clauses * self.number_of_features * 4)
-    #     self.get_ta_states_gpu(
-    #         self.ta_state_gpu,
-    #         ta_states_gpu,
-    #         grid=self.grid,
-    #         block=self.block,
-    #     )
-    #     ctx.synchronize()
-    #
-    #     ta_states = np.empty((self.number_of_clauses * self.number_of_features), dtype=np.uint32)
-    #     memcpy_dtoh(ta_states, ta_states_gpu)
-    #     return ta_states.reshape((self.number_of_clauses, self.number_of_features))
+    def get_ta_state(self):
+        self.ta_state = np.empty(self.number_of_clauses * self.number_of_literals, dtype=np.uint32)
+        memcpy_dtoh(self.ta_state, self.ta_state_gpu)
+        return self.ta_state.reshape((self.number_of_clauses, self.number_of_literals))
 
     def get_weights(self):
         self.clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.int32)
@@ -548,176 +418,17 @@ class CommonTsetlinMachine:
 
         return self.clause_weights.reshape((self.number_of_outputs, self.number_of_clauses))
 
-    def get_patch_weights(self):
-        self.patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
-        memcpy_dtoh(self.patch_weights, self.patch_weights_gpu)
-
-        return self.patch_weights.reshape(
-            (
-                self.number_of_clauses,
-                self.dim[0] - self.patch_dim[0] + 1,
-                self.dim[1] - self.patch_dim[1] + 1,
-            )
-        )
-
-    # Transform input data for processing at next layer
-    # def transform(self, X) -> csr_matrix:
-    #     """Returns csr_matix of clause outputs. Array shape: (num_samples, num_clauses)"""
-    #     if not self.initialized:
-    #         print("Error: Model not trained.")
-    #         sys.exit(-1)
-    #
-    #     if len(self.encoded_X_packed_base) == 0:
-    #         self._init_encoded_X_packed_base()
-    #
-    #     if len(self.encoded_X_packed_base) == 0:
-    #         self._init_encoded_X_packed_base()
-    #
-    #     X = csr_matrix(X)
-    #     number_of_examples = X.shape[0]
-    #
-    #     # Copy data to GPU
-    #     X_indptr_gpu = mem_alloc(X.indptr.nbytes)
-    #     X_indices_gpu = mem_alloc(X.indices.nbytes)
-    #     memcpy_htod(X_indptr_gpu, X.indptr)
-    #     memcpy_htod(X_indices_gpu, X.indices)
-    #
-    #     X_transformed = np.empty((number_of_examples, self.number_of_clauses), dtype=np.uint32)
-    #     X_transformed_gpu = mem_alloc(self.number_of_clauses * 4)
-    #
-    #     # Initialize GPU memory for temporary data
-    #     encoded_X_packed_gpu = mem_alloc(self.encoded_X_packed_base.nbytes)
-    #     included_literals_gpu = mem_alloc(self.number_of_clauses * self.number_of_features * 2 * 4)
-    #     included_literals_length_gpu = mem_alloc(self.number_of_clauses * 4)
-    #
-    #     grid_prepare = (min(self.grid[0], (self.number_of_clauses + self.block[0] - 1) // self.block[0]), 1, 1)
-    #     self.prepare_packed.prepared_call(
-    #         grid_prepare,
-    #         self.block,
-    #         self.rng_gpu.state,
-    #         self.ta_state_gpu,
-    #         included_literals_gpu,
-    #         included_literals_length_gpu,
-    #     )
-    #     ctx.synchronize()
-    #
-    #     for e in range(number_of_examples):
-    #         memcpy_htod(encoded_X_packed_gpu, self.encoded_X_packed_base)
-    #         self.encode_packed.prepared_call(
-    #             self.grid,
-    #             self.block,
-    #             X_indptr_gpu,
-    #             X_indices_gpu,
-    #             encoded_X_packed_gpu,
-    #             np.int32(e),
-    #             np.int32(0),
-    #         )
-    #         ctx.synchronize()
-    #
-    #         self.transform_gpu(
-    #             included_literals_gpu,
-    #             included_literals_length_gpu,
-    #             encoded_X_packed_gpu,
-    #             X_transformed_gpu,
-    #             grid=self.grid,
-    #             block=self.block,
-    #         )
-    #         ctx.synchronize()
-    #
-    #         memcpy_dtoh(X_transformed[e, :], X_transformed_gpu)
-    #
-    #     encoded_X_packed_gpu.free()
-    #     included_literals_gpu.free()
-    #     included_literals_length_gpu.free()
-    #
-    #     X_transformed = (X_transformed > 0).astype(np.uint8)
-    #     return csr_matrix(X_transformed)
-    #
-    # def transform_patchwise(self, X) -> csr_matrix:
-    #     """Returns SPARSE CSR MATRIX of patch outputs for each clause. Array shape: (num_samples, num_clauses * num_patches)"""
-    #     if not self.initialized:
-    #         print("Error: Model not trained.")
-    #         sys.exit(-1)
-    #
-    #     if len(self.encoded_X_packed_base) == 0:
-    #         self._init_encoded_X_packed_base()
-    #
-    #     X = csr_matrix(X)
-    #     number_of_examples = X.shape[0]
-    #
-    #     # Copy data to GPU
-    #     X_indptr_gpu = mem_alloc(X.indptr.nbytes)
-    #     X_indices_gpu = mem_alloc(X.indices.nbytes)
-    #     memcpy_htod(X_indptr_gpu, X.indptr)
-    #     memcpy_htod(X_indices_gpu, X.indices)
-    #
-    #     # Array to capture output from gpu
-    #     X_transformed = np.empty(
-    #         (number_of_examples, self.number_of_clauses * self.number_of_patches),
-    #         dtype=np.uint32,
-    #     )
-    #     X_transformed_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
-    #
-    #     # Initialize GPU memory for temporary data
-    #     encoded_X_packed_gpu = mem_alloc(self.encoded_X_packed_base.nbytes)
-    #     included_literals_gpu = mem_alloc(self.number_of_clauses * self.number_of_features * 2 * 4)
-    #     included_literals_length_gpu = mem_alloc(self.number_of_clauses * 4)
-    #
-    #     grid_prepare = (min(self.grid[0], (self.number_of_clauses + self.block[0] - 1) // self.block[0]), 1, 1)
-    #     self.prepare_packed.prepared_call(
-    #         grid_prepare,
-    #         self.block,
-    #         self.rng_gpu.state,
-    #         self.ta_state_gpu,
-    #         included_literals_gpu,
-    #         included_literals_length_gpu,
-    #     )
-    #     ctx.synchronize()
-    #
-    #     for e in range(number_of_examples):
-    #         memcpy_htod(encoded_X_packed_gpu, self.encoded_X_packed_base)
-    #         self.encode_packed.prepared_call(
-    #             self.grid,
-    #             self.block,
-    #             X_indptr_gpu,
-    #             X_indices_gpu,
-    #             encoded_X_packed_gpu,
-    #             np.int32(e),
-    #             np.int32(0),
-    #         )
-    #         ctx.synchronize()
-    #
-    #         self.transform_patchwise_gpu(
-    #             included_literals_gpu,
-    #             included_literals_length_gpu,
-    #             encoded_X_packed_gpu,
-    #             X_transformed_gpu,
-    #             grid=self.grid,
-    #             block=self.block,
-    #         )
-    #         ctx.synchronize()
-    #
-    #         memcpy_dtoh(X_transformed[e, :], X_transformed_gpu)
-    #
-    #     encoded_X_packed_gpu.free()
-    #     included_literals_gpu.free()
-    #     included_literals_length_gpu.free()
-    #
-    #     return csr_matrix(X_transformed.reshape((number_of_examples, self.number_of_clauses * self.number_of_patches)))
-
     #### SAVE AND LOAD ####
-    def save(self, fname=""):
+    def save(self):
         # Copy data from GPU to CPU
         self.ta_state = np.empty(
             self.number_of_clauses * self.number_of_literals,
             dtype=np.uint32,
         )
         self.clause_weights = np.empty(self.number_of_outputs * self.number_of_clauses, dtype=np.int32)
-        self.patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
 
         memcpy_dtoh(self.ta_state, self.ta_state_gpu)
         memcpy_dtoh(self.clause_weights, self.clause_weights_gpu)
-        memcpy_dtoh(self.patch_weights, self.patch_weights_gpu)
 
         state_dict = {
             # State arrays
@@ -735,40 +446,19 @@ class CommonTsetlinMachine:
             "s": self.s,
             "q": self.q,
             "patch_dim": self.patch_dim,
-            "r": self.r,
-            "sr": self.sr,
             "dim": self.dim,
             "max_included_literals": self.max_included_literals,
-            "boost_true_positive_feedback": self.boost_true_positive_feedback,
-            "number_of_state_bits": self.number_of_state_bits,
+            "number_of_ta_states": self.number_of_ta_states,
             "append_negated": self.append_negated,
             "encode_loc": self.encode_loc,
-            "max_weight": self.max_weight,
         }
-
-        # Save to file
-        if len(fname) > 0:
-            print(f"Saving model to {fname}.")
-            with open(fname, "wb") as f:
-                pickle.dump(state_dict, f)
 
         return state_dict
 
-    def load(self, state_dict={}, fname=""):
-        if len(fname) == 0 and len(state_dict) == 0:
-            print("Error: No file or state_dict provided. Pass either a file name or a state_dict.")
-            return
-
-        # Load from file
-        if len(fname) > 0:
-            print(f"Loading model from {fname}.")
-            with open(fname, "rb") as f:
-                state_dict = pickle.load(f)
-
+    def load(self, state_dict):
         # Load arrays state_dict
         self.ta_state = state_dict["ta_state"]
         self.clause_weights = state_dict["clause_weights"]
-        self.patch_weights = state_dict["patch_weights"]
         self.number_of_outputs = state_dict["number_of_outputs"]
         self.dim = state_dict["dim"]
         self.patch_dim = state_dict["patch_dim"]
