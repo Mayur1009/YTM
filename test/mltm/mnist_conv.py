@@ -11,9 +11,11 @@ def train(tm: MultiClassConvolutionalTsetlinMachine2D, X_train, Y_train, X_test,
         with train_timer:
             tm.fit(X_train, Y_train, epochs=1, incremental=True)
 
-        test_pred = tm.predict(X_test)
+        test_timer = Timer()
+        with test_timer:
+            test_pred = tm.predict(X_test)
         test_acc = np.mean(Y_test == test_pred)
-        print(f"Epoch {epoch + 1}/{epochs}, Test Accuracy: {test_acc * 100}, Time: {train_timer.elapsed():.4f}s")
+        print(f"Epoch {epoch + 1}/{epochs}, Test Accuracy: {test_acc * 100}, Train Time: {train_timer.elapsed():.4f}s, Test Time: {test_timer.elapsed():.4f}s")
 
 
 if __name__ == "__main__":
@@ -24,8 +26,8 @@ if __name__ == "__main__":
 
     Y_train, Y_test = Y_train_org, Y_test_org
 
-    clauses = 2500
-    T = 3125
+    clauses = 3000
+    T = 10000
     s = 10
     dim = (28, 28, 1)
     patch_dim = (10, 10)
@@ -39,9 +41,9 @@ if __name__ == "__main__":
         "patch_dim": patch_dim,
         "encode_loc": True,
         "seed": 10,
-
+        "block_size": 128,
     }
     tm = MultiClassConvolutionalTsetlinMachine2D(**tm_params)
 
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=1)
 

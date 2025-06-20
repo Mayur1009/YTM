@@ -39,7 +39,7 @@ class MultiClassConvolutionalTsetlinMachine2D(CommonTsetlinMachine):
         self.patch_dim = patch_dim
         self.negative_clauses = 1
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         if len(X.shape) == 3:
             print(f"Expecting X with 2D shape, got {X.shape}. Flattening the array...")
             X = X.reshape((X.shape[0], -1))
@@ -56,7 +56,7 @@ class MultiClassConvolutionalTsetlinMachine2D(CommonTsetlinMachine):
             # encoded_Y[:, i] = np.where(Y == i, 1, 0)
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
     def score(self, X):
         X = csr_matrix(X)
@@ -107,7 +107,7 @@ class MultiOutputConvolutionalTsetlinMachine2D(CommonTsetlinMachine):
         self.patch_dim = patch_dim
         self.negative_clauses = 1
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         if len(X.shape) == 3:
             print(f"Expecting X with 2D shape, got {X.shape}. Flattening the array...")
             X = X.reshape((X.shape[0], -1))
@@ -121,7 +121,7 @@ class MultiOutputConvolutionalTsetlinMachine2D(CommonTsetlinMachine):
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
 
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
     def score(self, X):
         X = csr_matrix(X)
@@ -167,7 +167,7 @@ class MultiOutputTsetlinMachine(CommonTsetlinMachine):
         )
         self.negative_clauses = 1
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         X = csr_matrix(X)
 
         self.number_of_outputs = Y.shape[1]
@@ -179,7 +179,7 @@ class MultiOutputTsetlinMachine(CommonTsetlinMachine):
         self.min_y = None
 
         encoded_Y = np.where(Y == 0, self.T, -self.T).astype(np.int32)
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
         return
 
@@ -226,7 +226,7 @@ class MultiClassTsetlinMachine(CommonTsetlinMachine):
         )
         self.negative_clauses = 1
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         X = csr_matrix(X)
 
         self.number_of_outputs = int(np.max(Y) + 1)
@@ -241,7 +241,7 @@ class MultiClassTsetlinMachine(CommonTsetlinMachine):
         for i in range(self.number_of_outputs):
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
         return
 
@@ -284,7 +284,7 @@ class TsetlinMachine(CommonTsetlinMachine):
         )
         self.negative_clauses = 1
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.number_of_outputs = 1
@@ -295,7 +295,7 @@ class TsetlinMachine(CommonTsetlinMachine):
 
         encoded_Y = np.where(Y == 0, self.T, -self.T).astype(np.int32)
 
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
         return
 
@@ -332,12 +332,12 @@ class RegressionTsetlinMachine(CommonTsetlinMachine):
             max_included_literals=max_included_literals,
             number_of_ta_states=number_of_ta_states,
             append_negated=append_negated,
+            negative_polarity=False,
             seed=seed,
             block_size=block_size,
         )
-        self.negative_clauses = 0
 
-    def fit(self, X, Y, epochs=100, incremental=False):
+    def fit(self, X, Y):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.number_of_outputs = 1
@@ -348,7 +348,7 @@ class RegressionTsetlinMachine(CommonTsetlinMachine):
 
         encoded_Y = ((Y - self.min_y) / (self.max_y - self.min_y) * self.T).astype(np.int32)
 
-        self._fit(X, encoded_Y, epochs=epochs, incremental=incremental)
+        self._fit(X, encoded_Y)
 
         return
 

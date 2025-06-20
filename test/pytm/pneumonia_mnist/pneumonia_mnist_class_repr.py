@@ -184,7 +184,7 @@ def global_transform(tm: MultiClassConvolutionalTsetlinMachine2D):
     return transformed
 
 def plot_transformed(transformed):
-    fig, axs = plt.subplots(1, 2)
+    fig, axs = plt.subplots(1, 2, layout="compressed", figsize=(8, 4))
 
     for c in range(2):
         img = transformed[c, 0] - transformed[c, 1]
@@ -196,9 +196,10 @@ def plot_transformed(transformed):
 
         img = Normalize(-1, 1)(img)
         axs[c].imshow(img, cmap=icefire)
+        axs[c].axis("off")
+        axs[c].set_title(f"Output {c}")
 
     return fig
-    
 
 
 if __name__ == "__main__":

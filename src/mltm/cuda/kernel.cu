@@ -21,113 +21,181 @@
 
 #include <curand_kernel.h>
 
-#define VECTORIZED_LIMIT (LITERALS - (LITERALS % 4))
+#define VECTORIZED_LIMIT (LITERALS & ~3)
 #define S_INV (1.0f / S)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
+#define HALF_STATE (MAX_TA_STATE / 2)
+#define INT_SIZE 32
+#define NUM_LITERAL_CHUNKS (((LITERALS - 1) / INT_SIZE) + 1)
+#if ((LITERALS % INT_SIZE) != 0)
+#define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
+#else
+#define FILTER 0xFFFFFFFF
+#endif
 
 extern "C" {
 __global__ void initialize(curandState *rng, unsigned int *global_ta_states, float *clause_weights) {
+    /*
+     * Initialize the TA states to middle state and clause weights(randomly to -1 and 1).
+     */
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     curandState localState = rng[index];
 
     for (int clause = index; clause < CLAUSES; clause += stride) {
         for (int li = 0; li < LITERALS; ++li) {
-            global_ta_states[clause * LITERALS + li] = MAX_TA_STATE / 2;  // Initialize TA states to 0
+            global_ta_states[clause * LITERALS + li] = HALF_STATE;  // Initialize TA states to 0
         }
         for (int class_id = 0; class_id < CLASSES; ++class_id) {
 #if NEGATIVE_CLAUSES
             clause_weights[clause * CLASSES + class_id] = (1.0f - 2.0f * (float)(curand(&localState) % 2));
 #else
-            clause_weights[clause * CLASSES + class_id] = 1;
+            clause_weights[clause * CLASSES + class_id] = 1.0f;
 #endif
         }
     }
     rng[index] = localState;
 }
 
-__global__ void encode(unsigned int *X_indptr, unsigned int *X_indices, unsigned int *encoded_X, int e) {
+__global__ void encode(const unsigned int *X_indptr, const unsigned int *X_indices, unsigned int *encoded_X, const int e) {
+    /*
+     * Encode the input data X into patches. Each patch has a set of literals, which are packed into chunks of 32 bits.
+     * TODO: This is done for sample e. But it might be better to process multiple samples at once. Since the input data
+     * can be huge, some sort of batching would be better.
+     */
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    unsigned int *indices = &X_indices[X_indptr[e]];
+    const unsigned int *indices = &X_indices[X_indptr[e]];
     int number_of_indices = X_indptr[e + 1] - X_indptr[e];
 
-    for (int k = 0; k < number_of_indices; ++k) {
-        int y = indices[k] / (DIM0 * DIM2);
-        int x = (indices[k] % (DIM0 * DIM2)) / DIM2;
-        int z = (indices[k] % (DIM0 * DIM2)) % DIM2;
+    for (int patch = index; patch < PATCHES; patch += stride) {
+        // Pre-calculate patch boundaries once per thread
+        int patch_coordinate_y = patch / (DIM0 - PATCH_DIM0 + 1);
+        int patch_coordinate_x = patch % (DIM0 - PATCH_DIM0 + 1);
 
-        for (int patch = index; patch < PATCHES; patch += stride) {
-            int patch_coordinate_y = patch / (DIM0 - PATCH_DIM0 + 1);
-            int patch_coordinate_x = patch % (DIM0 - PATCH_DIM0 + 1);
+        unsigned int *patch_output = &encoded_X[patch * NUM_LITERAL_CHUNKS];
 
-            if ((y < patch_coordinate_y) || (y >= patch_coordinate_y + PATCH_DIM1) || (x < patch_coordinate_x) ||
-                (x >= patch_coordinate_x + PATCH_DIM0)) {
-                continue;
-            }
+        for (int k = 0; k < number_of_indices; ++k) {
+            int idx = indices[k];
+            int y = idx / (DIM0 * DIM2);
+            int x = (idx % (DIM0 * DIM2)) / DIM2;
+            int z = (idx % (DIM0 * DIM2)) % DIM2;
 
-            int p_y = y - patch_coordinate_y;
-            int p_x = x - patch_coordinate_x;
+            // Check if this coordinate falls in this patch
+            if (y >= patch_coordinate_y && y < patch_coordinate_y + PATCH_DIM1 && x >= patch_coordinate_x &&
+                x < patch_coordinate_x + PATCH_DIM0) {
+                // Calculate bit position and set
+                int p_y = y - patch_coordinate_y;
+                int p_x = x - patch_coordinate_x;
 
 #if ENCODE_LOC
-            int patch_pos = (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
+                int patch_pos = (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
 #else
-            int patch_pos = p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
+                int patch_pos = p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
 #endif
-            encoded_X[patch * LITERALS + patch_pos] = 1;
+
+                int chunk_nr = patch_pos / INT_SIZE;
+                int chunk_pos = patch_pos % INT_SIZE;
+                patch_output[chunk_nr] |= (1u << chunk_pos);
+
 #if APPEND_NEGATED
-            encoded_X[patch * LITERALS + patch_pos + LITERALS / 2] = 0;
+                int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
+                int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
+                patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
 #endif
+            }
         }
+    }
+}
+
+
+__global__ void pack_clauses(const unsigned int *global_ta_states, unsigned int *packed_clauses, int *num_includes) {
+    /*
+     * Pack the TA states into chunks of 32 bits. Each chunk represents a set of literals.
+     * The number of included literals is also calculated here.
+     */
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int clause = index; clause < CLAUSES; clause += stride) {
+        const unsigned int *ta_state = &global_ta_states[clause * LITERALS];
+        unsigned int *packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
+        int total_count = 0;
+
+        #pragma unroll 4
+        for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
+            unsigned int packed_value = 0;
+            int start_lit = chunk * INT_SIZE;
+            int end_lit = min(start_lit + INT_SIZE, LITERALS);
+
+            int vectorized_end = start_lit + ((end_lit - start_lit) & ~3);  // Ensure vectorized end is a multiple of 4
+            for (int li = start_lit; li < vectorized_end; li += 4) {
+                uint4 ta_vec = *((uint4 *)&ta_state[li]);
+                if (ta_vec.x > HALF_STATE) {
+                    packed_value |= (1u << (li % INT_SIZE));
+                    total_count++;
+                }
+                if (ta_vec.y > HALF_STATE) {
+                    packed_value |= (1u << ((li + 1) % INT_SIZE));
+                    total_count++;
+                }
+                if (ta_vec.z > HALF_STATE) {
+                    packed_value |= (1u << ((li + 2) % INT_SIZE));
+                    total_count++;
+                }
+                if (ta_vec.w > HALF_STATE) {
+                    packed_value |= (1u << ((li + 3) % INT_SIZE));
+                    total_count++;
+                }
+            }
+            for (int li = vectorized_end; li < end_lit; ++li) {
+                if (ta_state[li] > HALF_STATE) {
+                    packed_value |= (1u << (li % INT_SIZE));
+                    total_count++;
+                }
+            }
+            packed_clause[chunk] = packed_value;
+        }
+        num_includes[clause] = total_count;
     }
 }
 
 __device__ inline int clause_match(const unsigned int *ta_state, const unsigned int *X) {
-    const uint4 half_state = {MAX_TA_STATE / 2, MAX_TA_STATE / 2, MAX_TA_STATE / 2, MAX_TA_STATE / 2};
-#pragma unroll 4
-    for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
-        uint4 ta_vec = *((uint4 *)&ta_state[li]);
-        uint4 x_vec = *((uint4 *)&X[li]);
-        unsigned int lit_x = (ta_vec.x > half_state.x);
-        unsigned int lit_y = (ta_vec.y > half_state.y);
-        unsigned int lit_z = (ta_vec.z > half_state.z);
-        unsigned int lit_w = (ta_vec.w > half_state.w);
-        if ((lit_x & (x_vec.x == 0)) || (lit_y & (x_vec.y == 0)) || (lit_z & (x_vec.z == 0)) ||
-            (lit_w & (x_vec.w == 0))) {
-            return 0;
-        }
-    }
-    for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-        unsigned int lit = (ta_state[li] > MAX_TA_STATE / 2) ? 1u : 0u;
-        if (lit * X[li] != lit) {
-            return 0;  // Not matching
-        }
-    }
-    return 1;  // Matching
+    /*
+     * Check if the TA state matches the patch X.
+     * Returns 1 if it matches, 0 otherwise.
+     */
+
+    #pragma unroll 4
+    for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk)
+        if ((ta_state[chunk] & X[chunk]) != ta_state[chunk]) return 0;
+
+    if ((ta_state[NUM_LITERAL_CHUNKS - 1] & (X[NUM_LITERAL_CHUNKS - 1] & FILTER)) !=
+        (ta_state[NUM_LITERAL_CHUNKS - 1] & FILTER))
+        return 0;
+
+    return 1;
 }
 
-__global__ void clause_eval(curandState *rng, const unsigned int *global_ta_states, const float *clause_weights,
+__global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
                             const unsigned int *X, int *selected_patch_ids) {
+    /*
+     * Calculate clause activations and select a patch for each active clause. If a clause is active, the
+     * selected_patch_ids will be int between 0 and PATCHES - 1, else it will be -1.
+     */
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
     curandState localRNG = rng[index];
 
-    // curandState localRNG = rng[ty * sx + tx];
     for (int clause_patch = index; clause_patch < CLAUSES * PATCHES; clause_patch += stride) {
         int clause = clause_patch / PATCHES;
         int patch_id = clause_patch % PATCHES;
 
-        // for (int clause = tx; clause < CLAUSES; clause += sx) {
-        //     for (int patch_id = ty; patch_id < PATCHES; patch_id += sy) {
         if (selected_patch_ids[clause] > -1) continue;  // Skip already selected clauses
-        const unsigned int *ta_state = &global_ta_states[clause * LITERALS];
-        const unsigned int *patch = &X[patch_id * LITERALS];
-        int patch_matched = clause_match(ta_state, patch);
-        // printf("clause: %d, patch_id: %d, patch_matched: %d\n", clause, patch_id, patch_matched);
-        if (patch_matched && curand_uniform(&localRNG) <= 0.5f) {
-            // int old_val = atomicCAS(&selected_patch_ids[clause], -1, patch_id);
+        int patch_matched =
+            clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS], &X[patch_id * NUM_LITERAL_CHUNKS]);
+        if (patch_matched && (PATCHES == 1 || curand_uniform(&localRNG) <= 0.5f)) {
             selected_patch_ids[clause] = patch_id;
             break;
         }
@@ -136,6 +204,11 @@ __global__ void clause_eval(curandState *rng, const unsigned int *global_ta_stat
 }
 
 __global__ void calc_class_sums(int *selected_patch_ids, const float *clause_weights, float *class_sums) {
+    /*
+     * Calculate the class sums for each clause. If selected_patch_ids[clause] > -1, then the clause is active.
+     * The class_sum is given by, W[:, class] . Clause_activations.
+     * Can this dot product be optimized?
+     */
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -145,20 +218,6 @@ __global__ void calc_class_sums(int *selected_patch_ids, const float *clause_wei
                 atomicAdd(&class_sums[class_id], clause_weights[clause * CLASSES + class_id]);
             }
         }
-    }
-}
-
-__global__ void calc_num_includes(unsigned int *global_ta_states, int *num_includes) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    for (int clause = index; clause < CLAUSES; clause += stride) {
-        int count = 0;
-        for (int li = 0; li < LITERALS; ++li) {
-            if (global_ta_states[clause * LITERALS + li] > MAX_TA_STATE / 2) {
-                count++;
-            }
-        }
-        num_includes[clause] = count;
     }
 }
 
@@ -176,9 +235,15 @@ __device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, float
     // Update weight
     (*clause_weight) += sign * 1.0f;
 
+    #pragma unroll 4
     for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
         uint4 ta_vec = *((uint4 *)&ta_state[li]);
-        uint4 patch_vec = *((uint4 *)&patch[li]);
+        uint4 patch_vec = {
+            (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
+            (patch[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
+            (patch[(li + 2) / INT_SIZE] >> ((li + 2) % INT_SIZE)) & 1u,
+            (patch[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
+        };
 
         ta_vec.x += (patch_vec.x == 1 && ta_vec.x < MAX_TA_STATE);
         ta_vec.y += (patch_vec.y == 1 && ta_vec.y < MAX_TA_STATE);
@@ -195,10 +260,12 @@ __device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, float
     }
 
     // Handle remaining literals (when LITERALS % 4 != 0)
+    #pragma unroll 4
     for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-        if (patch[li] == 1 && ta_state[li] < MAX_TA_STATE) {
+        unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+        if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
             ta_state[li] += 1;
-        } else if (patch[li] == 0 && ta_state[li] > 0 && curand_uniform(rng) < S_INV) {
+        } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) < S_INV) {
             ta_state[li] -= 1;
         }
     }
@@ -210,6 +277,7 @@ __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state) {
      * 1. Decrement states for all literals with probability 1/S.
      */
 
+    #pragma unroll 4
     for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
         uint4 ta_vec = *((uint4 *)&ta_state[li]);
 
@@ -221,6 +289,7 @@ __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state) {
         *((uint4 *)&ta_state[li]) = ta_vec;
     }
 
+    #pragma unroll 4
     for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
         if (ta_state[li] > 0 && curand_uniform(rng) < S_INV) {
             ta_state[li] -= 1;
@@ -243,9 +312,15 @@ __device__ inline void type2_fb(unsigned int *ta_state, float *clause_weight, co
 #endif
 
     // Use predefined macro instead of runtime computation
+    #pragma unroll 4
     for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
         uint4 ta_vec = *((uint4 *)&ta_state[li]);
-        uint4 patch_vec = *((uint4 *)&patch[li]);
+        uint4 patch_vec = {
+            (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
+            (patch[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
+            (patch[(li + 2) / INT_SIZE] >> ((li + 2) % INT_SIZE)) & 1u,
+            (patch[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
+        };
 
         // Increment ta_state elements where patch is 0
         ta_vec.x += (patch_vec.x == 0);
@@ -257,8 +332,10 @@ __device__ inline void type2_fb(unsigned int *ta_state, float *clause_weight, co
     }
 
     // Handle remaining literals using macro constant
+    #pragma unroll 4
     for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-        if (patch[li] == 0) {
+        unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+        if (patch_bit == 0) {
             ta_state[li] += 1;
         }
     }
@@ -266,7 +343,7 @@ __device__ inline void type2_fb(unsigned int *ta_state, float *clause_weight, co
 
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                               const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const unsigned int *X, const int *Y) {
+                              const unsigned int *X, const int *Y, const int e) {
     /*
      * Update the clauses based on the class sum and Y.
      *
@@ -277,7 +354,7 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
      * - class_sums: Shape: CLASSES.
      * - selected_patch_ids: Selected patch ids for each clause. Shape: CLAUSES.
      * - num_includes: Number of included literals for each clause. Shape: CLAUSES.
-     * - X: Input data. Shape: PATCHES * LITERALS.
+     * - X: Packed Input data. Shape: PATCHES * NUM_LITERAL_CHUNKS.
      * - Y: Labels for the sample. This is encoded, i.e., y == 0 -> -T and y == 1 -> T. Shape: CLASSES.
      */
 
@@ -285,10 +362,9 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
     __shared__ int tar[CLASSES];
     for (int class_id = threadIdx.x; class_id < CLASSES; class_id += blockDim.x) {
         float clipped = clip_cs(class_sums[class_id]);
-        prob[class_id] = abs((float)Y[class_id] - clipped) / (2.0 * THRESH);
-        tar[class_id] = 1 - 2 * (clipped > Y[class_id]);
-        // printf("class_id: %d, clipped: %f, prob: %f, tar: %d, Y: %d\n", class_id, clipped, prob[class_id],
-        //        tar[class_id], Y[class_id]);
+        const int y = Y[e * CLASSES + class_id];
+        prob[class_id] = abs((float)y - clipped) / (2.0 * THRESH);
+        tar[class_id] = 1 - 2 * (clipped > y);
     }
     __syncthreads();
 
@@ -300,7 +376,7 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
         unsigned int *ta_state = &global_ta_states[clause * LITERALS];
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
         const unsigned int *patch =
-            selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * LITERALS] : nullptr;
+            selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
         for (unsigned int class_id = 0; class_id < CLASSES; ++class_id) {
             if (tar[class_id] == -1 && curand_uniform(&localRNG) > Q_PROB) {
