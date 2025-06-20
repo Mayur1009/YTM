@@ -24,7 +24,7 @@ if __name__ == "__main__":
 
     Y_train, Y_test = Y_train_org, Y_test_org
 
-    clauses = 100
+    clauses = 500
     T = clauses * 2
     s = 10
     dim = (28, 28, 1)
