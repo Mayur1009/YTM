@@ -11,7 +11,7 @@
 #define PATCH_DIM1 10
 #define PATCHES 361
 #define LITERALS 272
-#define MAX_INCLUDED_LITERALS LITERALS
+#define MAX_INCLUDED_LITERALS 272
 #define APPEND_NEGATED 1
 #define INIT_NEG_WEIGHTS 1
 #define NEGATIVE_CLAUSES 1
@@ -298,17 +298,13 @@ __global__ void calc_class_sums(int *selected_patch_ids, const float *clause_wei
 
 __device__ inline float clip_cs(float cs) { return (cs > THRESH) ? THRESH : ((cs < -THRESH) ? -THRESH : cs); }
 
-__device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, float *clause_weight,
-                                 const unsigned int *patch, int sign) {
+__device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, const unsigned int *patch) {
     /*
      * Type Ia feedback - Vectorized version:
      * 1. Increment states for literal present in the patch.
      * 2. Decrement states for literal not present in the patch with probability 1/S.
      * 3. Increase clause weight.
      */
-
-    // Update weight
-    (*clause_weight) += sign * 1.0f;
 
 #pragma unroll 4
     for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
@@ -372,19 +368,12 @@ __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state) {
     }
 }
 
-__device__ inline void type2_fb(unsigned int *ta_state, float *clause_weight, const unsigned int *patch, int sign) {
+__device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patch) {
     /*
      * Type II feedback - Vectorized version with macro constants:
      * 1. Increment states for literals not present in patch.
      * 2. Decrement clause weight.
      */
-
-    // Update clause weight
-    (*clause_weight) -= sign * 1.0f;
-
-#if NEGATIVE_CLAUSES == 0
-    if (*clause_weight < 1) *clause_weight = 1;
-#endif
 
 // Use predefined macro instead of runtime computation
 #pragma unroll 4
@@ -462,21 +451,30 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
             bool should_upate = (curand_uniform(&localRNG) <= prob[class_id]);
-            bool type1 = ((tar[class_id] * sign) > 0);
+            bool type1a = ((tar[class_id] * sign) > 0 && local_clause_output);
+            bool type1b = ((tar[class_id] * sign) > 0 && !local_clause_output);
             bool type2 = ((tar[class_id] * sign) < 0 && local_clause_output);
 
             if (should_upate) {  // CLause update with prob update_p else skip
-                if (type1 && local_clause_output) {
-                    type1a_fb(&localRNG, ta_state, local_weight, patch, sign);
-                } else if (type1 && !local_clause_output) {
+                if (type1a) {
+                    (*local_weight) += sign * 1.0f;
+#if (MAX_INCLUDED_LITERALS < LITERALS)
+                    if (num_includes[clause] < MAX_INCLUDED_LITERALS) type1a_fb(&localRNG, ta_state, patch);
+#else
+                    type1a_fb(&localRNG, ta_state, patch);
+#endif
+                } else if (type1b) {
                     type1b_fb(&localRNG, ta_state);
                 } else if (type2) {
-                    type2_fb(ta_state, local_weight, patch, sign);
+                    (*local_weight) -= sign * 1.0f;
+#if NEGATIVE_CLAUSES == 0
+                    if (*local_weight < 1) *local_weight = 1;
+#endif
+                    type2_fb(ta_state, patch);
                 }
             }
         }
     }
-
     rng[index] = localRNG;
 }
 }
