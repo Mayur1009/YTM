@@ -1,8 +1,6 @@
 CompileFlags:
   Add:
-    - --cuda-path=/opt/cuda
-    - -L/opt/cuda/lib
-    - -I/opt/cuda/include
+    - --cuda-path=.pixi/envs/default/targets/x86_64-linux
     - -ferror-limit=0
     - -DIS_NEOVIM_CLANGD_ENV
 

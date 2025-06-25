@@ -98,7 +98,7 @@ class BaseTM:
 
             def _custom_seed_getter(count):
                 # Make sure that each thread gets a different seed
-                return to_gpu(np.array([(seed + i) * (i + 1) for i in range(1, count + 1)], dtype=np.int32))
+                return to_gpu(np.array([(seed + i) for i in range(1, count + 1)], dtype=np.int32))
 
             self.rng_gpu = curandom.XORWOWRandomNumberGenerator(_custom_seed_getter)
 
