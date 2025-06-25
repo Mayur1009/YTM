@@ -1,6 +1,6 @@
 import numpy as np
-from scipy.sparse import csr_matrix
 from .base import BaseTM
+
 
 class RegressionTM(BaseTM):
     def __init__(
@@ -23,6 +23,7 @@ class RegressionTM(BaseTM):
             T,
             s,
             dim=dim,
+            n_classes=1,
             patch_dim=patch_dim,
             max_included_literals=max_included_literals,
             number_of_ta_states=number_of_ta_states,
@@ -36,7 +37,6 @@ class RegressionTM(BaseTM):
     def fit(self, X, Y):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
-        self.number_of_outputs = 1
         self.max_y = np.max(Y)
         self.min_y = np.min(Y)
 

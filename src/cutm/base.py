@@ -1,5 +1,4 @@
 import pathlib
-import sys
 
 import numpy as np
 import pycuda.autoinit  # noqa: F401
@@ -64,6 +63,7 @@ class BaseTM:
         T: int,
         s: float,
         dim: tuple[int, int, int],
+        n_classes: int,
         q: float = 1.0,
         patch_dim: tuple[int, int] | None = None,
         number_of_ta_states: int = 256,
@@ -82,6 +82,7 @@ class BaseTM:
         self.T = T
         self.s = s
         self.dim = dim
+        self.number_of_outputs = n_classes
         self.q = q
         self.max_included_literals = max_included_literals
         self.append_negated = 1 if append_negated else 0
@@ -120,7 +121,6 @@ class BaseTM:
             self._gpu_init()
             self._init_default_vals()
             self.initialized = True
-
 
         X_indptr_gpu = mem_alloc(X.indptr.nbytes)
         X_indices_gpu = mem_alloc(X.indices.nbytes)

@@ -65,6 +65,7 @@ if __name__ == "__main__":
         dim=(28, 28, 8),
         n_classes=10,
         patch_dim=(3, 3),
+        seed=10,
         block_size=128,
     )
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=20)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=30)

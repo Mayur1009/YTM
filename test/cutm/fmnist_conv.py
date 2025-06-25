@@ -1,6 +1,5 @@
 import numpy as np
 from keras.datasets import fashion_mnist
-from tqdm import tqdm
 
 from tm_utils import Timer
 from cutm import MultiClassTM
@@ -57,6 +56,7 @@ if __name__ == "__main__":
         T=15000,
         s=10,
         dim=(28, 28, 8),
+        n_classes=10,
         patch_dim=(3, 3),
         seed=10,
         block_size=128,

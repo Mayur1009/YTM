@@ -38,6 +38,7 @@ if __name__ == "__main__":
         "s": s,
         "q": q,
         "dim": dim,
+        "n_classes": 10,
         "patch_dim": patch_dim,
         "encode_loc": True,
         "seed": 10,

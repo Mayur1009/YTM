@@ -10,6 +10,7 @@ class MultiOutputTM(BaseTM):
         T: int,
         s: float,
         dim: tuple[int, int, int],
+        n_classes: int,
         q: float = 1.0,
         patch_dim: tuple[int, int] | None = None,
         max_included_literals: int | None = None,
@@ -26,6 +27,7 @@ class MultiOutputTM(BaseTM):
             T,
             s,
             dim=dim,
+            n_classes=n_classes,
             q=q,
             patch_dim=patch_dim,
             max_included_literals=max_included_literals,
@@ -50,7 +52,6 @@ class MultiOutputTM(BaseTM):
 
         # Convert to sparse format
         csrX = csr_matrix(X)
-        self.number_of_outputs = Y.shape[1]
 
         self.max_y = None
         self.min_y = None
@@ -72,4 +73,3 @@ class MultiOutputTM(BaseTM):
         class_sums = self.score(X)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums
-

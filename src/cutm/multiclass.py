@@ -10,6 +10,7 @@ class MultiClassTM(BaseTM):
         T: int,
         s: float,
         dim: tuple[int, int, int],
+        n_classes: int,
         q: float = 1.0,
         patch_dim: tuple[int, int] | None = None,
         max_included_literals: int | None = None,
@@ -26,6 +27,7 @@ class MultiClassTM(BaseTM):
             T,
             s,
             dim=dim,
+            n_classes=n_classes,
             q=q,
             patch_dim=patch_dim,
             max_included_literals=max_included_literals,
@@ -48,7 +50,6 @@ class MultiClassTM(BaseTM):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
 
         csrX = csr_matrix(X)
-        self.number_of_outputs = int(np.max(Y) + 1)
 
         self.max_y = None
         self.min_y = None
