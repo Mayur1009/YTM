@@ -2,7 +2,7 @@ import numpy as np
 from time import time
 from keras.datasets import fashion_mnist
 
-from mltm import MultiClassTM
+from cutm import MultiClassTM
 
 if __name__ == "__main__":
 	(X_train, Y_train), (X_test, Y_test) = fashion_mnist.load_data()

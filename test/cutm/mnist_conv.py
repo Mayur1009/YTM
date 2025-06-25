@@ -1,8 +1,8 @@
 import numpy as np
 from keras.datasets import mnist
 
-from mltm.utils import Timer
-from mltm import MultiClassTM
+from tm_utils import Timer
+from cutm import MultiClassTM
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):

@@ -479,14 +479,4 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
 
     rng[index] = localRNG;
 }
-
-/* TODO:
- * Calculate the update for each TA, for each sample of a batch, rather than updating after each sample.
- * 1. Calculate the update for each TA.
- * 2. Average the update over the batch.
- * 3. Do this for all samples in a batch.
- * 4. Update the TA states and weights.
- * 5. Maybe store the probabilities for each TA rather than the absolute update.
- * 6. But then how should the probabilities be aggregated?
- */
 }

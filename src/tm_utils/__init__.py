@@ -18,3 +18,4 @@ class Timer:
         if self.end_time is None:
             raise RuntimeError("elapsed() must be called after context is ended.")
         return self.end_time - self.start_time
+
