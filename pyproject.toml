@@ -23,6 +23,10 @@ sources =["src"]
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportUnusedImport = false
+exclude = [
+    ".pixi",
+    "data",
+]
 
 [tool.ruff]
 line-length = 120

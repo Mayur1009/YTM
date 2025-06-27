@@ -1,9 +1,7 @@
-from lzma import LZMAFile
-import pickle
 from medmnist.dataset import PneumoniaMNIST
 import numpy as np
-from mltm.utils import Timer
-from pytm.tm import MultiClassConvolutionalTsetlinMachine2D
+from tm_utils import Timer
+from cutm import MultiClassTM
 
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
@@ -43,7 +41,7 @@ def balance(y):
     return np.concatenate([c0_inds, c1_inds])
 
 
-def train(tm: MultiClassConvolutionalTsetlinMachine2D, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
+def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
     for epoch in range(epochs):
         balanced_indices = balance(ytrain)
         xtrain = xtrain[balanced_indices]
@@ -55,10 +53,10 @@ def train(tm: MultiClassConvolutionalTsetlinMachine2D, xtrain, ytrain, xval, yva
 
         train_timer = Timer()
         with train_timer:
-            tm.fit(xtrain, ytrain, epochs=1, incremental=True)
+            tm.fit(xtrain, ytrain)
 
         # Train
-        preds_train, cs_train = tm.predict(xtrain, return_class_sums=True)
+        preds_train, cs_train = tm.predict(xtrain)
         prob_train = (np.clip(cs_train, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         prob_train = prob_train / (np.sum(prob_train, axis=1, keepdims=True) + 1e-7)
         train_acc = accuracy_score(ytrain, preds_train)
@@ -67,7 +65,7 @@ def train(tm: MultiClassConvolutionalTsetlinMachine2D, xtrain, ytrain, xval, yva
         auc_train = roc_auc_score(ytrain_bin, prob_train)
 
         # Validation
-        preds_val, cs_val = tm.predict(xval, return_class_sums=True)
+        preds_val, cs_val = tm.predict(xval)
         prob_val = (np.clip(cs_val, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         prob_val = prob_val / (np.sum(prob_val, axis=1, keepdims=True) + 1e-7)
         acc_val = accuracy_score(yval, preds_val)
@@ -76,7 +74,7 @@ def train(tm: MultiClassConvolutionalTsetlinMachine2D, xtrain, ytrain, xval, yva
         auc_val = roc_auc_score(yval_bin, prob_val)
 
         # Test
-        preds, cs_test = tm.predict(xtest, return_class_sums=True)
+        preds, cs_test = tm.predict(xtest)
         prob_test = (np.clip(cs_test, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         prob_test = prob_test / (np.sum(prob_test, axis=1, keepdims=True) + 1e-7)
         acc_test = np.mean(preds == ytest)
@@ -89,30 +87,24 @@ def train(tm: MultiClassConvolutionalTsetlinMachine2D, xtrain, ytrain, xval, yva
             f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
         )
         print(f"Confusion Matrix:\n{cm_test}")
-        print(f"Class sums:\n{cs_test}")
-        print(f'{tm.get_weights()=}')
+        # print(f"Class sums:\n{cs_test}")
+        # print(f"{tm.get_weights()=}")
 
 
 if __name__ == "__main__":
     ch = 8
     (xtrain, ytrain), (xval, yval), (xtest, ytest) = load_dataset(ch)
 
-    params = {
-        "number_of_clauses": 80,
-        "T": 500,
-        "s": 5,
-        "q": 1,
-        "dim": (28, 28, ch),
-        "patch_dim": (10, 10),
-        "encode_loc": True,
-        "seed": 10,
-    }
-    tm = MultiClassConvolutionalTsetlinMachine2D(**params)
+    tm = MultiClassTM(
+        number_of_clauses=80,
+        T=500,
+        s=5,
+        q=1,
+        dim=(28, 28, ch),
+        n_classes=2,
+        patch_dim=(10, 10),
+        seed=10,
+        block_size=4,
+    )
 
     train(tm, xtrain, ytrain, xval, yval, xtest, ytest, epochs=30)
-
-    with LZMAFile("./runs/pneumonia_mnist.tm", "wb") as f:
-        states = tm.save()
-        pickle.dump(states, f)
-
-    # Randomly select a img from each class.

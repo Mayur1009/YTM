@@ -311,11 +311,6 @@ class BaseTM:
             self.device_props,
             self.block_size,
         )
-        self.encode_config = kernel_config(
-            self.number_of_patches,
-            self.device_props,
-            self.block_size,
-        )
         self.pack_clauses_config = kernel_config(
             self.number_of_clauses,
             self.device_props,
