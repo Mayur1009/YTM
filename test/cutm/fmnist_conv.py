@@ -10,10 +10,8 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         train_fit_timer = Timer()
         iota = np.arange(len(X_train))
         np.random.shuffle(iota)
-        X_train = X_train[iota]
-        Y_train = Y_train[iota]
         with train_fit_timer:
-            tm.fit(X_train, Y_train)
+            tm.fit(X_train[iota], Y_train[iota])
 
         test_timer = Timer()
         with test_timer:
@@ -61,5 +59,5 @@ if __name__ == "__main__":
         seed=10,
         block_size=128,
     )
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=30)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=2)
 

@@ -68,7 +68,8 @@ __global__ void encode_batch(const unsigned int *X_indptr, const unsigned int *X
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int e_patch = index; e_patch < PATCHES * N; e_patch += stride) {
+    for (unsigned long long e_patch = index; e_patch < (unsigned long long)PATCHES * (unsigned long long)N;
+         e_patch += stride) {
         int e = e_patch / PATCHES;
         int patch = e_patch % PATCHES;
 
@@ -253,31 +254,6 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
     rng[index] = localRNG;
 }
 
-__global__ void clause_eval_infer(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
-                                  const unsigned int *X_batch, int *selected_patch_ids, const int e) {
-    /*
-     * Calculate clause activations and select a patch for each active clause. If a clause is active, the
-     * selected_patch_ids will be int between 0 and PATCHES - 1, else it will be -1.
-     */
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    curandState localRNG = rng[index];
-
-    for (int clause = index; clause < CLAUSES; clause += stride) {
-        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            int patch_matched =
-                clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[e * PATCHES * NUM_LITERAL_CHUNKS + patch_id * NUM_LITERAL_CHUNKS]);
-            if (patch_matched) {
-                selected_patch_ids[clause] = patch_id;
-                break;
-            }
-        }
-    }
-    rng[index] = localRNG;
-}
-
 __global__ void calc_class_sums(int *selected_patch_ids, const float *clause_weights, float *class_sums) {
     /*
      * Calculate the class sums for each clause. If selected_patch_ids[clause] > -1, then the clause is active.
@@ -291,6 +267,33 @@ __global__ void calc_class_sums(int *selected_patch_ids, const float *clause_wei
         if (selected_patch_ids[clause] > -1) {
             for (int class_id = 0; class_id < CLASSES; ++class_id) {
                 atomicAdd(&class_sums[class_id], clause_weights[clause * CLASSES + class_id]);
+            }
+        }
+    }
+}
+
+__global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
+                                            const int *num_includes, const unsigned int *X_batch, const int N,
+                                            float *class_sums_batch) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (unsigned long long e_clause = index; e_clause < (unsigned long long)N * (unsigned long long)CLAUSES;
+         e_clause += stride) {
+        int e = e_clause / CLAUSES;
+        int clause = e_clause % CLAUSES;
+        if (num_includes[clause] == 0) continue;  // Skip empty clauses
+        int clause_output = 0;
+        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+            if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                             &X_batch[e * PATCHES * NUM_LITERAL_CHUNKS + patch_id * NUM_LITERAL_CHUNKS])) {
+                clause_output = 1;
+                break;
+            }
+        }
+        if (clause_output) {
+            for (int class_id = 0; class_id < CLASSES; ++class_id) {
+                atomicAdd(&class_sums_batch[e * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
             }
         }
     }

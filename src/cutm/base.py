@@ -93,6 +93,7 @@ class BaseTM:
         else:
             self.patch_dim = (patch_dim[0], patch_dim[1])
 
+        self.seed = seed
         if seed is None:
             self.rng_gpu = curandom.XORWOWRandomNumberGenerator()
         else:
@@ -114,13 +115,19 @@ class BaseTM:
     #### FIT AND SCORE ####
     @profile
     def _fit_batch(self, X: csr_array, encoded_Y):
-        N = X.shape[0]
-
         if not self.initialized:
             self._calc_variables()
             self._gpu_init()
             self._init_default_vals()
             self.initialized = True
+
+        N = X.shape[0]
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = max_uint32 // self.number_of_patches
+        if N > max_safe_N:
+            raise OverflowError(
+                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_patches. Call this method multiple times with smaller batches of X."
+            )
 
         X_indptr_gpu = mem_alloc(X.indptr.nbytes)
         X_indices_gpu = mem_alloc(X.indices.nbytes)
@@ -197,9 +204,17 @@ class BaseTM:
     def _score_batch(self, X) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         if not self.initialized:
             print("Error: Model not trained.")
-            raise RuntimeError("Model not trained. Call fit() before score().")
+            raise RuntimeError("Model not trained. Fit before scoring.")
 
         N = X.shape[0]
+
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = min(max_uint32 // self.number_of_patches, max_uint32 // self.number_of_clauses)
+        if N > max_safe_N:
+            raise OverflowError(
+                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses and number_of_patches. Call this method multiple times with smaller batches of X."
+            )
+
         if not hasattr(self, "encoded_X_base"):
             self._init_encoded_X_base()
 
@@ -211,10 +226,9 @@ class BaseTM:
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
-        class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
-        selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
-
+        class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+
         memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
         self.kernel_encode_batch.prepared_call(
             *kernel_config(N * self.number_of_patches, self.device_props, self.block_size),
@@ -225,8 +239,6 @@ class BaseTM:
         )
         ctx.synchronize()
 
-        class_sums = np.zeros((X.shape[0], self.number_of_outputs), dtype=np.float32)
-
         self.kernel_pack_clauses.prepared_call(
             *self.pack_clauses_config,
             self.ta_state_gpu,
@@ -235,29 +247,19 @@ class BaseTM:
         )
         ctx.synchronize()
 
-        for e in tqdm(range(X.shape[0]), leave=False, desc="Score Batch"):
-            memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
-            self.kernel_clause_eval_infer.prepared_call(
-                *self.clause_eval_config,
-                self.rng_gpu.state,
-                packed_clauses_gpu,
-                self.clause_weights_gpu,
-                encoded_X_gpu,
-                selected_patch_ids_gpu,
-                np.int32(e),
-            )
-            ctx.synchronize()
+        memset_d32(class_sums_gpu, 0, N * self.number_of_outputs)
+        self.kernel_calc_class_sums_infer_batch.prepared_call(
+            *kernel_config(N * self.number_of_clauses, self.device_props, self.block_size),
+            packed_clauses_gpu,
+            self.clause_weights_gpu,
+            includes_gpu,
+            encoded_X_gpu,
+            np.int32(N),
+            class_sums_gpu,
+        )
 
-            memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-            self.kernel_calc_class_sums.prepared_call(
-                *self.calc_class_sums_config,
-                selected_patch_ids_gpu,
-                self.clause_weights_gpu,
-                class_sum_gpu,
-            )
-            ctx.synchronize()
-
-            memcpy_dtoh(class_sums[e, :], class_sum_gpu)
+        class_sums = np.zeros((X.shape[0], self.number_of_outputs), dtype=np.float32)
+        memcpy_dtoh(class_sums, class_sums_gpu)
 
         return class_sums
 
@@ -297,11 +299,14 @@ class BaseTM:
         self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
         self.kernel_clause_eval.prepare("PPPPPi")
 
-        self.kernel_clause_eval_infer = mod_new_kernel.get_function("clause_eval_infer")
-        self.kernel_clause_eval_infer.prepare("PPPPPi")
+        # self.kernel_clause_eval_infer = mod_new_kernel.get_function("clause_eval_infer")
+        # self.kernel_clause_eval_infer.prepare("PPPPPi")
 
         self.kernel_calc_class_sums = mod_new_kernel.get_function("calc_class_sums")
         self.kernel_calc_class_sums.prepare("PPP")
+
+        self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
+        self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
         self.kernel_clause_update.prepare("PPPPPPPPi")
@@ -420,14 +425,56 @@ class BaseTM:
 
         return self.clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
 
-    def __getstate__(self) -> object:
-        pass
+    ## SERIALIZATION ##
+    def __getstate__(self):
+        args = {
+            "number_of_clauses": self.number_of_clauses,
+            "T": self.T,
+            "s": self.s,
+            "dim": self.dim,
+            "n_classes": self.number_of_outputs,
+            "q": self.q,
+            "patch_dim": getattr(self, "patch_dim", None),
+            "number_of_ta_states": self.number_of_ta_states,
+            "max_included_literals": self.max_included_literals,
+            "append_negated": bool(self.append_negated),
+            "init_neg_weights": bool(self.init_neg_weights),
+            "negative_polarity": bool(self.negative_clauses),
+            "encode_loc": bool(self.encode_loc),
+            "seed": self.seed,
+            "block_size": self.block_size,
+        }
+        if not self.initialized:
+            return {"initialized": False, "args": args, "state": None}
 
-    def __setstate__(self, state: object) -> None:
-        pass
+        state_dict = self.get_state_dict()
+        return {"initialized": True, "args": args, "state": state_dict}
+
+    def __setstate__(self, state):
+        args = state["args"]
+        self.__init__(
+            number_of_clauses=args["number_of_clauses"],
+            T=args["T"],
+            s=args["s"],
+            dim=args["dim"],
+            n_classes=args["n_classes"],
+            q=args["q"],
+            patch_dim=args["patch_dim"],
+            number_of_ta_states=args["number_of_ta_states"],
+            max_included_literals=args["max_included_literals"],
+            append_negated=args["append_negated"],
+            init_neg_weights=args["init_neg_weights"],
+            negative_polarity=args["negative_polarity"],
+            encode_loc=args["encode_loc"],
+            seed=args["seed"],
+            block_size=args["block_size"],
+        )
+        initialized = state["initialized"]
+        if initialized:
+            self.load_state_dict(state)
 
     #### SAVE AND LOAD ####
-    def save(self):
+    def get_state_dict(self):
         # Copy data from GPU to CPU
         self.ta_state = np.empty(
             self.number_of_clauses * self.number_of_literals,
@@ -437,41 +484,23 @@ class BaseTM:
 
         memcpy_dtoh(self.ta_state, self.ta_state_gpu)
         memcpy_dtoh(self.clause_weights, self.clause_weights_gpu)
-
         state_dict = {
-            # State arrays
             "ta_state": self.ta_state,
             "clause_weights": self.clause_weights,
             "number_of_outputs": self.number_of_outputs,
             "number_of_literals": self.number_of_literals,
             "min_y": self.min_y,
             "max_y": self.max_y,
-            "negative_clauses": self.negative_clauses,
-            # Parameters
-            "number_of_clauses": self.number_of_clauses,
-            "T": self.T,
-            "s": self.s,
-            "q": self.q,
-            "patch_dim": self.patch_dim,
-            "dim": self.dim,
-            "max_included_literals": self.max_included_literals,
-            "number_of_ta_states": self.number_of_ta_states,
-            "append_negated": self.append_negated,
-            "encode_loc": self.encode_loc,
         }
 
         return state_dict
 
-    def load(self, state_dict):
-        # Load arrays state_dict
+    def load_state_dict(self, state):
+        state_dict = state["state"]
         self.ta_state = state_dict["ta_state"]
         self.clause_weights = state_dict["clause_weights"]
-        self.number_of_outputs = state_dict["number_of_outputs"]
-        self.dim = state_dict["dim"]
-        self.patch_dim = state_dict["patch_dim"]
         self.min_y = state_dict["min_y"]
         self.max_y = state_dict["max_y"]
-        self.negative_clauses = state_dict["negative_clauses"]
 
         self._calc_variables()
         self._gpu_init()

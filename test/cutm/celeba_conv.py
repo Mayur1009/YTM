@@ -91,11 +91,13 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
                 tm.fit(batch_X, batch_Y)
             train_fit_time += train_fit_timer.elapsed()
 
-            # bpred, _ = tm.predict(batch_X)
+            # train_pred_timer = Timer()
+            # with train_pred_timer:
+            #     bpred, _ = tm.predict(batch_X)
             # bmet = metrics(batch_Y, bpred)
             #
             # tfitbar.set_postfix_str(
-            #     f"Fit time: {train_fit_time:.4f}s | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
+            #     f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
             # )
 
         test_time = 0

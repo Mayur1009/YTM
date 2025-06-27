@@ -1,3 +1,5 @@
+from lzma import LZMAFile
+import pickle
 import numpy as np
 from keras.datasets import mnist
 
@@ -7,15 +9,25 @@ from cutm import MultiClassTM
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
     for epoch in range(epochs):
-        train_timer = Timer()
-        with train_timer:
-            tm.fit(X_train, Y_train)
+        train_fit_timer = Timer()
+        iota = np.arange(len(X_train))
+        np.random.shuffle(iota)
+        with train_fit_timer:
+            tm.fit(X_train[iota], Y_train[iota])
 
         test_timer = Timer()
         with test_timer:
             test_pred, _ = tm.predict(X_test)
+
+        train_timer = Timer()
+        with train_timer:
+            train_pred, _ = tm.predict(X_train)
+
         test_acc = np.mean(Y_test == test_pred)
-        print(f"Epoch {epoch + 1}/{epochs}, Test Accuracy: {test_acc * 100:.4f}, Train Time: {train_timer.elapsed():.4f}s, Test Time: {test_timer.elapsed():.4f}s")
+        train_acc = np.mean(Y_train == train_pred)
+        print(
+            f"Epoch {epoch + 1} | Acc> Train: {train_acc * 100:.4f}% Test: {test_acc * 100:.4f}% | Time> Fit: {train_fit_timer.elapsed():.4f}s Infer Train: {train_timer.elapsed():.4f}s Infer Test: {test_timer.elapsed():.4f}s"
+        )
 
 
 if __name__ == "__main__":
@@ -47,4 +59,16 @@ if __name__ == "__main__":
     tm = MultiClassTM(**tm_params)
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
+
+    # with LZMAFile("mnist_conv.tm", "wb") as f:
+    #     pickle.dump(tm, f)
+    #
+    # print("Model saved to mnist_conv.tm")
+    #
+    # with LZMAFile("mnist_conv.tm", "rb") as f:
+    #     tm2 = pickle.load(f)
+    #
+    # print("Model loaded from mnist_conv.tm")
+    # train(tm2, X_train, Y_train, X_test, Y_test, epochs=1)
+
 
