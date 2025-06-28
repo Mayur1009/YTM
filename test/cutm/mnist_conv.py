@@ -38,25 +38,17 @@ if __name__ == "__main__":
 
     Y_train, Y_test = Y_train_org, Y_test_org
 
-    clauses = 500
-    T = 1000
-    s = 10
-    dim = (28, 28, 1)
-    patch_dim = (10, 10)
-    q = 1
-    tm_params = {
-        "number_of_clauses": clauses,
-        "T": T,
-        "s": s,
-        "q": q,
-        "dim": dim,
-        "n_classes": 10,
-        "patch_dim": patch_dim,
-        "encode_loc": True,
-        "seed": 10,
-        "block_size": 16,
-    }
-    tm = MultiClassTM(**tm_params)
+    tm = MultiClassTM(
+        number_of_clauses=500,
+        T=1000,
+        s=10,
+        dim=(28, 28, 1),
+        n_classes=10,
+        patch_dim=(10, 10),
+        encode_loc=True,
+        seed=10,
+        block_size=16,
+    )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
 
