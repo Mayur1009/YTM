@@ -86,19 +86,21 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
             batch_Y = Ytrain[i : i + BATCH_SIZE]
             batch_X = load_image_batch(file, batch_ids, ch)
 
+            encoded_X = tm.encode(batch_X)
+
             train_fit_timer = Timer()
             with train_fit_timer:
-                tm.fit(batch_X, batch_Y)
+                tm.fit(encoded_X, batch_Y, is_X_encoded=True)
             train_fit_time += train_fit_timer.elapsed()
 
-            # train_pred_timer = Timer()
-            # with train_pred_timer:
-            #     bpred, _ = tm.predict(batch_X)
-            # bmet = metrics(batch_Y, bpred)
-            #
-            # tfitbar.set_postfix_str(
-            #     f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
-            # )
+            train_pred_timer = Timer()
+            with train_pred_timer:
+                bpred, _ = tm.predict(encoded_X, is_X_encoded=True)
+            bmet = metrics(batch_Y, bpred)
+
+            tfitbar.set_postfix_str(
+                f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
+            )
 
         test_time = 0
         test_preds = []
@@ -106,9 +108,10 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
             batch_ids = ids_test[i : i + BATCH_SIZE]
             batch_Y = Ytest[i : i + BATCH_SIZE]
             batch_X = load_image_batch(file, batch_ids, ch)
+            encoded_X = tm.encode(batch_X)
             test_timer = Timer()
             with test_timer:
-                    test_pred, _ = tm.predict(batch_X)
+                    test_pred, _ = tm.predict(encoded_X, is_X_encoded=True)
             test_time += test_timer.elapsed()
             test_preds.append(test_pred)
 

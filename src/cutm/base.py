@@ -13,6 +13,7 @@ from line_profiler import profile
 
 from .cuda_utils import kernel_config, get_kernel, device_props
 
+
 class BaseTM:
     def __init__(
         self,
@@ -72,10 +73,15 @@ class BaseTM:
         self._init_default_vals()
         self.initialized = True
 
-    #### FIT AND SCORE ####
     @profile
-    def _fit_batch(self, X: csr_array, encoded_Y):
+    def encode(
+        self,
+        X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        block_size: int | None = None,
+    ) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+        assert X.ndim == 2, "X must be a 2D array (samples, dim0 * dim1 * dim2)."
         N = X.shape[0]
+
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_patches
         if N > max_safe_N:
@@ -83,11 +89,44 @@ class BaseTM:
                 f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_patches. Call this method multiple times with smaller batches of X."
             )
 
-        X_indptr_gpu = mem_alloc(X.indptr.nbytes)
-        X_indices_gpu = mem_alloc(X.indices.nbytes)
+        if block_size is None:
+            block_size = self.block_size
+
+        if not hasattr(self, "encoded_X_base"):
+            self._init_encoded_X_base()
+
+        csrX = csr_array(X.astype(np.uint32))
+        X_indptr_gpu = mem_alloc(csrX.indptr.nbytes)
+        X_indices_gpu = mem_alloc(csrX.indices.nbytes)
+        memcpy_htod(X_indptr_gpu, csrX.indptr)
+        memcpy_htod(X_indices_gpu, csrX.indices)
+
+        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+        memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
+        self.kernel_encode_batch.prepared_call(
+            *kernel_config(N * self.number_of_patches, device_props, block_size),
+            X_indptr_gpu,
+            X_indices_gpu,
+            encoded_X_gpu,
+            np.int32(N),
+        )
+        ctx.synchronize()
+        encoded_X = np.empty((N * self.number_of_patches * self.number_of_literal_chunks), dtype=np.uint32)
+        memcpy_dtoh(encoded_X, encoded_X_gpu)
+
+        X_indptr_gpu.free()
+        X_indices_gpu.free()
+        encoded_X_gpu.free()
+
+        return encoded_X.reshape((N, self.number_of_patches, self.number_of_literal_chunks))
+
+    #### FIT AND SCORE ####
+    @profile
+    def _fit_batch(self, encoded_X, encoded_Y):
+        N = encoded_X.shape[0]
+        encoded_X_gpu = mem_alloc(encoded_X.nbytes)
+        memcpy_htod(encoded_X_gpu, encoded_X)
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
-        memcpy_htod(X_indptr_gpu, X.indptr)
-        memcpy_htod(X_indices_gpu, X.indices)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
 
         # Initialize GPU memory for temporary data
@@ -95,18 +134,6 @@ class BaseTM:
         class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
-
-        # Encode all the samples in the batch
-        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-        memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
-        self.kernel_encode_batch.prepared_call(
-            *kernel_config(N * self.number_of_patches, device_props, self.block_size),
-            X_indptr_gpu,
-            X_indices_gpu,
-            encoded_X_gpu,
-            np.int32(N),
-        )
-        ctx.synchronize()
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -152,41 +179,32 @@ class BaseTM:
                 np.int32(e),
             )
             ctx.synchronize()
+
+        encoded_X_gpu.free()
+        encoded_Y_gpu.free()
+        packed_clauses_gpu.free()
+        class_sum_gpu.free()
+        selected_patch_ids_gpu.free()
+        num_includes_gpu.free()
         return
 
     @profile
-    def _score_batch(self, X) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
-        N = X.shape[0]
+    def _score_batch(self, encoded_X) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        N = encoded_X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
-        max_safe_N = min(max_uint32 // self.number_of_patches, max_uint32 // self.number_of_clauses)
+        max_safe_N = max_uint32 // self.number_of_clauses
         if N > max_safe_N:
             raise OverflowError(
-                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses and number_of_patches. Call this method multiple times with smaller batches of X."
+                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses. Call this method multiple times with smaller batches of X."
             )
 
-        if not hasattr(self, "encoded_X_base"):
-            self._init_encoded_X_base()
-
-        X_indptr_gpu = mem_alloc(X.indptr.nbytes)
-        X_indices_gpu = mem_alloc(X.indices.nbytes)
-        memcpy_htod(X_indptr_gpu, X.indptr)
-        memcpy_htod(X_indices_gpu, X.indices)
+        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+        memcpy_htod(encoded_X_gpu, encoded_X)
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
         class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
-        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-
-        memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
-        self.kernel_encode_batch.prepared_call(
-            *kernel_config(N * self.number_of_patches, device_props, self.block_size),
-            X_indptr_gpu,
-            X_indices_gpu,
-            encoded_X_gpu,
-            np.int32(N),
-        )
-        ctx.synchronize()
 
         self.kernel_pack_clauses.prepared_call(
             *self.pack_clauses_config,
@@ -206,9 +224,15 @@ class BaseTM:
             np.int32(N),
             class_sums_gpu,
         )
+        ctx.synchronize()
 
-        class_sums = np.zeros((X.shape[0], self.number_of_outputs), dtype=np.float32)
+        class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
         memcpy_dtoh(class_sums, class_sums_gpu)
+
+        encoded_X_gpu.free()
+        packed_clauses_gpu.free()
+        includes_gpu.free()
+        class_sums_gpu.free()
 
         return class_sums
 

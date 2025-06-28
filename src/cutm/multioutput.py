@@ -44,32 +44,32 @@ class MultiOutputTM(BaseTM):
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        is_X_encoded: bool = False,
     ) -> None:
         # Input validation
-        assert X.ndim == 2, f"X must be 2D array (samples, features), got {X.ndim}D"
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-
-        # Convert to sparse format
-        csrX = csr_matrix(X)
 
         self.max_y = None
         self.min_y = None
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
-        self._fit_batch(csrX, encoded_Y)
+        encoded_X = self.encode(X) if not is_X_encoded else X
+        self._fit_batch(encoded_X, encoded_Y)
 
     def score(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        is_X_encoded: bool,
     ):
-        assert X.ndim == 2, f"X must be 2D array (samples, features), got {X.ndim}D"
-        return self._score_batch(csr_matrix(X))
+        encoded_X = X if is_X_encoded else self.encode(X)
+        return self._score_batch(encoded_X)
 
     def predict(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        is_X_encoded: bool = False,
     ):
-        class_sums = self.score(X)
+        class_sums = self.score(X, is_X_encoded)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums

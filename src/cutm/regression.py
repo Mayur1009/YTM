@@ -34,21 +34,19 @@ class RegressionTM(BaseTM):
             block_size=block_size,
         )
 
-    def fit(self, X, Y):
+    def fit(self, X, Y, is_X_encoded=False):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.max_y = np.max(Y)
         self.min_y = np.min(Y)
 
         encoded_Y = ((Y - self.min_y) / (self.max_y - self.min_y) * self.T).astype(np.int32)
-
-        self._fit_batch(X, encoded_Y)
-
+        encoded_X = self.encode(X) if not is_X_encoded else X
+        self._fit_batch(encoded_X, encoded_Y)
         return
 
-    def predict(self, X):
-        X = X.reshape(X.shape[0], X.shape[1], 1)
-        class_sums = self._score_batch(X)
+    def predict(self, X, is_X_encoded=False):
+        encoded_X = self.encode(X) if not is_X_encoded else X
+        class_sums = self._score_batch(encoded_X)
         preds = 1.0 * (class_sums[0, :]) * (self.max_y - self.min_y) / (self.T) + self.min_y
-
-        return preds, class_sums
+        return preds

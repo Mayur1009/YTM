@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.sparse import csr_matrix
 from .base import BaseTM
 
 
@@ -44,12 +43,10 @@ class MultiClassTM(BaseTM):
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         Y: np.ndarray[tuple[int], np.dtype[np.uint32]],
+        is_X_encoded: bool = False,
     ):
-        assert X.ndim == 2, "X must be 2D array (samples, dim0 * dim1 * dim2)."
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-
-        csrX = csr_matrix(X)
 
         self.max_y = None
         self.min_y = None
@@ -58,16 +55,18 @@ class MultiClassTM(BaseTM):
         for i in range(self.number_of_outputs):
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
-        self._fit_batch(csrX, encoded_Y)
+        encoded_X = self.encode(X) if not is_X_encoded else X
+        self._fit_batch(encoded_X, encoded_Y)
 
     def score(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        is_X_encoded,
     ):
-        assert X.ndim == 2, "X must be 2D array (samples, dim0 * dim1 * dim2)."
-        return self._score_batch(csr_matrix(X))
+        encoded_X = self.encode(X) if not is_X_encoded else X
+        return self._score_batch(encoded_X)
 
-    def predict(self, X: np.ndarray[tuple[int, int], np.dtype[np.uint32]]):
-        class_sums = self.score(X)
+    def predict(self, X: np.ndarray[tuple[int, int], np.dtype[np.uint32]], is_X_encoded: bool = False):
+        class_sums = self.score(X, is_X_encoded)
         preds = np.argmax(class_sums, axis=1)
         return preds, class_sums
