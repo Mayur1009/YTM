@@ -63,21 +63,18 @@ class BaseTM:
 
         self.init_neg_weights = 1 if init_neg_weights else 0
         self.negative_clauses = 1 if negative_polarity else 0
-        self.coalesced = True  # TODO: Implement coalesced and non-coalesced versions
         self.initialized = False
 
         self.block_size = block_size
-        # device_props = get_device_properties()
+
+        self._calc_variables()
+        self._gpu_init()
+        self._init_default_vals()
+        self.initialized = True
 
     #### FIT AND SCORE ####
     @profile
     def _fit_batch(self, X: csr_array, encoded_Y):
-        if not self.initialized:
-            self._calc_variables()
-            self._gpu_init()
-            self._init_default_vals()
-            self.initialized = True
-
         N = X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_patches
@@ -159,12 +156,7 @@ class BaseTM:
 
     @profile
     def _score_batch(self, X) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
-        if not self.initialized:
-            print("Error: Model not trained.")
-            raise RuntimeError("Model not trained. Fit before scoring.")
-
         N = X.shape[0]
-
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = min(max_uint32 // self.number_of_patches, max_uint32 // self.number_of_clauses)
         if N > max_safe_N:
@@ -258,9 +250,6 @@ class BaseTM:
         self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
         self.kernel_clause_eval.prepare("PPPPPi")
 
-        # self.kernel_clause_eval_infer = mod_new_kernel.get_function("clause_eval_infer")
-        # self.kernel_clause_eval_infer.prepare("PPPPPi")
-
         self.kernel_calc_class_sums = mod_new_kernel.get_function("calc_class_sums")
         self.kernel_calc_class_sums.prepare("PPP")
 
@@ -299,7 +288,6 @@ class BaseTM:
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
-        self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
 
     #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
     def _init_default_vals(self):
@@ -446,8 +434,6 @@ class BaseTM:
         state_dict = {
             "ta_state": self.ta_state,
             "clause_weights": self.clause_weights,
-            "number_of_outputs": self.number_of_outputs,
-            "number_of_literals": self.number_of_literals,
             "min_y": self.min_y,
             "max_y": self.max_y,
         }
@@ -461,10 +447,10 @@ class BaseTM:
         self.min_y = state_dict["min_y"]
         self.max_y = state_dict["max_y"]
 
-        self._calc_variables()
-        self._gpu_init()
+        # self._calc_variables()
+        # self._gpu_init()
 
         memcpy_htod(self.ta_state_gpu, self.ta_state)
         memcpy_htod(self.clause_weights_gpu, self.clause_weights)
 
-        self.initialized = True
+        # self.initialized = True
