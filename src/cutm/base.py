@@ -5,56 +5,13 @@ import pycuda.autoinit  # noqa: F401
 import pycuda.curandom as curandom
 from pycuda.compiler import SourceModule
 from pycuda.driver import Context as ctx  # pyright: ignore[reportAttributeAccessIssue]
-from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, device_attribute, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
+from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.gpuarray import to_gpu
 from scipy.sparse import csr_array
 from tqdm import tqdm
 from line_profiler import profile
 
-current_dir = pathlib.Path(__file__).parent
-
-
-def get_kernel(file):
-    path = current_dir.joinpath(file)
-    with path.open("r") as f:
-        ker = f.read()
-    return ker
-
-
-def get_device_properties():
-    """Query GPU device properties for optimization"""
-    device = pycuda.autoinit.device
-    attrs = device.get_attributes()
-    properties = {
-        "max_threads_per_block": attrs[device_attribute.MAX_THREADS_PER_BLOCK],
-        "max_block_dim_x": attrs[device_attribute.MAX_BLOCK_DIM_X],
-        "max_grid_dim_x": attrs[device_attribute.MAX_GRID_DIM_X],
-        "warp_size": attrs[device_attribute.WARP_SIZE],
-        "multiprocessor_count": attrs[device_attribute.MULTIPROCESSOR_COUNT],
-        "max_shared_memory_per_block": attrs[device_attribute.MAX_SHARED_MEMORY_PER_BLOCK],
-    }
-    return properties
-
-
-def kernel_config(data_size, props, preferred_block_size=128):
-    """Get optimal grid and block configuration for 1D kernel"""
-
-    # Ensure hardware compliance
-    block_size = min(preferred_block_size, props["max_threads_per_block"])
-    # block_size = ((block_size + 31) // 32) * 32
-
-    # Calculate grid size
-    grid_size = (data_size + block_size - 1) // block_size
-
-    # Limit grid size to reasonable bounds
-    max_blocks = min(65535, props["multiprocessor_count"] * 4)
-    grid_size = min(grid_size, max_blocks)
-
-    return (grid_size, 1, 1), (block_size, 1, 1)
-
-
-kernel_str = get_kernel("cuda/kernel.cu")
-
+from .cuda_utils import kernel_config, get_kernel, device_props
 
 class BaseTM:
     def __init__(
@@ -110,7 +67,7 @@ class BaseTM:
         self.initialized = False
 
         self.block_size = block_size
-        self.device_props = get_device_properties()
+        # device_props = get_device_properties()
 
     #### FIT AND SCORE ####
     @profile
@@ -146,7 +103,7 @@ class BaseTM:
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
         memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
         self.kernel_encode_batch.prepared_call(
-            *kernel_config(N * self.number_of_patches, self.device_props, self.block_size),
+            *kernel_config(N * self.number_of_patches, device_props, self.block_size),
             X_indptr_gpu,
             X_indices_gpu,
             encoded_X_gpu,
@@ -231,7 +188,7 @@ class BaseTM:
 
         memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
         self.kernel_encode_batch.prepared_call(
-            *kernel_config(N * self.number_of_patches, self.device_props, self.block_size),
+            *kernel_config(N * self.number_of_patches, device_props, self.block_size),
             X_indptr_gpu,
             X_indices_gpu,
             encoded_X_gpu,
@@ -249,7 +206,7 @@ class BaseTM:
 
         memset_d32(class_sums_gpu, 0, N * self.number_of_outputs)
         self.kernel_calc_class_sums_infer_batch.prepared_call(
-            *kernel_config(N * self.number_of_clauses, self.device_props, self.block_size),
+            *kernel_config(N * self.number_of_clauses, device_props, self.block_size),
             packed_clauses_gpu,
             self.clause_weights_gpu,
             includes_gpu,
@@ -285,6 +242,8 @@ class BaseTM:
         #define MAX_TA_STATE {self.number_of_ta_states}
         #define ENCODE_LOC {self.encode_loc}
         """
+        current_dir = pathlib.Path(__file__).parent
+        kernel_str = get_kernel("cuda/kernel.cu", current_dir)
         mod_new_kernel = SourceModule(self.gpu_macro_string + kernel_str, no_extern_c=True)
 
         self.kernel_init = mod_new_kernel.get_function("initialize")
@@ -313,27 +272,27 @@ class BaseTM:
 
         self.initialize_config = kernel_config(
             self.number_of_clauses,
-            self.device_props,
+            device_props,
             self.block_size,
         )
         self.pack_clauses_config = kernel_config(
             self.number_of_clauses,
-            self.device_props,
+            device_props,
             self.block_size,
         )
         self.clause_eval_config = kernel_config(
             self.number_of_clauses,
-            self.device_props,
+            device_props,
             self.block_size,
         )
         self.calc_class_sums_config = kernel_config(
             self.number_of_clauses,
-            self.device_props,
+            device_props,
             self.block_size,
         )
         self.clause_update_config = kernel_config(
             self.number_of_clauses,
-            self.device_props,
+            device_props,
             self.block_size,
         )
 
