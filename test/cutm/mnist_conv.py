@@ -16,17 +16,17 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         np.random.shuffle(iota)
         with train_fit_timer:
             # tm.fit(X_train[iota], Y_train[iota])
-            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True)
+            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True, block_size=16)
 
         test_timer = Timer()
         with test_timer:
             # test_pred, _ = tm.predict(X_test)
-            test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
+            test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True, block_size=512)
 
         train_timer = Timer()
         with train_timer:
             # train_pred, _ = tm.predict(X_train)
-            train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True)
+            train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True, block_size=512)
 
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         patch_dim=(10, 10),
         encode_loc=True,
         seed=10,
-        block_size=128,
+        block_size=16,
     )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)

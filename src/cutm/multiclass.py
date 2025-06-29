@@ -44,6 +44,7 @@ class MultiClassTM(BaseTM):
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         Y: np.ndarray[tuple[int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
+        block_size: int | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
@@ -56,17 +57,18 @@ class MultiClassTM(BaseTM):
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit_batch(encoded_X, encoded_Y)
+        self._fit_batch(encoded_X, encoded_Y, block_size=block_size)
 
     def score(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
-        is_X_encoded,
+        is_X_encoded: bool,
+        block_size: int | None = None,
     ):
         encoded_X = self.encode(X) if not is_X_encoded else X
-        return self._score_batch(encoded_X)
+        return self._score_batch(encoded_X, block_size=block_size)
 
-    def predict(self, X: np.ndarray[tuple[int, int], np.dtype[np.uint32]], is_X_encoded: bool = False):
-        class_sums = self.score(X, is_X_encoded)
+    def predict(self, X: np.ndarray[tuple[int, int], np.dtype[np.uint32]], is_X_encoded: bool = False, block_size: int | None = None):
+        class_sums = self.score(X, is_X_encoded, block_size=block_size)
         preds = np.argmax(class_sums, axis=1)
         return preds, class_sums

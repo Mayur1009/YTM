@@ -70,7 +70,7 @@ class BaseTM:
 
         self._calc_variables()
         self._gpu_init()
-        self._init_default_vals()
+        self._init_default_vals(self.block_size)
         self.initialized = True
 
     @profile
@@ -122,7 +122,7 @@ class BaseTM:
 
     #### FIT AND SCORE ####
     @profile
-    def _fit_batch(self, encoded_X, encoded_Y):
+    def _fit_batch(self, encoded_X, encoded_Y, block_size: int | None = None):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
@@ -135,10 +135,15 @@ class BaseTM:
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
+        if block_size is None:
+            block_size = self.block_size
+
+        config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size)
+
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
             self.kernel_pack_clauses.prepared_call(
-                *self.pack_clauses_config,
+                *config_n_clauses,
                 self.ta_state_gpu,
                 packed_clauses_gpu,
                 num_includes_gpu,
@@ -147,7 +152,7 @@ class BaseTM:
 
             memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
             self.kernel_clause_eval.prepared_call(
-                *self.clause_eval_config,
+                *config_n_clauses,
                 self.rng_gpu.state,
                 packed_clauses_gpu,
                 self.clause_weights_gpu,
@@ -159,7 +164,7 @@ class BaseTM:
 
             memset_d32(class_sum_gpu, 0, self.number_of_outputs)
             self.kernel_calc_class_sums.prepared_call(
-                *self.calc_class_sums_config,
+                *config_n_clauses,
                 selected_patch_ids_gpu,
                 self.clause_weights_gpu,
                 class_sum_gpu,
@@ -167,7 +172,7 @@ class BaseTM:
             ctx.synchronize()
 
             self.kernel_clause_update.prepared_call(
-                *self.clause_update_config,
+                *config_n_clauses,
                 self.rng_gpu.state,
                 self.ta_state_gpu,
                 self.clause_weights_gpu,
@@ -189,7 +194,7 @@ class BaseTM:
         return
 
     @profile
-    def _score_batch(self, encoded_X) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+    def _score_batch(self, encoded_X, block_size: int | None = None) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         N = encoded_X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_clauses
@@ -206,8 +211,11 @@ class BaseTM:
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
         class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
 
+        if block_size is None:
+            block_size = self.block_size
+
         self.kernel_pack_clauses.prepared_call(
-            *self.pack_clauses_config,
+            *kernel_config(self.number_of_clauses, device_props, block_size),
             self.ta_state_gpu,
             packed_clauses_gpu,
             includes_gpu,
@@ -216,7 +224,7 @@ class BaseTM:
 
         memset_d32(class_sums_gpu, 0, N * self.number_of_outputs)
         self.kernel_calc_class_sums_infer_batch.prepared_call(
-            *kernel_config(N * self.number_of_clauses, device_props, self.block_size),
+            *kernel_config(N * self.number_of_clauses, device_props, block_size),
             packed_clauses_gpu,
             self.clause_weights_gpu,
             includes_gpu,
@@ -283,40 +291,40 @@ class BaseTM:
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
         self.kernel_clause_update.prepare("PPPPPPPPi")
 
-        self.initialize_config = kernel_config(
-            self.number_of_clauses,
-            device_props,
-            self.block_size,
-        )
-        self.pack_clauses_config = kernel_config(
-            self.number_of_clauses,
-            device_props,
-            self.block_size,
-        )
-        self.clause_eval_config = kernel_config(
-            self.number_of_clauses,
-            device_props,
-            self.block_size,
-        )
-        self.calc_class_sums_config = kernel_config(
-            self.number_of_clauses,
-            device_props,
-            self.block_size,
-        )
-        self.clause_update_config = kernel_config(
-            self.number_of_clauses,
-            device_props,
-            self.block_size,
-        )
+        # self.initialize_config = kernel_config(
+        #     self.number_of_clauses,
+        #     device_props,
+        #     self.block_size,
+        # )
+        # self.pack_clauses_config = kernel_config(
+        #     self.number_of_clauses,
+        #     device_props,
+        #     self.block_size,
+        # )
+        # self.clause_eval_config = kernel_config(
+        #     self.number_of_clauses,
+        #     device_props,
+        #     self.block_size,
+        # )
+        # self.calc_class_sums_config = kernel_config(
+        #     self.number_of_clauses,
+        #     device_props,
+        #     self.block_size,
+        # )
+        # self.clause_update_config = kernel_config(
+        #     self.number_of_clauses,
+        #     device_props,
+        #     self.block_size,
+        # )
 
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
 
     #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
-    def _init_default_vals(self):
+    def _init_default_vals(self, block_size: int = 128):
         self.kernel_init.prepared_call(
-            *self.initialize_config,
+            *kernel_config(self.number_of_clauses, device_props, block_size),
             self.rng_gpu.state,
             self.ta_state_gpu,
             self.clause_weights_gpu,

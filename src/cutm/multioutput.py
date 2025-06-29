@@ -45,6 +45,7 @@ class MultiOutputTM(BaseTM):
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
+        block_size: int | None = None,
     ) -> None:
         # Input validation
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
@@ -55,21 +56,23 @@ class MultiOutputTM(BaseTM):
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit_batch(encoded_X, encoded_Y)
+        self._fit_batch(encoded_X, encoded_Y, block_size=block_size)
 
     def score(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool,
+        block_size: int | None = None,
     ):
         encoded_X = X if is_X_encoded else self.encode(X)
-        return self._score_batch(encoded_X)
+        return self._score_batch(encoded_X, block_size=block_size)
 
     def predict(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
+        block_size: int | None = None,
     ):
-        class_sums = self.score(X, is_X_encoded)
+        class_sums = self.score(X, is_X_encoded, block_size=block_size)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums
