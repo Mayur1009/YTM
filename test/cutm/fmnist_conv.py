@@ -2,6 +2,7 @@ import numpy as np
 from keras.datasets import fashion_mnist
 
 from tm_utils import Timer
+from tm_utils.binarizer import ThermometerBinarizer
 from cutm import MultiClassTM
 
 
@@ -40,19 +41,9 @@ if __name__ == "__main__":
 
     ch = 8
 
-    out = np.zeros((*X_train.shape, ch))
-    for j in range(ch):
-        t1 = (j + 1) * 255 / (ch + 1)
-        out[:, :, :, j] = (X_train >= t1) & 1
-    X_train = np.array(out)
-    X_train = X_train.reshape((X_train.shape[0], -1)).astype(np.uint32)
-
-    out = np.zeros((*X_test.shape, ch))
-    for j in range(ch):
-        t1 = (j + 1) * 255 / (ch + 1)
-        out[:, :, :, j] = (X_test >= t1) & 1
-    X_test = np.array(out)
-    X_test = X_test.reshape((X_test.shape[0], -1)).astype(np.uint32)
+    ther_bin = ThermometerBinarizer(ch=ch)
+    X_train = ther_bin.binarize_gray(X_train).reshape((X_train.shape[0], -1)).astype(np.uint32)
+    X_test = ther_bin.binarize_gray(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
 
     tm = MultiClassTM(
         number_of_clauses=10000,
@@ -64,5 +55,5 @@ if __name__ == "__main__":
         seed=10,
         block_size=64,
     )
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=1)
 

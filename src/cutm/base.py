@@ -7,7 +7,6 @@ from pycuda.compiler import SourceModule
 from pycuda.driver import Context as ctx  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.gpuarray import to_gpu
-from scipy.sparse import csr_array
 from tqdm import tqdm
 from line_profiler import profile
 
@@ -80,6 +79,7 @@ class BaseTM:
         block_size: int | None = None,
     ) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         assert X.ndim == 2, "X must be a 2D array (samples, dim0 * dim1 * dim2)."
+        assert X.dtype == np.uint32, "X must be of type np.uint32."
         N = X.shape[0]
 
         max_uint32 = np.iinfo(np.uint32).max
@@ -92,21 +92,18 @@ class BaseTM:
         if block_size is None:
             block_size = self.block_size
 
-        if not hasattr(self, "encoded_X_base"):
-            self._init_encoded_X_base()
+        # if not hasattr(self, "encoded_X_base"):
+        #     self._init_encoded_X_base()
 
-        csrX = csr_array(X.astype(np.uint32))
-        X_indptr_gpu = mem_alloc(csrX.indptr.nbytes)
-        X_indices_gpu = mem_alloc(csrX.indices.nbytes)
-        memcpy_htod(X_indptr_gpu, csrX.indptr)
-        memcpy_htod(X_indices_gpu, csrX.indices)
+        X_gpu = mem_alloc(X.nbytes)
+        memcpy_htod(X_gpu, X)
 
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-        memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
+        # memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
+        memset_d32(encoded_X_gpu, 0, N * self.number_of_patches * self.number_of_literal_chunks)
         self.kernel_encode_batch.prepared_call(
             *kernel_config(N * self.number_of_patches, device_props, block_size),
-            X_indptr_gpu,
-            X_indices_gpu,
+            X_gpu,
             encoded_X_gpu,
             np.int32(N),
         )
@@ -114,8 +111,7 @@ class BaseTM:
         encoded_X = np.empty((N * self.number_of_patches * self.number_of_literal_chunks), dtype=np.uint32)
         memcpy_dtoh(encoded_X, encoded_X_gpu)
 
-        X_indptr_gpu.free()
-        X_indices_gpu.free()
+        X_gpu.free()
         encoded_X_gpu.free()
 
         return encoded_X.reshape((N, self.number_of_patches, self.number_of_literal_chunks))
@@ -151,6 +147,7 @@ class BaseTM:
             ctx.synchronize()
 
             memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
+            memset_d32(class_sum_gpu, 0, self.number_of_outputs)
             self.kernel_clause_eval.prepared_call(
                 *config_n_clauses,
                 self.rng_gpu.state,
@@ -158,16 +155,8 @@ class BaseTM:
                 self.clause_weights_gpu,
                 encoded_X_gpu,
                 selected_patch_ids_gpu,
-                np.int32(e),
-            )
-            ctx.synchronize()
-
-            memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-            self.kernel_calc_class_sums.prepared_call(
-                *config_n_clauses,
-                selected_patch_ids_gpu,
-                self.clause_weights_gpu,
                 class_sum_gpu,
+                np.int32(e),
             )
             ctx.synchronize()
 
@@ -194,7 +183,9 @@ class BaseTM:
         return
 
     @profile
-    def _score_batch(self, encoded_X, block_size: int | None = None) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+    def _score_batch(
+        self, encoded_X, block_size: int | None = None
+    ) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         N = encoded_X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_clauses
@@ -274,48 +265,19 @@ class BaseTM:
         self.kernel_init.prepare("PPP")
 
         self.kernel_encode_batch = mod_new_kernel.get_function("encode_batch")
-        self.kernel_encode_batch.prepare("PPPi")
+        self.kernel_encode_batch.prepare("PPi")
 
         self.kernel_pack_clauses = mod_new_kernel.get_function("pack_clauses")
         self.kernel_pack_clauses.prepare("PPP")
 
         self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
-        self.kernel_clause_eval.prepare("PPPPPi")
-
-        self.kernel_calc_class_sums = mod_new_kernel.get_function("calc_class_sums")
-        self.kernel_calc_class_sums.prepare("PPP")
+        self.kernel_clause_eval.prepare("PPPPPPi")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
         self.kernel_clause_update.prepare("PPPPPPPPi")
-
-        # self.initialize_config = kernel_config(
-        #     self.number_of_clauses,
-        #     device_props,
-        #     self.block_size,
-        # )
-        # self.pack_clauses_config = kernel_config(
-        #     self.number_of_clauses,
-        #     device_props,
-        #     self.block_size,
-        # )
-        # self.clause_eval_config = kernel_config(
-        #     self.number_of_clauses,
-        #     device_props,
-        #     self.block_size,
-        # )
-        # self.calc_class_sums_config = kernel_config(
-        #     self.number_of_clauses,
-        #     device_props,
-        #     self.block_size,
-        # )
-        # self.clause_update_config = kernel_config(
-        #     self.number_of_clauses,
-        #     device_props,
-        #     self.block_size,
-        # )
 
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
@@ -350,47 +312,6 @@ class BaseTM:
             self.max_included_literals = self.number_of_literals
 
         self.number_of_patches = int((self.dim[0] - self.patch_dim[0] + 1) * (self.dim[1] - self.patch_dim[1] + 1))
-
-        if not hasattr(self, "encoded_X_base"):
-            self._init_encoded_X_base()
-
-    def _init_encoded_X_base(self):
-        encoded_X = np.zeros((self.number_of_patches, self.number_of_literal_chunks), dtype=np.uint32)
-        for patch_coordinate_y in range(self.dim[1] - self.patch_dim[1] + 1):
-            for patch_coordinate_x in range(self.dim[0] - self.patch_dim[0] + 1):
-                p = patch_coordinate_y * (self.dim[0] - self.patch_dim[0] + 1) + patch_coordinate_x
-
-                if self.append_negated:
-                    for k in range(self.number_of_literals // 2, self.number_of_literals):
-                        chunk = k // 32
-                        pos = k % 32
-                        encoded_X[p, chunk] |= 1 << pos
-
-                for y_threshold in range(self.dim[1] - self.patch_dim[1]):
-                    patch_pos = y_threshold
-                    if patch_coordinate_y > y_threshold:
-                        chunk = patch_pos // 32
-                        pos = patch_pos % 32
-                        encoded_X[p, chunk] |= 1 << pos
-
-                        if self.append_negated:
-                            chunk = (patch_pos + self.number_of_literals // 2) // 32
-                            pos = (patch_pos + self.number_of_literals // 2) % 32
-                            encoded_X[p, chunk] &= ~np.uint32(1 << pos)
-
-                for x_threshold in range(self.dim[0] - self.patch_dim[0]):
-                    patch_pos = (self.dim[1] - self.patch_dim[1]) + x_threshold
-                    if patch_coordinate_x > x_threshold:
-                        chunk = patch_pos // 32
-                        pos = patch_pos % 32
-                        encoded_X[p, chunk] |= 1 << pos
-
-                        if self.append_negated:
-                            chunk = (patch_pos + self.number_of_literals // 2) // 32
-                            pos = (patch_pos + self.number_of_literals // 2) % 32
-                            encoded_X[p, chunk] &= ~np.uint32(1 << pos)
-
-        self.encoded_X_base = encoded_X.reshape(-1)
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):

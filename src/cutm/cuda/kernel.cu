@@ -36,6 +36,8 @@
 #define FILTER 0xFFFFFFFF
 #endif
 
+typedef unsigned long long ull;
+
 extern "C" {
 __global__ void initialize(curandState *rng, unsigned int *global_ta_states, float *clause_weights) {
     /*
@@ -60,56 +62,82 @@ __global__ void initialize(curandState *rng, unsigned int *global_ta_states, flo
     rng[index] = localState;
 }
 
-__global__ void encode_batch(const unsigned int *X_indptr, const unsigned int *X_indices, unsigned int *encoded_X,
-                             const int N) {
-    /*
-     * Encode the input data X into patches. Each patch has a set of literals, which are packed into chunks of 32 bits.
-     */
+__global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
+    // X -> (N * DIM0 * DIM1 * DIM2)
+    // encoded_X -> (N * PATCHES * NUM_LITERAL_CHUNKS)
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (unsigned long long e_patch = index; e_patch < (unsigned long long)PATCHES * (unsigned long long)N;
-         e_patch += stride) {
-        int e = e_patch / PATCHES;
-        int patch = e_patch % PATCHES;
+    for (ull e_patch = index; e_patch < (ull)(PATCHES * N); e_patch += stride) {
+        ull e = e_patch / PATCHES;
+        ull patch_id = e_patch % PATCHES;
 
-        const unsigned int *indices = &X_indices[X_indptr[e]];
-        int number_of_indices = X_indptr[e + 1] - X_indptr[e];
+        // Calculate the starting point of the patch in the original image
+        int patch_coordinate_y = patch_id / (DIM0 - PATCH_DIM0 + 1);
+        int patch_coordinate_x = patch_id % (DIM0 - PATCH_DIM0 + 1);
 
-        // Pre-calculate patch boundaries once per thread
-        int patch_coordinate_y = patch / (DIM0 - PATCH_DIM0 + 1);
-        int patch_coordinate_x = patch % (DIM0 - PATCH_DIM0 + 1);
-
-        // unsigned int *patch_output = &encoded_X[patch * NUM_LITERAL_CHUNKS];
-        unsigned int *patch_output = &encoded_X[e * PATCHES * NUM_LITERAL_CHUNKS + patch * NUM_LITERAL_CHUNKS];
-
-        for (int k = 0; k < number_of_indices; ++k) {
-            int idx = indices[k];
-            int y = idx / (DIM0 * DIM2);
-            int x = (idx % (DIM0 * DIM2)) / DIM2;
-            int z = (idx % (DIM0 * DIM2)) % DIM2;
-
-            // Check if this coordinate falls in this patch
-            if (y >= patch_coordinate_y && y < patch_coordinate_y + PATCH_DIM1 && x >= patch_coordinate_x &&
-                x < patch_coordinate_x + PATCH_DIM0) {
-                // Calculate bit position and set
-                int p_y = y - patch_coordinate_y;
-                int p_x = x - patch_coordinate_x;
-
-#if ENCODE_LOC
-                int patch_pos = (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
-#else
-                int patch_pos = p_y * PATCH_DIM0 * DIM2 + p_x * DIM2 + z;
-#endif
-                int chunk_nr = patch_pos / INT_SIZE;
-                int chunk_pos = patch_pos % INT_SIZE;
-                patch_output[chunk_nr] |= (1u << chunk_pos);
+        ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
+        unsigned int *patch_output = &encoded_X[encX_offset];
 
 #if APPEND_NEGATED
-                int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
-                int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
-                patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+#pragma unroll 4
+        for (int literal = LITERALS / 2; literal < LITERALS; ++literal) {
+            int chunk_nr = literal / INT_SIZE;
+            int chunk_pos = literal % INT_SIZE;
+            patch_output[chunk_nr] |= (1u << chunk_pos);
+        }
 #endif
+
+#pragma unroll 4
+        for (int lit = 0; lit < patch_coordinate_y; ++lit) {
+            int chunk_nr = lit / INT_SIZE;
+            int chunk_pos = lit % INT_SIZE;
+            patch_output[chunk_nr] |= (1u << chunk_pos);
+#if APPEND_NEGATED
+            int neg_chunk_nr = (lit + (LITERALS / 2)) / INT_SIZE;
+            int neg_chunk_pos = (lit + (LITERALS / 2)) % INT_SIZE;
+            patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+#endif
+        }
+
+#pragma unroll 4
+        for (int lit = 0; lit < patch_coordinate_x; ++lit) {
+            int chunk_nr = (DIM1 - PATCH_DIM1 + lit) / INT_SIZE;
+            int chunk_pos = (DIM1 - PATCH_DIM1 + lit) % INT_SIZE;
+            patch_output[chunk_nr] |= (1u << chunk_pos);
+#if APPEND_NEGATED
+            int neg_chunk_nr = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) / INT_SIZE;
+            int neg_chunk_pos = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) % INT_SIZE;
+            patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+#endif
+        }
+
+        // Iterate over all pixels in the patch
+        for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_DIM1; ++p_y) {
+            for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_DIM0; ++p_x) {
+                for (int z = 0; z < DIM2; ++z) {
+                    unsigned long long dense_idx =
+                        e * (ull)(DIM0 * DIM1 * DIM2) + p_y * (ull)(DIM0 * DIM2) + p_x * (ull)DIM2 + z;
+
+                    if (X[dense_idx] > 0) {
+                        int rel_y = p_y - patch_coordinate_y;
+                        int rel_x = p_x - patch_coordinate_x;
+#if ENCODE_LOC
+                        int patch_pos =
+                            (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+#else
+                        int patch_pos = rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+#endif
+                        int chunk_nr = patch_pos / INT_SIZE;
+                        int chunk_pos = patch_pos % INT_SIZE;
+                        patch_output[chunk_nr] |= (1u << chunk_pos);
+#if APPEND_NEGATED
+                        int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
+                        int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
+                        patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+#endif
+                    }
+                }
             }
         }
     }
@@ -221,7 +249,7 @@ __device__ inline int clause_match(const unsigned int *ta_state, const unsigned 
 }
 
 __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
-                            const unsigned int *X_batch, int *selected_patch_ids, const int e) {
+                            const unsigned int *X_batch, int *selected_patch_ids, float *class_sums, const int e) {
     /*
      * Calculate clause activations and select a patch for each active clause. If a clause is active, the
      * selected_patch_ids will be int between 0 and PATCHES - 1, else it will be -1.
@@ -238,7 +266,7 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
             int patch_matched =
                 clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[e * PATCHES * NUM_LITERAL_CHUNKS + patch_id * NUM_LITERAL_CHUNKS]);
+                             &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
             if (patch_matched) {
                 active_patches[active_count] = patch_id;
                 active_count++;
@@ -247,29 +275,14 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
         if (active_count > 0) {
             int random_index = curand(&localRNG) % active_count;
             selected_patch_ids[clause] = active_patches[random_index];
+            for (int class_id = 0; class_id < CLASSES; ++class_id) {
+                atomicAdd(&class_sums[0 * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
+            }
         } else {
             selected_patch_ids[clause] = -1;
         }
     }
     rng[index] = localRNG;
-}
-
-__global__ void calc_class_sums(int *selected_patch_ids, const float *clause_weights, float *class_sums) {
-    /*
-     * Calculate the class sums for each clause. If selected_patch_ids[clause] > -1, then the clause is active.
-     * The class_sum is given by, W[:, class] . Clause_activations.
-     * Can this dot product be optimized?
-     */
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for (int clause = index; clause < CLAUSES; clause += stride) {
-        if (selected_patch_ids[clause] > -1) {
-            for (int class_id = 0; class_id < CLASSES; ++class_id) {
-                atomicAdd(&class_sums[class_id], clause_weights[clause * CLASSES + class_id]);
-            }
-        }
-    }
 }
 
 __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
@@ -278,15 +291,14 @@ __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (unsigned long long e_clause = index; e_clause < (unsigned long long)N * (unsigned long long)CLAUSES;
-         e_clause += stride) {
-        int e = e_clause / CLAUSES;
-        int clause = e_clause % CLAUSES;
+    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
         if (num_includes[clause] == 0) continue;  // Skip empty clauses
         int clause_output = 0;
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
             if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[e * PATCHES * NUM_LITERAL_CHUNKS + patch_id * NUM_LITERAL_CHUNKS])) {
+                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
                 clause_output = 1;
                 break;
             }

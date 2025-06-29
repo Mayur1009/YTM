@@ -3,7 +3,6 @@ authors = [{name = "Mayur1009", email = "mayur1009@proton.me"}]
 dependencies = [
     "numpy",
     "pycuda",
-    "scipy",
     "tqdm",
 ]
 name = "MLTM"

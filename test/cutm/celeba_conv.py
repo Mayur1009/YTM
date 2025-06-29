@@ -8,7 +8,9 @@ from PIL import Image
 from tm_utils import Timer
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
-BATCH_SIZE = 25000
+from tm_utils.binarizer import ThermometerBinarizer
+
+BATCH_SIZE = 80000
 label_names = [
     "Attractive",
     "Heavy_Makeup",
@@ -44,13 +46,8 @@ def load_image_batch(file, ids, ch=8):
         imgs.append(np.array(img).astype(np.float32))
 
     imgs = np.array(imgs) # Shape: (N, 64, 64, 3)
-
-    out = np.empty((len(ids), 64, 64, ch * 3))
-    for i in range(3):
-        for j in range(ch):
-            t1 = (j + 1) * 255 / (ch + 1)
-            out[:, :, :, i * ch + j] = (imgs[..., i] >= t1) & 1
-
+    therm_bin = ThermometerBinarizer(ch=ch)
+    out = therm_bin.binarize_rgb(imgs)  # Shape: (N, 64, 64, ch * 3)
     return out.reshape((len(ids), -1)).astype(np.uint32)
 
 
@@ -93,14 +90,14 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
                 tm.fit(encoded_X, batch_Y, is_X_encoded=True)
             train_fit_time += train_fit_timer.elapsed()
 
-            train_pred_timer = Timer()
-            with train_pred_timer:
-                bpred, _ = tm.predict(encoded_X, is_X_encoded=True)
-            bmet = metrics(batch_Y, bpred)
-
-            tfitbar.set_postfix_str(
-                f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
-            )
+            # train_pred_timer = Timer()
+            # with train_pred_timer:
+            #     bpred, _ = tm.predict(encoded_X, is_X_encoded=True)
+            # bmet = metrics(batch_Y, bpred)
+            #
+            # tfitbar.set_postfix_str(
+            #     f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
+            # )
 
         test_time = 0
         test_preds = []
@@ -111,7 +108,7 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
             encoded_X = tm.encode(batch_X)
             test_timer = Timer()
             with test_timer:
-                    test_pred, _ = tm.predict(encoded_X, is_X_encoded=True)
+                    test_pred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=512)
             test_time += test_timer.elapsed()
             test_preds.append(test_pred)
 
@@ -136,7 +133,7 @@ if __name__ == "__main__":
         n_classes=len(label_names),
         patch_dim=(3, 3),
         seed=10,
-        block_size=256,
+        block_size=128,
     )
 
-    train(tm, file, ids_train, Y_train, ids_test, Y_test, ch, 10)
+    train(tm, file, ids_train, Y_train, ids_test, Y_test, ch, 20)
