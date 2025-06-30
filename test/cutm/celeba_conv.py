@@ -45,7 +45,7 @@ def load_image_batch(file, ids, ch=8):
         img = img.convert("RGB").resize((64, 64))
         imgs.append(np.array(img).astype(np.float32))
 
-    imgs = np.array(imgs) # Shape: (N, 64, 64, 3)
+    imgs = np.array(imgs)  # Shape: (N, 64, 64, 3)
     therm_bin = ThermometerBinarizer(ch=ch)
     out = therm_bin.binarize_rgb(imgs)  # Shape: (N, 64, 64, ch * 3)
     return out.reshape((len(ids), -1)).astype(np.uint32)
@@ -92,7 +92,7 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
 
             # train_pred_timer = Timer()
             # with train_pred_timer:
-            #     bpred, _ = tm.predict(encoded_X, is_X_encoded=True)
+            #     bpred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
             # bmet = metrics(batch_Y, bpred)
             #
             # tfitbar.set_postfix_str(
@@ -108,7 +108,7 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
             encoded_X = tm.encode(batch_X)
             test_timer = Timer()
             with test_timer:
-                    test_pred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=512)
+                test_pred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
             test_time += test_timer.elapsed()
             test_preds.append(test_pred)
 

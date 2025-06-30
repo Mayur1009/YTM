@@ -259,7 +259,11 @@ class BaseTM:
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
-        mod_new_kernel = SourceModule(self.gpu_macro_string + kernel_str, no_extern_c=True)
+        mod_new_kernel = SourceModule(
+            self.gpu_macro_string + kernel_str,
+            options=["-O3", "--use_fast_math"],
+            no_extern_c=True,
+        )
 
         self.kernel_init = mod_new_kernel.get_function("initialize")
         self.kernel_init.prepare("PPP")

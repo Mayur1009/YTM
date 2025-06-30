@@ -4139,11 +4139,10 @@ packages:
 - pypi: ./
   name: mltm
   version: 0.1.0
-  sha256: bae1d7b897546b25075e95e9f11e58ae78ef2245d70379364269d5fde5caf628
+  sha256: 360e7a716880db7cd034ff9b4497eb68986fd768878e307ef2bb596de6c69bce
   requires_dist:
   - numpy
   - pycuda
-  - scipy
   - tqdm
   requires_python: '>=3.11'
   editable: true

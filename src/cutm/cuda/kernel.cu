@@ -454,11 +454,11 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
     for (int clause = index; clause < CLAUSES; clause += stride) {
         unsigned int *ta_state = &global_ta_states[clause * LITERALS];
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
-        const unsigned int *X = &X_batch[e * PATCHES * NUM_LITERAL_CHUNKS];
+        const unsigned int *X = &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS)];
         const unsigned int *patch =
             selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
-        for (unsigned int class_id = 0; class_id < CLASSES; ++class_id) {
+        for (ull class_id = 0; class_id < CLASSES; ++class_id) {
             if (tar[class_id] == -1 && curand_uniform(&localRNG) > Q_PROB) {
                 continue;  // Skip the class.
             }
