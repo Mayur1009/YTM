@@ -59,15 +59,7 @@ if __name__ == "__main__":
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
 
-    # with LZMAFile("mnist_conv.tm", "wb") as f:
-    #     pickle.dump(tm, f)
-    #
-    # print("Model saved to mnist_conv.tm")
-    #
-    # with LZMAFile("mnist_conv.tm", "rb") as f:
-    #     tm2 = pickle.load(f)
-    #
-    # print("Model loaded from mnist_conv.tm")
-    # train(tm2, X_train, Y_train, X_test, Y_test, epochs=1)
+    with LZMAFile("mnist_conv.tm", "wb") as f:
+        pickle.dump(tm, f)
 
-
+    print("Model saved to mnist_conv.tm")

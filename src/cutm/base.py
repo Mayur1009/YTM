@@ -92,10 +92,7 @@ class BaseTM:
         if block_size is None:
             block_size = self.block_size
 
-        # if not hasattr(self, "encoded_X_base"):
-        #     self._init_encoded_X_base()
-
-        X_gpu = mem_alloc(X.nbytes)
+        X_gpu = mem_alloc(N * self.dim[0] * self.dim[1] * self.dim[2] * 4)
         memcpy_htod(X_gpu, X)
 
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
@@ -153,6 +150,7 @@ class BaseTM:
                 self.rng_gpu.state,
                 packed_clauses_gpu,
                 self.clause_weights_gpu,
+                self.patch_weights_gpu,
                 encoded_X_gpu,
                 selected_patch_ids_gpu,
                 class_sum_gpu,
@@ -182,6 +180,20 @@ class BaseTM:
         num_includes_gpu.free()
         return
 
+    def _pack_clauses_gpu(self):
+        packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
+        includes_gpu = mem_alloc(self.number_of_clauses * 4)
+
+        self.kernel_pack_clauses.prepared_call(
+            *kernel_config(self.number_of_clauses, device_props, self.block_size),
+            self.ta_state_gpu,
+            packed_clauses_gpu,
+            includes_gpu,
+        )
+        ctx.synchronize()
+
+        return packed_clauses_gpu, includes_gpu
+
     @profile
     def _score_batch(
         self, encoded_X, block_size: int | None = None
@@ -194,25 +206,15 @@ class BaseTM:
                 f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses. Call this method multiple times with smaller batches of X."
             )
 
-        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-        memcpy_htod(encoded_X_gpu, encoded_X)
-
-        # Initialize GPU memory for temporary data
-        packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
-        includes_gpu = mem_alloc(self.number_of_clauses * 4)
-        class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
-
         if block_size is None:
             block_size = self.block_size
 
-        self.kernel_pack_clauses.prepared_call(
-            *kernel_config(self.number_of_clauses, device_props, block_size),
-            self.ta_state_gpu,
-            packed_clauses_gpu,
-            includes_gpu,
-        )
-        ctx.synchronize()
+        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+        memcpy_htod(encoded_X_gpu, encoded_X)
 
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+
+        class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
         memset_d32(class_sums_gpu, 0, N * self.number_of_outputs)
         self.kernel_calc_class_sums_infer_batch.prepared_call(
             *kernel_config(N * self.number_of_clauses, device_props, block_size),
@@ -275,7 +277,7 @@ class BaseTM:
         self.kernel_pack_clauses.prepare("PPP")
 
         self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
-        self.kernel_clause_eval.prepare("PPPPPPi")
+        self.kernel_clause_eval.prepare("PPPPPPPi")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
@@ -283,9 +285,16 @@ class BaseTM:
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
         self.kernel_clause_update.prepare("PPPPPPPPi")
 
+        self.kernel_transform = mod_new_kernel.get_function("transform")
+        self.kernel_transform.prepare("PPPiP")
+
+        self.kernel_transform_patchwise = mod_new_kernel.get_function("transform_patchwise")
+        self.kernel_transform_patchwise.prepare("PPPiP")
+
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
+        self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
 
     #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
     def _init_default_vals(self, block_size: int = 128):
@@ -319,15 +328,109 @@ class BaseTM:
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):
-        self.ta_state = np.empty(self.number_of_clauses * self.number_of_literals, dtype=np.uint32)
-        memcpy_dtoh(self.ta_state, self.ta_state_gpu)
-        return self.ta_state.reshape((self.number_of_clauses, self.number_of_literals))
+        ta_state = np.empty(self.number_of_clauses * self.number_of_literals, dtype=np.uint32)
+        memcpy_dtoh(ta_state, self.ta_state_gpu)
+        return ta_state.reshape((self.number_of_clauses, self.number_of_literals))
+
+    def get_literals(self):
+        ta_states = self.get_ta_state()
+        return (ta_states > (self.number_of_ta_states // 2)).astype(np.uint32)
+
 
     def get_weights(self):
-        self.clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
-        memcpy_dtoh(self.clause_weights, self.clause_weights_gpu)
+        clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
+        memcpy_dtoh(clause_weights, self.clause_weights_gpu)
+        return clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
 
-        return self.clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
+    def get_patch_weights(self):
+        patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
+        memcpy_dtoh(patch_weights, self.patch_weights_gpu)
+        return patch_weights.reshape((self.number_of_clauses, self.number_of_patches))
+
+    ######## TRANSFORM #######
+
+    @profile
+    def transform(self, X, is_X_encoded: bool = False, block_size: int | None = None):
+        encoded_X = X if is_X_encoded else self.encode(X)
+        if block_size is None:
+            block_size = self.block_size
+
+        N = encoded_X.shape[0]
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = max_uint32 // self.number_of_clauses
+        if N > max_safe_N:
+            raise OverflowError(
+                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses. Call this method multiple times with smaller batches of X."
+            )
+
+        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+        memcpy_htod(encoded_X_gpu, encoded_X)
+
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+
+        clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * 4)
+        self.kernel_transform.prepared_call(
+            *kernel_config(N * self.number_of_clauses, device_props, block_size),
+            packed_clauses_gpu,
+            includes_gpu,
+            encoded_X_gpu,
+            np.int32(N),
+            clause_outputs_gpu,
+        )
+        ctx.synchronize()
+
+        clause_outputs = np.zeros((N * self.number_of_clauses), dtype=np.uint32)
+        memcpy_dtoh(clause_outputs, clause_outputs_gpu)
+
+        encoded_X_gpu.free()
+        packed_clauses_gpu.free()
+        includes_gpu.free()
+        clause_outputs_gpu.free()
+
+        return clause_outputs.reshape((N, self.number_of_clauses))
+
+    @profile
+    def transform_patchwise(self, X, is_X_encoded: bool = False, block_size: int | None = None):
+        encoded_X = X if is_X_encoded else self.encode(X)
+        if block_size is None:
+            block_size = self.block_size
+
+        N = encoded_X.shape[0]
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = max_uint32 // (self.number_of_clauses * self.number_of_patches)
+        if N > max_safe_N:
+            raise OverflowError(
+                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses * number_of_patches. Call this method multiple times with smaller batches of X."
+            )
+
+        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
+        memcpy_htod(encoded_X_gpu, encoded_X)
+
+        packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
+        includes_gpu = mem_alloc(self.number_of_clauses * 4)
+
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+
+        clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * self.number_of_patches * 4)
+        self.kernel_transform_patchwise.prepared_call(
+            *kernel_config(N * self.number_of_clauses * self.number_of_patches, device_props, block_size),
+            packed_clauses_gpu,
+            includes_gpu,
+            encoded_X_gpu,
+            np.int32(N),
+            clause_outputs_gpu,
+        )
+        ctx.synchronize()
+        clause_outputs = np.zeros((N * self.number_of_clauses * self.number_of_patches), dtype=np.uint32)
+        memcpy_dtoh(clause_outputs, clause_outputs_gpu)
+
+        encoded_X_gpu.free()
+        packed_clauses_gpu.free()
+        includes_gpu.free()
+        clause_outputs_gpu.free()
+        return clause_outputs.reshape((N, self.number_of_clauses, self.number_of_patches))
+
+    ##########################
 
     ## SERIALIZATION ##
     def __getstate__(self):
@@ -380,17 +483,21 @@ class BaseTM:
     #### SAVE AND LOAD ####
     def get_state_dict(self):
         # Copy data from GPU to CPU
-        self.ta_state = np.empty(
+        ta_state = np.empty(
             self.number_of_clauses * self.number_of_literals,
             dtype=np.uint32,
         )
-        self.clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
+        clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
+        patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
 
-        memcpy_dtoh(self.ta_state, self.ta_state_gpu)
-        memcpy_dtoh(self.clause_weights, self.clause_weights_gpu)
+        memcpy_dtoh(ta_state, self.ta_state_gpu)
+        memcpy_dtoh(clause_weights, self.clause_weights_gpu)
+        memcpy_dtoh(patch_weights, self.patch_weights_gpu)
+
         state_dict = {
-            "ta_state": self.ta_state,
-            "clause_weights": self.clause_weights,
+            "ta_state": ta_state,
+            "clause_weights": clause_weights,
+            "patch_weights": patch_weights,
             "min_y": self.min_y,
             "max_y": self.max_y,
         }
@@ -399,15 +506,12 @@ class BaseTM:
 
     def load_state_dict(self, state):
         state_dict = state["state"]
-        self.ta_state = state_dict["ta_state"]
-        self.clause_weights = state_dict["clause_weights"]
+        ta_state = state_dict["ta_state"]
+        clause_weights = state_dict["clause_weights"]
+        patch_weights = state_dict["patch_weights"]
         self.min_y = state_dict["min_y"]
         self.max_y = state_dict["max_y"]
 
-        # self._calc_variables()
-        # self._gpu_init()
-
-        memcpy_htod(self.ta_state_gpu, self.ta_state)
-        memcpy_htod(self.clause_weights_gpu, self.clause_weights)
-
-        # self.initialized = True
+        memcpy_htod(self.ta_state_gpu, ta_state)
+        memcpy_htod(self.clause_weights_gpu, clause_weights)
+        memcpy_htod(self.patch_weights_gpu, patch_weights)

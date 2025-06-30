@@ -248,7 +248,7 @@ __device__ inline int clause_match(const unsigned int *ta_state, const unsigned 
 #endif
 }
 
-__global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
+__global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights, int *patch_weights,
                             const unsigned int *X_batch, int *selected_patch_ids, float *class_sums, const int e) {
     /*
      * Calculate clause activations and select a patch for each active clause. If a clause is active, the
@@ -275,6 +275,7 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
         if (active_count > 0) {
             int random_index = curand(&localRNG) % active_count;
             selected_patch_ids[clause] = active_patches[random_index];
+            patch_weights[clause * PATCHES + active_patches[random_index]] = 1;
             for (int class_id = 0; class_id < CLASSES; ++class_id) {
                 atomicAdd(&class_sums[0 * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
             }
@@ -308,6 +309,55 @@ __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states
                 atomicAdd(&class_sums_batch[e * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
             }
         }
+    }
+}
+
+__global__ void transform(const unsigned int *packed_ta_states, const int *num_includes, const unsigned int *X_batch,
+                          const int N, unsigned int *clause_outputs) {
+    // clause_outputs => (N * CLAUSES)
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
+        if (num_includes[clause] == 0) {
+            clause_outputs[e * CLAUSES + clause] = 1;
+            continue;
+        }
+        int clause_output = 0;
+        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+            if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+                clause_output = 1;
+                break;
+            }
+        }
+        clause_outputs[e * CLAUSES + clause] = clause_output;
+    }
+}
+
+__global__ void transform_patchwise(const unsigned int *packed_ta_states, const int *num_includes,
+                                    const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
+    // clause_outputs => (N * CLAUSES * PATCHES)
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (ull e_clause_patch = index; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES; e_clause_patch += stride) {
+        unsigned int *clause_output = &clause_outputs[e_clause_patch];
+
+        ull e_clause = e_clause_patch / PATCHES;
+        ull patch_id = e_clause_patch % PATCHES;
+
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
+
+        if (num_includes[clause] == 0) {
+            *clause_output = 1;
+            continue;
+        }
+
+        *clause_output =
+            clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                         &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
     }
 }
 

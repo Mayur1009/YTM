@@ -51,7 +51,7 @@ def load_image_batch(file, ids, ch=8):
     return out.reshape((len(ids), -1)).astype(np.uint32)
 
 
-def metrics(true, preds):
+def metrics(true, preds, probs):
     n_class = true.shape[1]
 
     acc_per_class = np.mean(true == preds, axis=0)
@@ -59,7 +59,7 @@ def metrics(true, preds):
     mean_acc = np.mean(acc_per_class)
 
     pre, rec, f1, _ = precision_recall_fscore_support(true, preds, average="macro")
-    roc_auc = roc_auc_score(true, preds, average="macro", multi_class="ovr")
+    roc_auc = roc_auc_score(true, probs, average="macro", multi_class="ovr")
 
     return {
         "acc": mean_acc,
@@ -78,7 +78,7 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
         Ytrain = Ytrain[iota]
         train_fit_time = 0
 
-        for i in (tfitbar := tqdm(range(0, len(ids_train), BATCH_SIZE), desc="Training", dynamic_ncols=True)):
+        for i in tqdm(range(0, len(ids_train), BATCH_SIZE), desc="Training", dynamic_ncols=True):
             batch_ids = ids_train[i : i + BATCH_SIZE]
             batch_Y = Ytrain[i : i + BATCH_SIZE]
             batch_X = load_image_batch(file, batch_ids, ch)
@@ -90,17 +90,9 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
                 tm.fit(encoded_X, batch_Y, is_X_encoded=True)
             train_fit_time += train_fit_timer.elapsed()
 
-            # train_pred_timer = Timer()
-            # with train_pred_timer:
-            #     bpred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
-            # bmet = metrics(batch_Y, bpred)
-            #
-            # tfitbar.set_postfix_str(
-            #     f"Time: Fit-{train_fit_time:.4f}s, pred-{train_pred_timer.elapsed():.4f} | {' | '.join([f'{k}: {v:.4f}' for k, v in bmet.items()])}"
-            # )
-
         test_time = 0
         test_preds = []
+        test_cs = []
         for i in tqdm(range(0, len(ids_test), BATCH_SIZE), desc="Testing", leave=False, dynamic_ncols=True):
             batch_ids = ids_test[i : i + BATCH_SIZE]
             batch_Y = Ytest[i : i + BATCH_SIZE]
@@ -108,12 +100,15 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
             encoded_X = tm.encode(batch_X)
             test_timer = Timer()
             with test_timer:
-                test_pred, _ = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
+                test_pred, cs = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
             test_time += test_timer.elapsed()
             test_preds.append(test_pred)
+            test_cs.append(cs)
 
         test_preds = np.vstack(test_preds)
-        test_metrics = metrics(Ytest, test_preds)
+        test_cs = np.vstack(test_cs)
+        test_prob = (np.clip(test_cs, -tm.T, tm.T) + tm.T) / (2 * tm.T)
+        test_metrics = metrics(Ytest, test_preds, test_prob)
 
         print(f"Epoch {epoch + 1} | Fit time: {train_fit_time:.4f}s | Test time: {test_time:.4f}s")
         print(f"Test Metrics: {test_metrics}")
@@ -125,7 +120,7 @@ if __name__ == "__main__":
 
     ch = 8
     tm = MultiOutputTM(
-        number_of_clauses=25000,
+        number_of_clauses=20000,
         T=60000,
         s=25,
         q=4,
@@ -136,4 +131,4 @@ if __name__ == "__main__":
         block_size=128,
     )
 
-    train(tm, file, ids_train, Y_train, ids_test, Y_test, ch, 20)
+    train(tm, file, ids_train, Y_train, ids_test, Y_test, ch, 50)

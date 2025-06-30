@@ -2,6 +2,8 @@ from medmnist.dataset import PneumoniaMNIST
 import numpy as np
 from tm_utils import Timer
 from cutm import MultiClassTM
+import pickle
+from lzma import LZMAFile
 
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
@@ -87,8 +89,6 @@ def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
             f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
         )
         print(f"Confusion Matrix:\n{cm_test}")
-        # print(f"Class sums:\n{cs_test}")
-        # print(f"{tm.get_weights()=}")
 
 
 if __name__ == "__main__":
@@ -108,3 +108,7 @@ if __name__ == "__main__":
     )
 
     train(tm, xtrain, ytrain, xval, yval, xtest, ytest, epochs=30)
+
+    with LZMAFile("pneumonia_mnist.tm", "wb") as f:
+        pickle.dump(tm, f)
+
