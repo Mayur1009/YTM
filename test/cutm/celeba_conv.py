@@ -10,7 +10,7 @@ from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
 from tm_utils.binarizer import ThermometerBinarizer
 
-BATCH_SIZE = 80000
+BATCH_SIZE = 90000
 label_names = [
     "Attractive",
     "Heavy_Makeup",
@@ -120,10 +120,10 @@ if __name__ == "__main__":
 
     ch = 8
     tm = MultiOutputTM(
-        number_of_clauses=20000,
+        number_of_clauses=30000,
         T=60000,
         s=25,
-        q=4,
+        q=5,
         dim=(64, 64, ch * 3),
         n_classes=len(label_names),
         patch_dim=(3, 3),

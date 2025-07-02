@@ -1,5 +1,6 @@
 data
 runs
+*.tm
 
 # pixi environments
 .pixi

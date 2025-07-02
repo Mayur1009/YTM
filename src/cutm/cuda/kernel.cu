@@ -472,7 +472,7 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
 
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                               const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const unsigned int *X_batch, const int *Y_batch, const int e) {
+                              const unsigned int *X_batch, const int *Y_batch, const int e, float *true_bal_weight, float *false_bal_weight) {
     /*
      * Update the clauses based on the class sum and Y.
      *
@@ -509,18 +509,23 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
         for (ull class_id = 0; class_id < CLASSES; ++class_id) {
-            if (tar[class_id] == -1 && curand_uniform(&localRNG) > Q_PROB) {
+            int local_target = tar[class_id];
+
+            if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) {
                 continue;  // Skip the class.
             }
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
-            bool should_upate = (curand_uniform(&localRNG) <= prob[class_id]);
-            bool type1a = ((tar[class_id] * sign) > 0 && local_clause_output);
-            bool type1b = ((tar[class_id] * sign) > 0 && !local_clause_output);
-            bool type2 = ((tar[class_id] * sign) < 0 && local_clause_output);
 
-            if (should_upate) {  // CLause update with prob update_p else skip
+            float local_prob = prob[class_id] * (tar[class_id] == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
+            bool should_update = (curand_uniform(&localRNG) <= local_prob);
+
+            bool type1a = ((local_target * sign) > 0 && local_clause_output);
+            bool type1b = ((local_target * sign) > 0 && !local_clause_output);
+            bool type2 = ((local_target * sign) < 0 && local_clause_output);
+
+            if (should_update) {  // CLause update with prob update_p else skip
                 if (type1a) {
                     (*local_weight) += sign * 1.0f;
 #if (MAX_INCLUDED_LITERALS < LITERALS)
