@@ -2,6 +2,8 @@ data
 runs
 *.tm
 
+wandb
+
 # pixi environments
 .pixi
 *.egg-info
