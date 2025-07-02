@@ -45,6 +45,7 @@ class MultiOutputTM(BaseTM):
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
+        balance:bool = False,
         block_size: int | None = None,
     ) -> None:
         # Input validation
@@ -56,7 +57,7 @@ class MultiOutputTM(BaseTM):
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit_batch(encoded_X, encoded_Y, block_size=block_size)
+        self._fit_batch(encoded_X, encoded_Y, block_size=block_size, balance=balance)
 
     def score(
         self,
