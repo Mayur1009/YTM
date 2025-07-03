@@ -32,20 +32,20 @@ def encode_data(tm, file, ids, ch):
 def eval(tm: MultiOutputTM, encoded_X, Y):
     eval_time = 0
 
-    # preds = []
-    # css= []
-    # for i in tqdm(range(0, encoded_X.shape[0], BATCH_SIZE), desc="Evaluating", dynamic_ncols=True, leave=False):
-    #     batch_X_encoded = encoded_X[i : i + BATCH_SIZE]
-    #     eval_timer = Timer()
-    #     with eval_timer:
-    #         batch_preds, batch_css = tm.predict(batch_X_encoded, is_X_encoded=True, block_size=512)
-    #     eval_time += eval_timer.elapsed()
-    #
-    #     preds.append(batch_preds)
-    #     css.append(batch_css)
-    #
-    # preds = np.vstack(preds)
-    # css = np.vstack(css)
+    preds = []
+    css= []
+    for i in tqdm(range(0, encoded_X.shape[0], BATCH_SIZE), desc="Evaluating", dynamic_ncols=True, leave=False):
+        batch_X_encoded = encoded_X[i : i + BATCH_SIZE]
+        eval_timer = Timer()
+        with eval_timer:
+            batch_preds, batch_css = tm.predict(batch_X_encoded, is_X_encoded=True, block_size=512)
+        eval_time += eval_timer.elapsed()
+
+        preds.append(batch_preds)
+        css.append(batch_css)
+
+    preds = np.vstack(preds)
+    css = np.vstack(css)
 
     eval_timer = Timer()
     with eval_timer:
@@ -71,15 +71,15 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_val, Yval, ids_test, Y
         iota = np.arange(len(ids_train))
         np.random.shuffle(iota)
         train_fit_time = 0
-        # for i in tqdm(range(0, len(iota), BATCH_SIZE), desc="Training", dynamic_ncols=True, leave=False):
-        #     indices = iota[i : i + BATCH_SIZE]
-        #     batch_X_encoded = encoded_X_train[indices]
-        #     batch_Y = Ytrain[indices]
-        #
-        #     train_fit_timer = Timer()
-        #     with train_fit_timer:
-        #         tm.fit(batch_X_encoded, batch_Y, is_X_encoded=True)
-        #     train_fit_time += train_fit_timer.elapsed()
+        for i in tqdm(range(0, len(iota), BATCH_SIZE), desc="Training", dynamic_ncols=True, leave=False):
+            indices = iota[i : i + BATCH_SIZE]
+            batch_X_encoded = encoded_X_train[indices]
+            batch_Y = Ytrain[indices]
+
+            train_fit_timer = Timer()
+            with train_fit_timer:
+                tm.fit(batch_X_encoded, batch_Y, is_X_encoded=True)
+            train_fit_time += train_fit_timer.elapsed()
 
         train_fit_timer = Timer()
         with train_fit_timer:
@@ -122,9 +122,9 @@ if __name__ == "__main__":
         "test_samples": Y_test.shape[0],
         "n_classes": len(label_names),
         "label_names": label_names,
-        "number_of_clauses": 10000,
-        "T": 50000,
-        "s": 10,
+        "number_of_clauses": 100000,
+        "T": 250000,
+        "s": 25,
         "q": 25,
         "dim": (64, 64, ch * 3),
         "patch_dim": (3, 3),
