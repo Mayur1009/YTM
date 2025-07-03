@@ -5,7 +5,7 @@ dependencies = [
     "pycuda",
     "tqdm",
 ]
-name = "MLTM"
+name = "YTM"
 requires-python = ">= 3.11"
 version = "0.1.0"
 
@@ -22,9 +22,10 @@ sources =["src"]
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportUnusedImport = false
+reportMissingTypeStubs = "hint"
 exclude = [
-    ".pixi",
-    "data",
+    ".pixi*",
+    "data*",
 ]
 
 [tool.ruff]

@@ -1,9 +1,6 @@
 [workspace]
-authors = ["Mayur1009 <mayur1009@proton.me>"]
 channels = ["conda-forge"]
-name = "MLTM"
 platforms = ["linux-64"]
-version = "0.1.0"
 
 [tasks]
 
@@ -28,6 +25,7 @@ wandb = "*"
 
 
 [pypi-dependencies]
-mltm = { path = ".", editable = true }
+ytm = { path = ".", editable = true }
 medmnist = "*"
+microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
 
