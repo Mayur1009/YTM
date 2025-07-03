@@ -121,7 +121,7 @@ class BaseTM:
             not_count = N - count
             true_bal_weight = np.min(count) / count
             false_bal_weight = np.min(not_count) / not_count
-            return true_bal_weight, false_bal_weight
+            return np.asarray(true_bal_weight, dtype=np.float32), np.asarray(false_bal_weight, dtype=np.float32)
         else:
             return np.ones(self.number_of_outputs, dtype=np.float32), np.ones(self.number_of_outputs, dtype=np.float32)
 
@@ -135,10 +135,10 @@ class BaseTM:
         memcpy_htod(encoded_Y_gpu, encoded_Y)
 
         true_bal_weight, false_bal_weight = self._calc_class_distribution(encoded_Y, balance)
-        true_bal_weight_gpu = mem_alloc(self.number_of_outputs * 4)
-        false_balance_weight_gpu = mem_alloc(self.number_of_outputs * 4)
+        true_bal_weight_gpu = mem_alloc(true_bal_weight.nbytes)
+        false_bal_weight_gpu = mem_alloc(false_bal_weight.nbytes)
         memcpy_htod(true_bal_weight_gpu, true_bal_weight)
-        memcpy_htod(false_balance_weight_gpu, false_bal_weight)
+        memcpy_htod(false_bal_weight_gpu, false_bal_weight)
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -188,7 +188,7 @@ class BaseTM:
                 encoded_Y_gpu,
                 np.int32(e),
                 true_bal_weight_gpu,
-                false_balance_weight_gpu,
+                false_bal_weight_gpu,
             )
             ctx.synchronize()
 
