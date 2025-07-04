@@ -42,7 +42,7 @@ class RegressionTM(BaseTM):
 
         encoded_Y = ((Y - self.min_y) / (self.max_y - self.min_y) * self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit_batch(encoded_X, encoded_Y, block_size=block_size)
+        self._fit(encoded_X, encoded_Y, block_size=block_size)
         return
 
     def predict(self, X, is_X_encoded=False, block_size: int | None = None):

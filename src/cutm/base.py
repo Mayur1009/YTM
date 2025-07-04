@@ -81,37 +81,38 @@ class BaseTM:
         assert X.ndim == 2, "X must be a 2D array (samples, dim0 * dim1 * dim2)."
         assert X.dtype == np.uint32, "X must be of type np.uint32."
         N = X.shape[0]
-
-        max_uint32 = np.iinfo(np.uint32).max
-        max_safe_N = max_uint32 // self.number_of_patches
-        if N > max_safe_N:
-            raise OverflowError(
-                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_patches. Call this method multiple times with smaller batches of X."
-            )
-
         if block_size is None:
             block_size = self.block_size
 
-        X_gpu = mem_alloc(N * self.dim[0] * self.dim[1] * self.dim[2] * 4)
-        memcpy_htod(X_gpu, X)
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = max_uint32 // self.number_of_patches
 
-        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-        # memcpy_htod(encoded_X_gpu, np.stack([self.encoded_X_base] * N, axis=0).reshape(-1))
-        memset_d32(encoded_X_gpu, 0, N * self.number_of_patches * self.number_of_literal_chunks)
-        self.kernel_encode_batch.prepared_call(
-            *kernel_config(N * self.number_of_patches, device_props, block_size),
-            X_gpu,
-            encoded_X_gpu,
-            np.int32(N),
-        )
-        ctx.synchronize()
-        encoded_X = np.empty((N * self.number_of_patches * self.number_of_literal_chunks), dtype=np.uint32)
-        memcpy_dtoh(encoded_X, encoded_X_gpu)
+        encoded_X = np.empty((N, self.number_of_patches, self.number_of_literal_chunks), dtype=np.uint32)
+        for i in range(0, N, max_safe_N):
+            X_safe = X[i : i + max_safe_N]
+            X_gpu = mem_alloc(X_safe.nbytes)
+            memcpy_htod(X_gpu, X_safe)
 
-        X_gpu.free()
-        encoded_X_gpu.free()
+            encoded_X_gpu = mem_alloc(X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks * 4)
+            memset_d32(encoded_X_gpu, 0, X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks)
+            self.kernel_encode_batch.prepared_call(
+                *kernel_config(X_safe.shape[0] * self.number_of_patches, device_props, block_size),
+                X_gpu,
+                encoded_X_gpu,
+                np.int32(X_safe.shape[0]),
+            )
+            ctx.synchronize()
 
-        return encoded_X.reshape((N, self.number_of_patches, self.number_of_literal_chunks))
+            encoded_X_safe = np.empty(
+                (X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks), dtype=np.uint32
+            )
+            memcpy_dtoh(encoded_X_safe, encoded_X_gpu)
+
+            encoded_X[i : i + max_safe_N] = encoded_X_safe.reshape(
+                (X_safe.shape[0], self.number_of_patches, self.number_of_literal_chunks)
+            )
+
+        return encoded_X
 
     def _calc_class_distribution(self, encoded_Y, balance: bool):
         if balance:
@@ -127,7 +128,7 @@ class BaseTM:
 
     #### FIT AND SCORE ####
     @profile
-    def _fit_batch(self, encoded_X, encoded_Y, balance:bool = False, block_size: int | None = None):
+    def _fit(self, encoded_X, encoded_Y, balance: bool = False, block_size: int | None = None):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
@@ -219,41 +220,37 @@ class BaseTM:
         self, encoded_X, block_size: int | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         N = encoded_X.shape[0]
-        max_uint32 = np.iinfo(np.uint32).max
-        max_safe_N = max_uint32 // self.number_of_clauses
-        if N > max_safe_N:
-            raise OverflowError(
-                f"X has too many samples ({N}). Maximum of {max_safe_N} samples can be processed with current number_of_clauses. Call this method multiple times with smaller batches of X."
-            )
 
         if block_size is None:
             block_size = self.block_size
 
-        encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
-        memcpy_htod(encoded_X_gpu, encoded_X)
+        max_uint32 = np.iinfo(np.uint32).max
+        max_safe_N = max_uint32 // self.number_of_clauses
 
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
-
-        class_sums_gpu = mem_alloc(N * self.number_of_outputs * 4)
-        memset_d32(class_sums_gpu, 0, N * self.number_of_outputs)
-        self.kernel_calc_class_sums_infer_batch.prepared_call(
-            *kernel_config(N * self.number_of_clauses, device_props, block_size),
-            packed_clauses_gpu,
-            self.clause_weights_gpu,
-            includes_gpu,
-            encoded_X_gpu,
-            np.int32(N),
-            class_sums_gpu,
-        )
-        ctx.synchronize()
-
         class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
-        memcpy_dtoh(class_sums, class_sums_gpu)
+        for i in range(0, N, max_safe_N):
+            X_safe = encoded_X[i : i + max_safe_N]
+            X_gpu = mem_alloc(X_safe.nbytes)
+            memcpy_htod(X_gpu, X_safe)
 
-        encoded_X_gpu.free()
-        packed_clauses_gpu.free()
-        includes_gpu.free()
-        class_sums_gpu.free()
+            class_sums_gpu = mem_alloc(X_safe.shape[0] * self.number_of_outputs * 4)
+            memset_d32(class_sums_gpu, 0, X_safe.shape[0] * self.number_of_outputs)
+            self.kernel_calc_class_sums_infer_batch.prepared_call(
+                *kernel_config(X_safe.shape[0] * self.number_of_clauses, device_props, block_size),
+                packed_clauses_gpu,
+                self.clause_weights_gpu,
+                includes_gpu,
+                X_gpu,
+                np.int32(X_safe.shape[0]),
+                class_sums_gpu,
+            )
+            ctx.synchronize()
+
+            class_sums_safe = np.empty((X_safe.shape[0], self.number_of_outputs), dtype=np.float32)
+            memcpy_dtoh(class_sums_safe, class_sums_gpu)
+
+            class_sums[i : i + max_safe_N] = class_sums_safe
 
         return class_sums
 
@@ -355,7 +352,6 @@ class BaseTM:
     def get_literals(self):
         ta_states = self.get_ta_state()
         return (ta_states > (self.number_of_ta_states // 2)).astype(np.uint32)
-
 
     def get_weights(self):
         clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)

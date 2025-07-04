@@ -58,7 +58,7 @@ class MultiClassTM(BaseTM):
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit_batch(encoded_X, encoded_Y, block_size=block_size, balance=balance)
+        self._fit(encoded_X, encoded_Y, block_size=block_size, balance=balance)
 
     def score(
         self,

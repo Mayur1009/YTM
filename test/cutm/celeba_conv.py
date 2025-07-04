@@ -10,7 +10,6 @@ from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
 from tm_utils.binarizer import ThermometerBinarizer
 
-BATCH_SIZE = 90000
 label_names = [
     "Attractive",
     "Heavy_Makeup",
@@ -70,47 +69,40 @@ def metrics(true, preds, probs):
     }
 
 
+def encode_data(tm, file, ids, ch):
+    BATCH_SIZE = 90000
+    encoded_X = []
+    for i in tqdm(range(0, len(ids), BATCH_SIZE), desc="Encoding", dynamic_ncols=True, leave=False):
+        batch_ids = ids[i : i + BATCH_SIZE]
+        batch_X = load_image_batch(file, batch_ids, ch)
+        encoded_X.append(tm.encode(batch_X))
+    return np.vstack(encoded_X)
+
+
 def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epochs=1):
+    encoded_X_train = encode_data(tm, file, ids_train, ch)
+    encoded_X_test = encode_data(tm, file, ids_test, ch)
     for epoch in range(epochs):
         iota = np.arange(len(ids_train))
         np.random.shuffle(iota)
-        ids_train = ids_train[iota]
-        Ytrain = Ytrain[iota]
-        train_fit_time = 0
 
-        for i in tqdm(range(0, len(ids_train), BATCH_SIZE), desc="Training", dynamic_ncols=True):
-            batch_ids = ids_train[i : i + BATCH_SIZE]
-            batch_Y = Ytrain[i : i + BATCH_SIZE]
-            batch_X = load_image_batch(file, batch_ids, ch)
+        Xtrain_suf = encoded_X_train[iota]
+        Ytrain_suf = Ytrain[iota]
 
-            encoded_X = tm.encode(batch_X)
+        train_fit_timer = Timer()
+        with train_fit_timer:
+            tm.fit(Xtrain_suf, Ytrain_suf, is_X_encoded=True)
+        train_time = train_fit_timer.elapsed()
 
-            train_fit_timer = Timer()
-            with train_fit_timer:
-                tm.fit(encoded_X, batch_Y, is_X_encoded=True)
-            train_fit_time += train_fit_timer.elapsed()
+        test_timer = Timer()
+        with test_timer:
+            test_preds, test_cs = tm.predict(encoded_X_test, is_X_encoded=True, block_size=1024)
+        test_time = test_timer.elapsed()
 
-        test_time = 0
-        test_preds = []
-        test_cs = []
-        for i in tqdm(range(0, len(ids_test), BATCH_SIZE), desc="Testing", leave=False, dynamic_ncols=True):
-            batch_ids = ids_test[i : i + BATCH_SIZE]
-            batch_Y = Ytest[i : i + BATCH_SIZE]
-            batch_X = load_image_batch(file, batch_ids, ch)
-            encoded_X = tm.encode(batch_X)
-            test_timer = Timer()
-            with test_timer:
-                test_pred, cs = tm.predict(encoded_X, is_X_encoded=True, block_size=1024)
-            test_time += test_timer.elapsed()
-            test_preds.append(test_pred)
-            test_cs.append(cs)
-
-        test_preds = np.vstack(test_preds)
-        test_cs = np.vstack(test_cs)
         test_prob = (np.clip(test_cs, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         test_metrics = metrics(Ytest, test_preds, test_prob)
 
-        print(f"Epoch {epoch + 1} | Fit time: {train_fit_time:.4f}s | Test time: {test_time:.4f}s")
+        print(f"Epoch {epoch + 1} | Fit time: {train_time:.4f}s | Test time: {test_time:.4f}s")
         print(f"Test Metrics: {test_metrics}")
 
 
