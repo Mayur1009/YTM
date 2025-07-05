@@ -78,12 +78,8 @@ def multilabel_metrics(true, pred, prob, class_names):
     assert pred.ndim == 2, "Predicted labels should be a 2D array."
     assert prob.ndim == 2, "Probabilities should be a 2D array."
 
-    N = true.shape[0]
-
-    acc = 0
-    for c in range(len(class_names)):
-        acc += accuracy_score(true[:, c], pred[:, c])
-        acc /= len(class_names)
+    acc_per_class = np.mean(true == pred, axis=0)
+    acc = np.mean(acc_per_class)
 
     cm = multilabel_confusion_matrix(true, pred)
     cm_plots = [plot_heatmap(cm[i], xticklabels=["0", "1"], yticklabels=["0", "1"]) for i in range(len(class_names))]
@@ -101,17 +97,18 @@ def multilabel_metrics(true, pred, prob, class_names):
     per_class_roc = roc_auc_score(true, prob, average=None, multi_class="ovr")
 
     metrics = {
-        "accuracy": acc,
-        "precision/macro": macro_pre,
-        "recall/macro": macro_rec,
-        "f1/macro": macro_f1,
-        "roc_auc/macro": macro_roc,
-        **{f"precision/class.{name}": pre for name, pre in zip(class_names, per_class_pre)},  # pyright:ignore[reportArgumentType]
-        **{f"recall/class.{name}": rec for name, rec in zip(class_names, per_class_rec)},  # pyright:ignore[reportArgumentType]
-        **{f"f1/class.{name}": f1 for name, f1 in zip(class_names, per_class_f1)},  # pyright:ignore[reportArgumentType]
-        **{f"roc_auc/class.{name}": roc for name, roc in zip(class_names, per_class_roc)},  # pyright:ignore[reportArgumentType]
-        **{f"confusion_matrix/class.{name}": cm_plot for name, cm_plot in zip(class_names, cm_plots)},  # pyright:ignore[reportArgumentType]
+        "accuracy/mean": acc,
+        **{f"accuracy/class.{name}": a for name, a in zip(class_names, acc_per_class)},
         "hamming_loss": hml,
+        "f1/macro": macro_f1,
+        **{f"f1/class.{name}": f1 for name, f1 in zip(class_names, per_class_f1)},  # pyright:ignore[reportArgumentType]
+        "roc_auc/macro": macro_roc,
+        **{f"roc_auc/class.{name}": roc for name, roc in zip(class_names, per_class_roc)},  # pyright:ignore[reportArgumentType]
+        "precision/macro": macro_pre,
+        **{f"precision/class.{name}": pre for name, pre in zip(class_names, per_class_pre)},  # pyright:ignore[reportArgumentType]
+        "recall/macro": macro_rec,
+        **{f"recall/class.{name}": rec for name, rec in zip(class_names, per_class_rec)},  # pyright:ignore[reportArgumentType]
+        **{f"confusion_matrix/class.{name}": cm_plot for name, cm_plot in zip(class_names, cm_plots)},
     }
 
     return metrics

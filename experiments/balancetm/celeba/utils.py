@@ -8,17 +8,17 @@ from tqdm import tqdm
 
 from tm_utils.binarizer import ThermometerBinarizer
 
-# label_names = [
-#     "Attractive",
-#     "Heavy_Makeup",
-#     "High_Cheekbones",
-#     "Male",
-#     "Mouth_Slightly_Open",
-#     "Smiling",
-#     "Wearing_Lipstick",
-# ]
+subset1 = [
+    "Attractive",
+    "Heavy_Makeup",
+    "High_Cheekbones",
+    "Male",
+    "Mouth_Slightly_Open",
+    "Smiling",
+    "Wearing_Lipstick",
+]
 
-label_names = [
+all_labels = [
     "5_o_Clock_Shadow",
     "Arched_Eyebrows",
     "Attractive",
@@ -62,7 +62,7 @@ label_names = [
 ]
 
 
-def load_celeba(dir, split):
+def load_celeba(dir, split, label_names):
     file = h5py.File(f"{dir}/img_align_celeba.h5", "r")
     attr = pd.read_csv(f"{dir}/list_attr_celeba.csv")
     attr = attr.replace(-1, 0)
@@ -90,3 +90,10 @@ def load_image_batch(file, ids, ch=8):
     out = therm_bin.binarize_rgb(imgs)  # Shape: (N, 64, 64, ch * 3)
     return out.reshape((len(ids), -1)).astype(np.uint32)
 
+def encode_data(tm, file, ids, ch, batch_size=90000):
+    encoded_X = []
+    for i in tqdm(range(0, len(ids), batch_size), desc="Encoding", dynamic_ncols=True, leave=False):
+        batch_ids = ids[i : i + batch_size]
+        batch_X = load_image_batch(file, batch_ids, ch)
+        encoded_X.append(tm.encode(batch_X))
+    return np.vstack(encoded_X)
