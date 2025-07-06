@@ -54,12 +54,12 @@ if __name__ == "__main__":
         patch_dim=(10, 10),
         encode_loc=True,
         seed=10,
-        block_size=16,
+        block_size=128,
     )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
 
-    with LZMAFile("mnist_conv.tm", "wb") as f:
-        pickle.dump(tm, f)
-
-    print("Model saved to mnist_conv.tm")
+    # with LZMAFile("mnist_conv.tm", "wb") as f:
+    #     pickle.dump(tm, f)
+    #
+    # print("Model saved to mnist_conv.tm")

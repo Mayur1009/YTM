@@ -53,7 +53,7 @@ if __name__ == "__main__":
         n_classes=10,
         patch_dim=(3, 3),
         seed=10,
-        block_size=64,
+        block_size=256,
     )
     train(tm, X_train, Y_train, X_test, Y_test, epochs=1)
 

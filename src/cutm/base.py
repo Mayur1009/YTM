@@ -131,8 +131,8 @@ class BaseTM:
     def _fit(self, encoded_X, encoded_Y, balance: bool = False, block_size: int | None = None):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
-        memcpy_htod(encoded_X_gpu, encoded_X)
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
+        memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
 
         true_bal_weight, false_bal_weight = self._calc_class_distribution(encoded_Y, balance)
@@ -144,6 +144,7 @@ class BaseTM:
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
+        clause_outputs_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
@@ -151,6 +152,7 @@ class BaseTM:
             block_size = self.block_size
 
         config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size)
+        config_patchwise = kernel_config(self.number_of_clauses * self.number_of_patches, device_props, block_size)
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -162,18 +164,26 @@ class BaseTM:
             )
             ctx.synchronize()
 
-            memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
+            # memset_d32(clause_outputs_gpu, 0, self.number_of_clauses * self.number_of_patches)
+            self.kernel_fast_eval.prepared_call(
+                *config_patchwise,
+                packed_clauses_gpu,
+                num_includes_gpu,
+                encoded_X_gpu,
+                clause_outputs_gpu,
+                np.int32(e),
+            )
+            ctx.synchronize()
+
+            # memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
             memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-            self.kernel_clause_eval.prepared_call(
+            self.kernel_select_active.prepared_call(
                 *config_n_clauses,
                 self.rng_gpu.state,
-                packed_clauses_gpu,
                 self.clause_weights_gpu,
-                self.patch_weights_gpu,
-                encoded_X_gpu,
+                clause_outputs_gpu,
                 selected_patch_ids_gpu,
                 class_sum_gpu,
-                np.int32(e),
             )
             ctx.synchronize()
 
@@ -193,12 +203,6 @@ class BaseTM:
             )
             ctx.synchronize()
 
-        encoded_X_gpu.free()
-        encoded_Y_gpu.free()
-        packed_clauses_gpu.free()
-        class_sum_gpu.free()
-        selected_patch_ids_gpu.free()
-        num_includes_gpu.free()
         return
 
     def _pack_clauses_gpu(self):
@@ -293,8 +297,14 @@ class BaseTM:
         self.kernel_pack_clauses = mod_new_kernel.get_function("pack_clauses")
         self.kernel_pack_clauses.prepare("PPP")
 
-        self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
-        self.kernel_clause_eval.prepare("PPPPPPPi")
+        self.kernel_fast_eval = mod_new_kernel.get_function("fast_eval")
+        self.kernel_fast_eval.prepare("PPPPi")
+
+        self.kernel_select_active = mod_new_kernel.get_function("select_active")
+        self.kernel_select_active.prepare("PPPPP")
+
+        # self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
+        # self.kernel_clause_eval.prepare("PPPPPPPi")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
