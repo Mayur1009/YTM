@@ -14,14 +14,15 @@ from tqdm import tqdm
 from tm_utils.metrics import multiclass_metrics
 from tm_utils import Timer
 from utils import label_names
+np.random.seed(10)
 
-
-STRAT = "manual_bal"
-NAME = f"octmnist_{STRAT}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
-DIR = f"./runs/octmnist/{NAME}"
+DATASET = "octmnist"
+STRAT = "undersample"
+NAME = f"{DATASET}_{STRAT}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
+DIR = f"./runs/{DATASET}/{NAME}"
 PROJECT = "IMBALANCE"
-GROUP = "octmnist"
-TAGS = ["octmnist", STRAT]
+GROUP = DATASET
+TAGS = [DATASET, STRAT]
 
 def balance_Y(Y, n_class):
     counts = np.bincount(Y, minlength=n_class)
@@ -100,21 +101,21 @@ if __name__ == "__main__":
     (xtrain, ytrain), (xval, yval), (xtest, ytest) = load_dataset(ch)
 
     config = {
-        "dataset": "OCTMNIST",
+        "dataset": DATASET,
         "binarization": "thermometer",
         "binarization_channels": ch,
         "training_samples": xtrain.shape[0],
         "validation_samples": xval.shape[0],
         "test_samples": xtest.shape[0],
         "n_classes": 4,
-        "number_of_clauses": 5000,
-        "T": 15000,
-        "s": 10,
+        "number_of_clauses": 18000,
+        "T": 50000,
+        "s": 25,
         "q": 1,
         "dim": (28, 28, ch),
-        "patch_dim": (9, 9),
+        "patch_dim": (7, 7),
         "seed": 10,
-        "total_epochs": 50,
+        "total_epochs": 100,
         "strategy": STRAT,
     }
 
