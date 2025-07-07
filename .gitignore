@@ -1,6 +1,7 @@
 data
 runs
 *.tm
+temp/**
 
 wandb
 

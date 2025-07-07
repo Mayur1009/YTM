@@ -9,23 +9,24 @@ cuda = "12"
 
 
 [dependencies]
-python = "*"
-cuda = "*"
-tensorflow = "*"
-scipy-stubs = "*"
-matplotlib = "*"
-seaborn = "*"
-ipdb = "*"
-jupyterlab = "*"
-scikit-learn = "*"
+python = ">=3.11"
+cuda = ">=12.8,<13"
+tensorflow = ">=2.18.0,<3"
+scipy-stubs = ">=1.16.0.2,<2"
+matplotlib = ">=3.10.3,<4"
+seaborn = ">=0.13.2,<0.14"
+ipdb = ">=0.13.13,<0.14"
+jupyterlab = ">=4.4.4,<5"
+scikit-learn = ">=1.7.0,<2"
 line_profiler = ">=4.2.0,<5"
-pandas = "*"
-pandas-stubs = "*"
-wandb = "*"
+pandas = ">=2.3.0,<3"
+pandas-stubs = ">=2.3.0.250703,<3"
+wandb = ">=0.21.0,<0.22"
 
 
 [pypi-dependencies]
 ytm = { path = ".", editable = true }
 medmnist = "*"
 microsoft-python-type-stubs = { git = "https://github.com/microsoft/python-type-stubs.git" }
+imbalanced-learn = { git = "https://github.com/scikit-learn-contrib/imbalanced-learn.git", branch = "master" }
 
