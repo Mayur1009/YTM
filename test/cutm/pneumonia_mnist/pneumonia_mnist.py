@@ -6,6 +6,7 @@ import pickle
 from lzma import LZMAFile
 
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
+from tm_utils.metrics import print_metrics
 
 
 def binarize_images(imgs, ch=8):
@@ -80,15 +81,21 @@ def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
         prob_test = (np.clip(cs_test, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         prob_test = prob_test / (np.sum(prob_test, axis=1, keepdims=True) + 1e-7)
         acc_test = np.mean(preds == ytest)
-        cm_test = confusion_matrix(ytest, preds)
+        # cm_test = confusion_matrix(ytest, preds)
         ytest_bin = np.zeros((len(ytest), 2))
         ytest_bin[np.arange(len(ytest)), ytest] = 1
         auc_test = roc_auc_score(ytest_bin, prob_test)
 
-        print(
-            f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
+        print_metrics(
+            epoch + 1,
+            {"accuracy": train_acc * 100, "auc": auc_train * 100},
+            {"accuracy": acc_val * 100, "auc": auc_val * 100},
+            {"accuracy": acc_test * 100, "auc": auc_test * 100},
         )
-        print(f"Confusion Matrix:\n{cm_test}")
+        # print(
+        #     f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
+        # )
+        # print(f"Confusion Matrix:\n{cm_test}")
 
 
 if __name__ == "__main__":
@@ -111,4 +118,3 @@ if __name__ == "__main__":
 
     with LZMAFile("pneumonia_mnist.tm", "wb") as f:
         pickle.dump(tm, f)
-

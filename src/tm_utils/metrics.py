@@ -11,6 +11,39 @@ from sklearn.metrics import (
 )
 
 
+def print_metrics(
+    epoch: int,
+    train_met: dict | None = None,
+    val_met: dict | None = None,
+    test_met: dict | None = None,
+    col_width: int = 9,
+):
+    if train_met is not None:
+        metrics = list(train_met.keys())
+    elif val_met is not None:
+        metrics = list(val_met.keys())
+    elif test_met is not None:
+        metrics = list(test_met.keys())
+    else:
+        print("No metrics to display.")
+        return
+
+    header = f"| {'Epoch=' + str(epoch):^{col_width}} |"
+    for metric in metrics:
+        header += f" {metric:>{col_width}} |"
+    print(header)
+    separator = "+" + "+".join(["-" * (col_width + 2)] * (len(metrics) + 1)) + "+"
+    print(separator)
+    for name, data in [("Train", train_met), ("Val", val_met), ("Test", test_met)]:
+        if data is None:
+            continue
+        row = f"| {name:>{col_width}} |"
+        for metric in metrics:
+            row += f" {data[metric]:>{col_width}.4f} |"
+        print(row)
+    print(separator)
+
+
 def plot_heatmap(arr, **hmapargs):
     figsize = (max(4, 1.2 * arr.shape[0]), max(4, 1.2 * arr.shape[1]))
     fig, ax = plt.subplots(1, 1, figsize=figsize, layout="compressed", dpi=120)
