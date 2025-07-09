@@ -5,7 +5,7 @@ from lzma import LZMAFile
 
 import wandb
 from cutm import MultiClassTM
-from utils import load_dataset, train
+from utils import load_dataset, train, label_names
 
 DATASET = "octmnist"
 STRAT = "default"
@@ -21,6 +21,7 @@ if __name__ == "__main__":
 
     config = {
         "dataset": DATASET,
+        "label_names": label_names,
         "binarization": "thermometer",
         "binarization_channels": ch,
         "training_samples": xtrain.shape[0],

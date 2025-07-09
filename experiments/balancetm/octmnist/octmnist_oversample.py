@@ -17,7 +17,7 @@ from utils import label_names
 np.random.seed(10)
 
 DATASET = "octmnist"
-STRAT = "undersample"
+STRAT = "oversample"
 NAME = f"{DATASET}_{STRAT}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
 DIR = f"./runs/{DATASET}/{NAME}"
 PROJECT = "IMBALANCE"
@@ -26,13 +26,15 @@ TAGS = [DATASET, STRAT]
 
 def balance_Y(Y, n_class):
     counts = np.bincount(Y, minlength=n_class)
-    min_count = np.min(counts)
+    max_count = np.max(counts)
 
-    selected_indices = []
-    for c in range(n_class):
-        indices = np.where(Y == c)[0]
-        si = np.random.choice(indices, size=min_count, replace=True)
-        selected_indices.extend(si)
+    selected_indices = [i for i in range(Y.shape[0])]
+    for class_label in range(n_class):
+        class_indices = np.where(Y == class_label)[0]
+        oversampled_count = max_count - counts[class_label]
+        if oversampled_count > 0:
+            rinds = np.random.choice(class_indices, oversampled_count, replace=True)
+            selected_indices.extend(rinds)
 
     return selected_indices
 
