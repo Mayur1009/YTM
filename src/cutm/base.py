@@ -8,7 +8,6 @@ from pycuda.driver import Context as ctx  # pyright: ignore[reportAttributeAcces
 from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.gpuarray import to_gpu
 from tqdm import tqdm
-from line_profiler import profile
 
 from .cuda_utils import kernel_config, get_kernel, device_props
 
@@ -76,7 +75,6 @@ class BaseTM:
         self._init_default_vals(self.block_size)
         self.initialized = True
 
-    @profile
     def encode(
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
@@ -131,7 +129,6 @@ class BaseTM:
             return np.ones(self.number_of_outputs, dtype=np.float32), np.ones(self.number_of_outputs, dtype=np.float32)
 
     #### FIT AND SCORE ####
-    @profile
     def _fit(self, encoded_X, encoded_Y, balance: bool = False, block_size: int | None = None):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
@@ -168,7 +165,6 @@ class BaseTM:
             )
             ctx.synchronize()
 
-            # memset_d32(clause_outputs_gpu, 0, self.number_of_clauses * self.number_of_patches)
             self.kernel_fast_eval.prepared_call(
                 *config_patchwise,
                 packed_clauses_gpu,
@@ -179,7 +175,6 @@ class BaseTM:
             )
             ctx.synchronize()
 
-            # memset_d32(selected_patch_ids_gpu, 0xFFFFFFFF, self.number_of_clauses)  # Initialize with -1
             memset_d32(class_sum_gpu, 0, self.number_of_outputs)
             self.kernel_select_active.prepared_call(
                 *config_n_clauses,
@@ -223,7 +218,6 @@ class BaseTM:
 
         return packed_clauses_gpu, includes_gpu
 
-    @profile
     def _score_batch(
         self, encoded_X, block_size: int | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
@@ -309,9 +303,6 @@ class BaseTM:
         self.kernel_select_active = mod_new_kernel.get_function("select_active")
         self.kernel_select_active.prepare("PPPPP")
 
-        # self.kernel_clause_eval = mod_new_kernel.get_function("clause_eval")
-        # self.kernel_clause_eval.prepare("PPPPPPPi")
-
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
@@ -381,7 +372,6 @@ class BaseTM:
 
     ######## TRANSFORM #######
 
-    @profile
     def transform(self, X, is_X_encoded: bool = False, block_size: int | None = None):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:
@@ -421,7 +411,6 @@ class BaseTM:
 
         return clause_outputs.reshape((N, self.number_of_clauses))
 
-    @profile
     def transform_patchwise(self, X, is_X_encoded: bool = False, block_size: int | None = None):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:

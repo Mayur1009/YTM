@@ -1,4 +1,3 @@
-import pathlib
 import pycuda.autoinit  # noqa: F401
 from pycuda.driver import device_attribute  # pyright: ignore[reportAttributeAccessIssue]
 

@@ -24,8 +24,6 @@
 
 #include <curand_kernel.h>
 
-#include <cstdint>
-
 #define CLAUSES_PER_BANK (CLAUSES / CLAUSE_BANKS)
 #define VECTORIZED_LIMIT (LITERALS & ~3)
 #define S_INV (1.0f / S)
@@ -42,6 +40,7 @@
 typedef unsigned long long ull;
 
 extern "C" {
+/***********INITIALIZATION***********/
 __global__ void initialize(curandState *rng, unsigned int *global_ta_states, float *clause_weights) {
     /*
      * Initialize the TA states to middle state and clause weights(randomly to -1 and 1).
@@ -76,6 +75,8 @@ __global__ void initialize(curandState *rng, unsigned int *global_ta_states, flo
     rng[index] = localState;
 }
 
+
+/***********INPUT ENCODING***********/
 __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
     // X -> (N * DIM0 * DIM1 * DIM2)
     // encoded_X -> (N * PATCHES * NUM_LITERAL_CHUNKS)
@@ -154,6 +155,7 @@ __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, con
     }
 }
 
+/***********CLAUSE PACKING***********/
 __global__ void pack_clauses(const unsigned int *global_ta_states, unsigned int *packed_clauses, int *num_includes) {
     /*
      * Pack the TA states into chunks of 32 bits. Each chunk represents a set of literals.
@@ -203,36 +205,8 @@ __global__ void pack_clauses(const unsigned int *global_ta_states, unsigned int 
     }
 }
 
-__device__ inline int clause_match_vec(const unsigned int *ta_state, const unsigned int *X) {
-    int match = 1;
-    const uint4 *ta_state_vec = reinterpret_cast<const uint4 *>(ta_state);
-    const uint4 *X_vec = reinterpret_cast<const uint4 *>(X);
-
-    int num_vec_chunks = (NUM_LITERAL_CHUNKS - 1) / 4;
-
-    for (int vec_chunk = 0; vec_chunk < num_vec_chunks; vec_chunk++) {
-        uint4 ta_vec = ta_state_vec[vec_chunk];
-        uint4 x_vec = X_vec[vec_chunk];
-
-        // Element-wise AND operations and comparisons
-        match &= ((ta_vec.x & x_vec.x) == ta_vec.x) & ((ta_vec.y & x_vec.y) == ta_vec.y) &
-                 ((ta_vec.z & x_vec.z) == ta_vec.z) & ((ta_vec.w & x_vec.w) == ta_vec.w);
-    }
-
-    // Handle remaining chunks that don't fit in uint4
-    int remaining_start = num_vec_chunks * 4;
-
-    for (int chunk = remaining_start; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk) {
-        match &= ((ta_state[chunk] & X[chunk]) == ta_state[chunk]);
-    }
-
-    match &= ((ta_state[NUM_LITERAL_CHUNKS - 1] & (X[NUM_LITERAL_CHUNKS - 1] & FILTER)) ==
-              (ta_state[NUM_LITERAL_CHUNKS - 1] & FILTER));
-
-    return match;
-}
-
-__device__ inline int clause_match_scalar(const unsigned int *ta_state, const unsigned int *X) {
+/***********CLAUSE EVALUATION***********/
+__device__ inline int clause_match(const unsigned int *ta_state, const unsigned int *X) {
     for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk)
         if ((ta_state[chunk] & X[chunk]) != ta_state[chunk]) return 0;
 
@@ -243,25 +217,10 @@ __device__ inline int clause_match_scalar(const unsigned int *ta_state, const un
     return 1;
 }
 
-__device__ inline int clause_match(const unsigned int *ta_state, const unsigned int *X) {
-#if NUM_LITERAL_CHUNKS >= 4
-    bool is_aligned = (((std::uintptr_t)ta_state % 16) == 0) && (((std::uintptr_t)X % 16) == 0);
-    if (is_aligned)
-        return clause_match_vec(ta_state, X);
-    else
-        return clause_match_scalar(ta_state, X);
-#else
-    return clause_match_scalar(ta_state, X);
-#endif
-}
-
+/***********CLAUSE EVALUATION---SLOWER***********/
 __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
                             int *patch_weights, const unsigned int *X_batch, int *selected_patch_ids, float *class_sums,
                             const int e) {
-    /*
-     * Calculate clause activations and select a patch for each active clause. If a clause is active, the
-     * selected_patch_ids will be int between 0 and PATCHES - 1, else it will be -1.
-     */
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -272,7 +231,7 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
         int active_count = 0;
 
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            int patch_matched = clause_match_scalar(
+            int patch_matched = clause_match(
                 &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
                 &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
             if (patch_matched) {
@@ -294,83 +253,7 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
     rng[index] = localRNG;
 }
 
-__global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
-                                            const int *num_includes, const unsigned int *X_batch, const int N,
-                                            float *class_sums_batch) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
-        ull e = e_clause / CLAUSES;
-        ull clause = e_clause % CLAUSES;
-        if (num_includes[clause] == 0) continue;  // Skip empty clauses
-        int clause_output = 0;
-        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_match_scalar(
-                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
-                clause_output = 1;
-                break;
-            }
-        }
-        if (clause_output) {
-            for (int class_id = 0; class_id < CLASSES; ++class_id) {
-                atomicAdd(&class_sums_batch[e * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
-            }
-        }
-    }
-}
-
-__global__ void transform(const unsigned int *packed_ta_states, const int *num_includes, const unsigned int *X_batch,
-                          const int N, unsigned int *clause_outputs) {
-    // clause_outputs => (N * CLAUSES)
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
-        ull e = e_clause / CLAUSES;
-        ull clause = e_clause % CLAUSES;
-        if (num_includes[clause] == 0) {
-            clause_outputs[e * CLAUSES + clause] = 1;
-            continue;
-        }
-        int clause_output = 0;
-        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_match_scalar(
-                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
-                clause_output = 1;
-                break;
-            }
-        }
-        clause_outputs[e * CLAUSES + clause] = clause_output;
-    }
-}
-
-__global__ void transform_patchwise(const unsigned int *packed_ta_states, const int *num_includes,
-                                    const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
-    // clause_outputs => (N * CLAUSES * PATCHES)
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    for (ull e_clause_patch = index; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES; e_clause_patch += stride) {
-        unsigned int *clause_output = &clause_outputs[e_clause_patch];
-
-        ull e_clause = e_clause_patch / PATCHES;
-        ull patch_id = e_clause_patch % PATCHES;
-
-        ull e = e_clause / CLAUSES;
-        ull clause = e_clause % CLAUSES;
-
-        if (num_includes[clause] == 0) {
-            *clause_output = 1;
-            continue;
-        }
-
-        *clause_output =
-            clause_match_scalar(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                                &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
-    }
-}
-
+/***********FAST EVALUATION KERNELS***********/
 __global__ void fast_eval(const unsigned int *packed_ta_states, const int *num_includes, const unsigned int *X_batch,
                           unsigned int *clause_outputs, const int e) {
     // clause_outputs => (N * CLAUSES * PATCHES)
@@ -388,11 +271,12 @@ __global__ void fast_eval(const unsigned int *packed_ta_states, const int *num_i
         }
 
         *clause_output =
-            clause_match_scalar(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+            clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
                                 &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
     }
 }
 
+/***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
 __global__ void select_active(curandState *rng, const float *clause_weights, const unsigned int *clause_outputs,
                               int *selected_patch_ids, float *class_sums) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -425,6 +309,86 @@ __global__ void select_active(curandState *rng, const float *clause_weights, con
     rng[index] = localRNG;
 }
 
+/***********FAST CLASS SUMS CALCULATION FOR INFERENCE***********/
+__global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
+                                            const int *num_includes, const unsigned int *X_batch, const int N,
+                                            float *class_sums_batch) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
+        if (num_includes[clause] == 0) continue;  // Skip empty clauses
+        int clause_output = 0;
+        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+            if (clause_match(
+                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+                clause_output = 1;
+                break;
+            }
+        }
+        if (clause_output) {
+            for (int class_id = 0; class_id < CLASSES; ++class_id) {
+                atomicAdd(&class_sums_batch[e * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
+            }
+        }
+    }
+}
+
+/***********TRNAFORM KERNELS***********/
+__global__ void transform(const unsigned int *packed_ta_states, const int *num_includes, const unsigned int *X_batch,
+                          const int N, unsigned int *clause_outputs) {
+    // clause_outputs => (N * CLAUSES)
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
+        if (num_includes[clause] == 0) {
+            clause_outputs[e * CLAUSES + clause] = 1;
+            continue;
+        }
+        int clause_output = 0;
+        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+            if (clause_match(
+                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+                clause_output = 1;
+                break;
+            }
+        }
+        clause_outputs[e * CLAUSES + clause] = clause_output;
+    }
+}
+
+__global__ void transform_patchwise(const unsigned int *packed_ta_states, const int *num_includes,
+                                    const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
+    // clause_outputs => (N * CLAUSES * PATCHES)
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (ull e_clause_patch = index; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES; e_clause_patch += stride) {
+        unsigned int *clause_output = &clause_outputs[e_clause_patch];
+
+        ull e_clause = e_clause_patch / PATCHES;
+        ull patch_id = e_clause_patch % PATCHES;
+
+        ull e = e_clause / CLAUSES;
+        ull clause = e_clause % CLAUSES;
+
+        if (num_includes[clause] == 0) {
+            *clause_output = 1;
+            continue;
+        }
+
+        *clause_output =
+            clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                                &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+    }
+}
+
+/***********CLAUSE UPDATE KERNELS***********/
 __device__ inline float clip_cs(float cs) { return (cs > THRESH) ? THRESH : ((cs < -THRESH) ? -THRESH : cs); }
 
 __device__ inline void type1a_fb_scalar(curandState *rng, unsigned int *ta_state, const unsigned int *patch) {
