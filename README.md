@@ -2,7 +2,7 @@
 
 ## Inspired by
 
-This implementation is highly inspired by and builds upon:
+This implementation is highly inspired:
 
-- **TMU** - [](https://github.com/cair/tmu)
-- **pySparseTsetlinMachineCUDA** - [](https://github.com/cair/PySparseCoalescedTsetlinMachineCUDA)
+- **TMU** - [https://github.com/cair/tmu]()
+- **pySparseTsetlinMachineCUDA** - [https://github.com/cair/PySparseCoalescedTsetlinMachineCUDA]()
