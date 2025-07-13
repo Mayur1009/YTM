@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.sparse import csr_matrix
 from .base import BaseTM
 
 
@@ -19,6 +18,7 @@ class MultiOutputTM(BaseTM):
         init_neg_weights: bool = True,
         negative_polarity: bool = True,
         encode_loc: bool = True,
+        coalesced: bool = True,
         seed: int | None = None,
         block_size: int = 128,
     ) -> None:
@@ -36,6 +36,7 @@ class MultiOutputTM(BaseTM):
             init_neg_weights=init_neg_weights,
             negative_polarity=negative_polarity,
             encode_loc=encode_loc,
+            coalesced=coalesced,
             seed=seed,
             block_size=block_size,
         )

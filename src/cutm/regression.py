@@ -16,6 +16,7 @@ class RegressionTM(BaseTM):
         append_negated=True,
         init_neg_weights=False,  # Regression does not have negative polarity
         negative_polarity=False,  # Regression does not have negative polarity
+        coalesced=True,
         seed: int | None = None,
         block_size: int = 128,
     ):
@@ -31,6 +32,7 @@ class RegressionTM(BaseTM):
             append_negated=append_negated,
             init_neg_weights=init_neg_weights,
             negative_polarity=negative_polarity,
+            coalesced=coalesced,
             seed=seed,
             block_size=block_size,
         )

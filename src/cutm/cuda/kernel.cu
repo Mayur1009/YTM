@@ -18,12 +18,15 @@
 #define CLASSES 10
 #define MAX_TA_STATE 255
 #define ENCODE_LOC 1
+#define COALESCED 1
+#define CLAUSE_BANKS 1
 #endif
 
 #include <curand_kernel.h>
 
 #include <cstdint>
 
+#define CLAUSES_PER_BANK (CLAUSES / CLAUSE_BANKS)
 #define VECTORIZED_LIMIT (LITERALS & ~3)
 #define S_INV (1.0f / S)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
@@ -48,14 +51,25 @@ __global__ void initialize(curandState *rng, unsigned int *global_ta_states, flo
     curandState localState = rng[index];
 
     for (int clause = index; clause < CLAUSES; clause += stride) {
-        for (int li = 0; li < LITERALS; ++li) {
+        for (int li = 0; li < LITERALS; ++li)
             global_ta_states[clause * LITERALS + li] = HALF_STATE;  // Initialize TA states to 0
-        }
+
         for (int class_id = 0; class_id < CLASSES; ++class_id) {
+#if COALESCED
+            clause_weights[clause * CLASSES + class_id] = 1.0f;
 #if INIT_NEG_WEIGHTS
             clause_weights[clause * CLASSES + class_id] = (1.0f - 2.0f * (float)(curand(&localState) % 2));
+#endif
 #else
-            clause_weights[clause * CLASSES + class_id] = 1.0f;
+            if (class_id == clause / CLAUSES_PER_BANK) {
+                clause_weights[clause * CLASSES + class_id] = 1.0f;
+#if INIT_NEG_WEIGHTS
+                if ((clause % CLAUSES_PER_BANK) >= (CLAUSES_PER_BANK / 2))
+                    clause_weights[clause * CLASSES + class_id] = -1.0f;
+#endif
+            } else {
+                clause_weights[clause * CLASSES + class_id] = 0.0f;
+            }
 #endif
         }
     }
@@ -399,10 +413,13 @@ __global__ void select_active(curandState *rng, const float *clause_weights, con
         }
         selected_patch_ids[clause] = selected_id;
         if (selected_id != -1) {
-            for (int class_id = 0; class_id < CLASSES; ++class_id) {
-                atomicAdd(&class_sums[class_id],
-                          clause_outputs[clause * PATCHES + selected_id] * clause_weights[clause * CLASSES + class_id]);
-            }
+#if COALESCED == 0
+            int class_id = (ull)clause / CLAUSES_PER_BANK;
+#else
+            for (int class_id = 0; class_id < CLASSES; ++class_id)
+#endif
+            atomicAdd(&class_sums[class_id],
+                      clause_outputs[clause * PATCHES + selected_id] * clause_weights[clause * CLASSES + class_id]);
         }
     }
     rng[index] = localRNG;
@@ -534,7 +551,12 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
         const unsigned int *patch =
             selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
+#if COALESCED == 0
+        ull class_id = (ull)clause / CLAUSES_PER_BANK;
+        {
+#else
         for (ull class_id = 0; class_id < CLASSES; ++class_id) {
+#endif
             float clipped_cs = clip_cs(class_sums[class_id]);
             int y = Y_batch[e * CLASSES + class_id];
             int local_target = 1 - 2 * (clipped_cs > y);

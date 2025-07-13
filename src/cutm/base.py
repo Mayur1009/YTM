@@ -29,6 +29,7 @@ class BaseTM:
         init_neg_weights: bool = True,
         negative_polarity: bool = True,
         encode_loc: bool = True,
+        coalesced: bool = True,
         seed: int | None = None,
         block_size: int = 128,
     ):
@@ -44,6 +45,9 @@ class BaseTM:
         self.max_included_literals = max_included_literals
         self.append_negated = 1 if append_negated else 0
         self.encode_loc = 1 if encode_loc else 0
+        self.coalesced = coalesced
+        self.number_of_clause_banks = 1 if coalesced else self.number_of_outputs
+        self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses
 
         if patch_dim is None:
             self.patch_dim = (dim[0], dim[1])
@@ -279,6 +283,8 @@ class BaseTM:
         #define CLASSES {self.number_of_outputs}
         #define MAX_TA_STATE {self.number_of_ta_states}
         #define ENCODE_LOC {self.encode_loc}
+        #define COALESCED {1 if self.coalesced else 0}
+        #define CLAUSE_BANKS {self.number_of_clause_banks}
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
