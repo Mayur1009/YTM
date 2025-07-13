@@ -1,5 +1,5 @@
 [project]
-authors = [{name = "Mayur1009", email = "mayur1009@proton.me"}]
+authors = [{name = "Mayur", email = "mayurks@uia.no"}]
 dependencies = [
     "numpy",
     "pycuda",

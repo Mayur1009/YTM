@@ -6693,7 +6693,7 @@ packages:
 - pypi: ./
   name: ytm
   version: 0.1.0
-  sha256: 2224a3a9ceb443adbe5d470ad909b6b2cea854e51dc071f4b090213685771122
+  sha256: 40c3d3ef918ae77b6c7c465884641891c935e0921fdfcdcd7bb8106f32f9a791
   requires_dist:
   - numpy
   - pycuda
