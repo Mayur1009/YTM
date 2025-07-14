@@ -43,10 +43,10 @@ class MultiOutputTM(BaseTM):
 
     def fit(
         self,
-        X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        X: np.ndarray,
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
-        balance:bool = False,
+        balance: bool = False,
         block_size: int | None = None,
     ) -> None:
         # Input validation
@@ -62,7 +62,7 @@ class MultiOutputTM(BaseTM):
 
     def score(
         self,
-        X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        X: np.ndarray,
         is_X_encoded: bool,
         block_size: int | None = None,
     ):
@@ -71,7 +71,7 @@ class MultiOutputTM(BaseTM):
 
     def predict(
         self,
-        X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        X: np.ndarray,
         is_X_encoded: bool = False,
         block_size: int | None = None,
     ):

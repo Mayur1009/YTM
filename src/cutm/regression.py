@@ -37,7 +37,7 @@ class RegressionTM(BaseTM):
             block_size=block_size,
         )
 
-    def fit(self, X, Y, is_X_encoded=False, block_size: int | None = None,):
+    def fit(self, X: np.ndarray, Y, is_X_encoded=False, block_size: int | None = None,):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.max_y = np.max(Y)
@@ -48,7 +48,7 @@ class RegressionTM(BaseTM):
         self._fit(encoded_X, encoded_Y, block_size=block_size)
         return
 
-    def predict(self, X, is_X_encoded=False, block_size: int | None = None):
+    def predict(self, X: np.ndarray, is_X_encoded=False, block_size: int | None = None):
         encoded_X = self.encode(X) if not is_X_encoded else X
         class_sums = self._score_batch(encoded_X, block_size=block_size)
         preds = 1.0 * (class_sums[0, :]) * (self.max_y - self.min_y) / (self.T) + self.min_y
