@@ -24,8 +24,9 @@ typeCheckingMode = "standard"
 reportUnusedImport = false
 reportMissingTypeStubs = "hint"
 exclude = [
-    ".pixi*",
-    "data*",
+    "**/__pycache__*",
+    "**/.*",
+    "**/data*",
 ]
 
 [tool.ruff]
