@@ -75,7 +75,6 @@ __global__ void initialize(curandState *rng, unsigned int *global_ta_states, flo
     rng[index] = localState;
 }
 
-
 /***********INPUT ENCODING***********/
 __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
     // X -> (N * DIM0 * DIM1 * DIM2)
@@ -231,9 +230,9 @@ __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_stat
         int active_count = 0;
 
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            int patch_matched = clause_match(
-                &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+            int patch_matched =
+                clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                             &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
             if (patch_matched) {
                 active_patches[active_count] = patch_id;
                 active_count++;
@@ -272,7 +271,7 @@ __global__ void fast_eval(const unsigned int *packed_ta_states, const int *num_i
 
         *clause_output =
             clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                                &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+                         &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
     }
 }
 
@@ -322,9 +321,8 @@ __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states
         if (num_includes[clause] == 0) continue;  // Skip empty clauses
         int clause_output = 0;
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_match(
-                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+            if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
                 clause_output = 1;
                 break;
             }
@@ -352,9 +350,8 @@ __global__ void transform(const unsigned int *packed_ta_states, const int *num_i
         }
         int clause_output = 0;
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_match(
-                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                    &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+            if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
                 clause_output = 1;
                 break;
             }
@@ -384,7 +381,7 @@ __global__ void transform_patchwise(const unsigned int *packed_ta_states, const 
 
         *clause_output =
             clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                                &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+                         &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
     }
 }
 
@@ -525,12 +522,12 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             int y = Y_batch[e * CLASSES + class_id];
             int local_target = 1 - 2 * (clipped_cs > y);
 
-            if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) {
-                continue;  // Skip the class.
-            }
+            float skip_prob = (local_target == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
+            if (curand_uniform(&localRNG) > skip_prob) continue;
+            if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
             float local_prob = abs((float)y - clipped_cs) / (2.0f * THRESH);
-            local_prob *= (local_target == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
+            // local_prob *= (local_target == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
