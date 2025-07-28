@@ -499,8 +499,7 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
 
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                               const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const unsigned int *X_batch, const int *Y_batch, const int e, float *true_bal_weight,
-                              float *false_bal_weight) {
+                              const unsigned int *X_batch, const int *Y_batch, const int e) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     curandState localRNG = rng[index];
@@ -522,12 +521,9 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             int y = Y_batch[e * CLASSES + class_id];
             int local_target = 1 - 2 * (clipped_cs > y);
 
-            float skip_prob = (local_target == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
-            if (curand_uniform(&localRNG) > skip_prob) continue;
             if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
-            float local_prob = abs((float)y - clipped_cs) / (2.0f * THRESH);
-            // local_prob *= (local_target == 1 ? true_bal_weight[class_id] : false_bal_weight[class_id]);
+            double local_prob = abs((float)y - clipped_cs) / (2.0f * THRESH);
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);

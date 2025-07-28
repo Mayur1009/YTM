@@ -46,8 +46,8 @@ if __name__ == "__main__":
     X_test = ther_bin.binarize_gray(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
 
     tm = MultiClassTM(
-        number_of_clauses=10000,
-        T=15000,
+        number_of_clauses=1000,
+        T=1500,
         s=10,
         dim=(28, 28, 8),
         n_classes=10,

@@ -116,31 +116,13 @@ class BaseTM:
 
         return encoded_X
 
-    def _calc_class_distribution(self, encoded_Y, balance: bool):
-        if balance:
-            N = encoded_Y.shape[0]
-            Y = np.asarray(encoded_Y > 0, dtype=np.float32)
-            count = np.sum(Y, axis=0)
-            not_count = N - count
-            true_bal_weight = np.min(count) / count
-            false_bal_weight = np.min(not_count) / not_count
-            return np.asarray(true_bal_weight, dtype=np.float32), np.asarray(false_bal_weight, dtype=np.float32)
-        else:
-            return np.ones(self.number_of_outputs, dtype=np.float32), np.ones(self.number_of_outputs, dtype=np.float32)
-
     #### FIT AND SCORE ####
-    def _fit(self, encoded_X, encoded_Y, balance: bool = False, block_size: int | None = None):
+    def _fit(self, encoded_X, encoded_Y, block_size: int | None = None):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
-
-        true_bal_weight, false_bal_weight = self._calc_class_distribution(encoded_Y, balance)
-        true_bal_weight_gpu = mem_alloc(true_bal_weight.nbytes)
-        false_bal_weight_gpu = mem_alloc(false_bal_weight.nbytes)
-        memcpy_htod(true_bal_weight_gpu, true_bal_weight)
-        memcpy_htod(false_bal_weight_gpu, false_bal_weight)
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -197,8 +179,6 @@ class BaseTM:
                 encoded_X_gpu,
                 encoded_Y_gpu,
                 np.int32(e),
-                true_bal_weight_gpu,
-                false_bal_weight_gpu,
             )
             ctx.synchronize()
 
@@ -307,7 +287,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPiPP")
+        self.kernel_clause_update.prepare("PPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")

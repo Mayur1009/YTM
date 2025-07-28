@@ -46,7 +46,6 @@ class MultiClassTM(BaseTM):
         X: np.ndarray,
         Y: np.ndarray[tuple[int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
-        balance: bool = False,
         block_size: int | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
@@ -60,7 +59,7 @@ class MultiClassTM(BaseTM):
             encoded_Y[:, i] = np.where(Y == i, self.T, -self.T)
 
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, block_size=block_size, balance=balance)
+        self._fit(encoded_X, encoded_Y, block_size=block_size)
 
     def score(
         self,
