@@ -277,7 +277,7 @@ __global__ void fast_eval(const unsigned int *packed_ta_states, const int *num_i
 
 /***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
 __global__ void select_active(curandState *rng, const float *clause_weights, const unsigned int *clause_outputs,
-                              int *selected_patch_ids, float *class_sums) {
+                              int *patch_weights, int *selected_patch_ids, float *class_sums) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -296,6 +296,7 @@ __global__ void select_active(curandState *rng, const float *clause_weights, con
         }
         selected_patch_ids[clause] = selected_id;
         if (selected_id != -1) {
+            patch_weights[clause * PATCHES + selected_id]++;
 #if COALESCED == 0
             int class_id = (ull)clause / CLAUSES_PER_BANK;
 #else
@@ -506,7 +507,8 @@ __device__ inline double update_probability(float cs, int target, double mod) {
 
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                               const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const double *true_mod, const double *false_mod, const unsigned int *X_batch, const int *Y_batch, const int e) {
+                              const double *true_mod, const double *false_mod, const unsigned int *X_batch,
+                              const int *Y_batch, const int e) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     curandState localRNG = rng[index];

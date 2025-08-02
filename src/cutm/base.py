@@ -53,7 +53,7 @@ class BaseTM:
     """
     def __init__(
         self,
-        number_of_clauses: int,
+        number_of_clauses_per_class: int,
         T: int,
         s: float,
         dim: tuple[int, int, int],
@@ -71,7 +71,7 @@ class BaseTM:
         block_size: int = 128,
     ):
         # Initialize Hyperparams
-        self.number_of_clauses = number_of_clauses
+        self.number_of_clauses_per_class = number_of_clauses_per_class
         self.number_of_ta_states = number_of_ta_states
         self.T = T
         self.s = s
@@ -83,7 +83,7 @@ class BaseTM:
         self.encode_loc = 1 if encode_loc else 0
         self.coalesced = coalesced
         self.number_of_clause_banks = 1 if coalesced else self.number_of_outputs
-        self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses
+        self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
 
         if patch_dim is None:
             self.patch_dim = (dim[0], dim[1])
@@ -216,6 +216,7 @@ class BaseTM:
                 self.rng_gpu.state,
                 self.clause_weights_gpu,
                 clause_outputs_gpu,
+                self.patch_weights_gpu,
                 selected_patch_ids_gpu,
                 class_sum_gpu,
             )
@@ -336,7 +337,7 @@ class BaseTM:
         self.kernel_fast_eval.prepare("PPPPi")
 
         self.kernel_select_active = mod_new_kernel.get_function("select_active")
-        self.kernel_select_active.prepare("PPPPP")
+        self.kernel_select_active.prepare("PPPPPP")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
@@ -389,7 +390,10 @@ class BaseTM:
     def get_ta_state(self):
         ta_state = np.empty(self.number_of_clauses * self.number_of_literals, dtype=np.uint32)
         memcpy_dtoh(ta_state, self.ta_state_gpu)
-        return ta_state.reshape((self.number_of_clauses, self.number_of_literals))
+        if self.coalesced:
+            return ta_state.reshape((self.number_of_clauses, self.number_of_literals))
+        else:
+            return ta_state.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_literals))
 
     def get_literals(self):
         ta_states = self.get_ta_state()
@@ -398,12 +402,19 @@ class BaseTM:
     def get_weights(self):
         clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
         memcpy_dtoh(clause_weights, self.clause_weights_gpu)
-        return clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
+        if self.coalesced:
+            return clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
+        else:
+            # NOTE: This will mostly be zeros. Maybe this should be returned as a smaller array?
+            return clause_weights.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_outputs))
 
     def get_patch_weights(self):
         patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
         memcpy_dtoh(patch_weights, self.patch_weights_gpu)
-        return patch_weights.reshape((self.number_of_clauses, self.number_of_patches))
+        if self.coalesced:
+            return patch_weights.reshape((self.number_of_clauses, self.number_of_patches))
+        else:
+            return patch_weights.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_patches))
 
     ######## TRANSFORM #######
 
@@ -516,7 +527,7 @@ class BaseTM:
     def __setstate__(self, state):
         args = state["args"]
         self.__init__(
-            number_of_clauses=args["number_of_clauses"],
+            number_of_clauses_per_class=args["number_of_clauses"],
             T=args["T"],
             s=args["s"],
             dim=args["dim"],
