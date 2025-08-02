@@ -497,9 +497,16 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
     }
 }
 
+__device__ inline double update_probability(float cs, int target, double mod) {
+    double prob;
+    prob = ((double)target - (double)cs) / (2 * (double)target);
+    prob = pow(prob, mod);
+    return prob;
+}
+
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                               const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const unsigned int *X_batch, const int *Y_batch, const int e) {
+                              const double *true_mod, const double *false_mod, const unsigned int *X_batch, const int *Y_batch, const int e) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     curandState localRNG = rng[index];
@@ -523,13 +530,13 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
 
             if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
-            double local_prob = abs((float)y - clipped_cs) / (2.0f * THRESH);
+            double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
+            double update_prob = update_probability(clipped_cs, y, mod);
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
 
-            bool should_update = (curand_uniform(&localRNG) <= local_prob);
-
+            bool should_update = (curand_uniform(&localRNG) <= update_prob);
             bool type1a = ((local_target * sign) > 0 && local_clause_output);
             bool type1b = ((local_target * sign) > 0 && !local_clause_output);
             bool type2 = ((local_target * sign) < 0 && local_clause_output);

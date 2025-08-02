@@ -154,12 +154,28 @@ class BaseTM:
         return encoded_X
 
     #### FIT AND SCORE ####
-    def _fit(self, encoded_X, encoded_Y, block_size: int | None = None):
+    def _fit(self, encoded_X, encoded_Y, block_size: int | None = None, **kwargs):
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
+
+        # Calculate imbalance modifiers
+        balance = kwargs.get("balance", False)
+        if balance:
+            true_cnt = (encoded_Y > 0).sum(axis=0)
+            false_cnt = (encoded_Y <= 0).sum(axis=0)
+            true_mod = np.asarray(true_cnt / true_cnt.mean(), dtype=np.float64)
+            false_mod = np.asarray(false_cnt / (max(1, self.number_of_outputs - 1) * true_cnt), dtype=np.float64)
+        else:
+            true_mod = np.ones(self.number_of_outputs, dtype=np.float64)
+            false_mod = np.ones(self.number_of_outputs, dtype=np.float64)
+        true_mod_gpu = mem_alloc(true_mod.nbytes)
+        false_mod_gpu = mem_alloc(false_mod.nbytes)
+        memcpy_htod(true_mod_gpu, true_mod)
+        memcpy_htod(false_mod_gpu, false_mod)
+
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -213,6 +229,8 @@ class BaseTM:
                 class_sum_gpu,
                 selected_patch_ids_gpu,
                 num_includes_gpu,
+                true_mod_gpu,
+                false_mod_gpu,
                 encoded_X_gpu,
                 encoded_Y_gpu,
                 np.int32(e),
@@ -324,7 +342,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")

@@ -47,6 +47,7 @@ class MultiOutputTM(BaseTM):
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
         block_size: int | None = None,
+        **kwargs,
     ) -> None:
         # Input validation
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
@@ -57,7 +58,7 @@ class MultiOutputTM(BaseTM):
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, block_size=block_size)
+        self._fit(encoded_X, encoded_Y, block_size=block_size, **kwargs)
 
     def score(
         self,
