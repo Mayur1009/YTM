@@ -37,7 +37,7 @@ class RegressionTM(BaseTM):
             block_size=block_size,
         )
 
-    def fit(self, X: np.ndarray, Y, is_X_encoded=False, block_size: int | None = None,):
+    def fit(self, X: np.ndarray, Y, is_X_encoded=False, block_size: int | None = None):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.max_y = np.max(Y)

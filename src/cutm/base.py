@@ -13,6 +13,44 @@ from .cuda_utils import kernel_config, get_kernel, device_props
 
 
 class BaseTM:
+    """
+    Base class for TM
+
+    Attributes
+    ----------
+    number_of_clauses : [int]
+        Number of clauses per class.
+    T : [int]
+        Target value
+    s : [float]
+        Specificity value
+    dim : tuple[int, int, int]
+        Dimensions of the input data (dim0, dim1, dim2).
+    n_classes : int
+        Number of classes.
+    q : float, optional
+        Q value, default is 1.0.
+    patch_dim : tuple[int, int] | None, optional
+        Dimensions of the patches (patch_dim0, patch_dim1). If None, defaults to (dim0, dim1).
+    number_of_ta_states : int, optional
+        Number of TA states, default is 256.
+    max_included_literals : int | None, optional
+        Maximum number of included literals per clause. If None, defaults to the number of literals.
+    append_negated : bool, optional
+        Whether to append negated literals, default is True.
+    init_neg_weights : bool, optional
+        Whether to initialize negative weights, default is True.
+    negative_polarity : bool, optional
+        Whether to use negative polarity for clauses, default is True.
+    encode_loc : bool, optional
+        Whether to encode location information in the literals, default is True. Only relevant if `patch_dim` is not None.
+    coalesced : bool, optional
+        Wheather to use coalesced clause banks, default is True.
+    seed : int | None, optional
+        Random seed
+    block_size : int, optional
+        Block size for CUDA kernels, default is 128.
+    """
     def __init__(
         self,
         number_of_clauses: int,
@@ -34,7 +72,6 @@ class BaseTM:
     ):
         # Initialize Hyperparams
         self.number_of_clauses = number_of_clauses
-        self.number_of_clause_chunks = (number_of_clauses - 1) / 32 + 1
         self.number_of_ta_states = number_of_ta_states
         self.T = T
         self.s = s
