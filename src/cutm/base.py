@@ -508,7 +508,7 @@ class BaseTM:
     ## SERIALIZATION ##
     def __getstate__(self):
         args = {
-            "number_of_clauses": self.number_of_clauses,
+            "number_of_clauses_per_class": self.number_of_clauses_per_class,
             "T": self.T,
             "s": self.s,
             "dim": self.dim,
@@ -521,6 +521,7 @@ class BaseTM:
             "init_neg_weights": bool(self.init_neg_weights),
             "negative_polarity": bool(self.negative_clauses),
             "encode_loc": bool(self.encode_loc),
+            "coalesced": self.coalesced,
             "seed": self.seed,
             "block_size": self.block_size,
         }
@@ -532,23 +533,7 @@ class BaseTM:
 
     def __setstate__(self, state):
         args = state["args"]
-        self.__init__(
-            number_of_clauses_per_class=args["number_of_clauses"],
-            T=args["T"],
-            s=args["s"],
-            dim=args["dim"],
-            n_classes=args["n_classes"],
-            q=args["q"],
-            patch_dim=args["patch_dim"],
-            number_of_ta_states=args["number_of_ta_states"],
-            max_included_literals=args["max_included_literals"],
-            append_negated=args["append_negated"],
-            init_neg_weights=args["init_neg_weights"],
-            negative_polarity=args["negative_polarity"],
-            encode_loc=args["encode_loc"],
-            seed=args["seed"],
-            block_size=args["block_size"],
-        )
+        self.__init__(**args)
         initialized = state["initialized"]
         if initialized:
             self.load_state_dict(state)
