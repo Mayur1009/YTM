@@ -51,6 +51,7 @@ class BaseTM:
     block_size : int, optional
         Block size for CUDA kernels, default is 128.
     """
+
     def __init__(
         self,
         number_of_clauses_per_class: int,
@@ -175,7 +176,6 @@ class BaseTM:
         false_mod_gpu = mem_alloc(false_mod.nbytes)
         memcpy_htod(true_mod_gpu, true_mod)
         memcpy_htod(false_mod_gpu, false_mod)
-
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -393,7 +393,9 @@ class BaseTM:
         if self.coalesced:
             return ta_state.reshape((self.number_of_clauses, self.number_of_literals))
         else:
-            return ta_state.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_literals))
+            return ta_state.reshape(
+                (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_literals)
+            )
 
     def get_literals(self):
         ta_states = self.get_ta_state()
@@ -406,7 +408,9 @@ class BaseTM:
             return clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
         else:
             # NOTE: This will mostly be zeros. Maybe this should be returned as a smaller array?
-            return clause_weights.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_outputs))
+            return clause_weights.reshape(
+                (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_outputs)
+            )
 
     def get_patch_weights(self):
         patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
@@ -414,7 +418,9 @@ class BaseTM:
         if self.coalesced:
             return patch_weights.reshape((self.number_of_clauses, self.number_of_patches))
         else:
-            return patch_weights.reshape((self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_patches))
+            return patch_weights.reshape(
+                (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_patches)
+            )
 
     ######## TRANSFORM #######
 
