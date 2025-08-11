@@ -46,6 +46,8 @@ class BaseTM:
         Whether to encode location information in the literals, default is True. Only relevant if `patch_dim` is not None.
     coalesced : bool, optional
         Wheather to use coalesced clause banks, default is True.
+    h : float | list[float], optional
+        Hyperparameter h, default is 1.0. If a list, must have length equal to n_classes. If a float, all classes will use the same value.
     seed : int | None, optional
         Random seed
     block_size : int, optional
@@ -68,6 +70,7 @@ class BaseTM:
         negative_polarity: bool = True,
         encode_loc: bool = True,
         coalesced: bool = True,
+        h: float | list[float] = 1.0,
         seed: int | None = None,
         block_size: int = 128,
     ):
@@ -90,6 +93,12 @@ class BaseTM:
             self.patch_dim = (dim[0], dim[1])
         else:
             self.patch_dim = (patch_dim[0], patch_dim[1])
+
+        if isinstance(h, list):
+            assert len(h) == n_classes, "If h is a list, it must have length equal to n_classes."
+            self.h = np.asarray(h, dtype=np.float64)
+        else:
+            self.h = np.asarray([h] * n_classes, dtype=np.float64)
 
         self.seed = seed
         if seed is None:
@@ -315,6 +324,7 @@ class BaseTM:
         #define ENCODE_LOC {self.encode_loc}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
+        __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
@@ -522,6 +532,7 @@ class BaseTM:
             "negative_polarity": bool(self.negative_clauses),
             "encode_loc": bool(self.encode_loc),
             "coalesced": self.coalesced,
+            "h": self.h.tolist(),
             "seed": self.seed,
             "block_size": self.block_size,
         }

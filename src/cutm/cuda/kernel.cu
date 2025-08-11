@@ -20,6 +20,7 @@
 #define ENCODE_LOC 1
 #define COALESCED 1
 #define CLAUSE_BANKS 1
+__constant__ const double H[CLASSES] = {1};
 #endif
 
 #include <curand_kernel.h>
@@ -498,10 +499,22 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
     }
 }
 
-__device__ inline double update_probability(float cs, int target, double mod) {
+__device__ inline double update_probability(float v, int y, double mod, double h) {
     double prob;
-    prob = ((double)target - (double)cs) / (2 * (double)target);
-    prob = pow(prob, mod);
+    // Attempt 7
+    if (y > 0) {  
+        if (v <= y * (2 * h - 1))
+            prob = ((double)y - (double)v) / (2 * (double)y);
+        else
+            prob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+    } else {
+        if (v > y * (2 * h - 1))
+            prob = ((double)y - (double)v) / (2 * (double)y);
+        else
+            prob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+    }
+    // prob = ((double)y - (double)v) / (2 * (double)y);
+    // prob = pow(prob, mod);
     return prob;
 }
 
@@ -533,7 +546,7 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
             double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
-            double update_prob = update_probability(clipped_cs, y, mod);
+            double update_prob = update_probability(clipped_cs, y, mod, H[class_id]);
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);

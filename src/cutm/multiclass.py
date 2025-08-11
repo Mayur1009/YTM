@@ -19,6 +19,7 @@ class MultiClassTM(BaseTM):
         negative_polarity: bool = True,
         encode_loc: bool = True,
         coalesced: bool = True,
+        h: float | list[float] = 1.0,
         seed: int | None = None,
         block_size: int = 128,
     ):
@@ -37,6 +38,7 @@ class MultiClassTM(BaseTM):
             negative_polarity=negative_polarity,
             encode_loc=encode_loc,
             coalesced=coalesced,
+            h=h,
             seed=seed,
             block_size=block_size,
         )
