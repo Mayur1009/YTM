@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     ch = 8
     tm = MultiOutputTM(
-        number_of_clauses=30000,
+        number_of_clauses_per_class=30000,
         T=60000,
         s=25,
         q=5,

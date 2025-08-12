@@ -1,4 +1,5 @@
 import pathlib
+from typing import TypedDict, Unpack
 
 import numpy as np
 import pycuda.autoinit  # noqa: F401
@@ -12,48 +13,26 @@ from tqdm import tqdm
 from .cuda_utils import kernel_config, get_kernel, device_props
 
 
+class BaseTMOptArgs(TypedDict, total=False):
+    q: float
+    patch_dim: tuple[int, int] | None
+    number_of_ta_states: int
+    max_included_literals: int | None
+    append_negated: bool
+    init_neg_weights: bool
+    negative_polarity: bool
+    encode_loc: bool
+    coalesced: bool
+    h: float | list[float]
+    seed: int | None
+    block_size: int
+
+class FitOptArgs(TypedDict, total=False):
+    block_size: int
+    true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
+    false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
+
 class BaseTM:
-    """
-    Base class for TM
-
-    Attributes
-    ----------
-    number_of_clauses : [int]
-        Number of clauses per class.
-    T : [int]
-        Target value
-    s : [float]
-        Specificity value
-    dim : tuple[int, int, int]
-        Dimensions of the input data (dim0, dim1, dim2).
-    n_classes : int
-        Number of classes.
-    q : float, optional
-        Q value, default is 1.0.
-    patch_dim : tuple[int, int] | None, optional
-        Dimensions of the patches (patch_dim0, patch_dim1). If None, defaults to (dim0, dim1).
-    number_of_ta_states : int, optional
-        Number of TA states, default is 256.
-    max_included_literals : int | None, optional
-        Maximum number of included literals per clause. If None, defaults to the number of literals.
-    append_negated : bool, optional
-        Whether to append negated literals, default is True.
-    init_neg_weights : bool, optional
-        Whether to initialize negative weights, default is True.
-    negative_polarity : bool, optional
-        Whether to use negative polarity for clauses, default is True.
-    encode_loc : bool, optional
-        Whether to encode location information in the literals, default is True. Only relevant if `patch_dim` is not None.
-    coalesced : bool, optional
-        Wheather to use coalesced clause banks, default is True.
-    h : float | list[float], optional
-        Hyperparameter h, default is 1.0. If a list, must have length equal to n_classes. If a float, all classes will use the same value.
-    seed : int | None, optional
-        Random seed
-    block_size : int, optional
-        Block size for CUDA kernels, default is 128.
-    """
-
     def __init__(
         self,
         number_of_clauses_per_class: int,
@@ -61,19 +40,23 @@ class BaseTM:
         s: float,
         dim: tuple[int, int, int],
         n_classes: int,
-        q: float = 1.0,
-        patch_dim: tuple[int, int] | None = None,
-        number_of_ta_states: int = 256,
-        max_included_literals: int | None = None,
-        append_negated: bool = True,
-        init_neg_weights: bool = True,
-        negative_polarity: bool = True,
-        encode_loc: bool = True,
-        coalesced: bool = True,
-        h: float | list[float] = 1.0,
-        seed: int | None = None,
-        block_size: int = 128,
+        **opt_args: Unpack[BaseTMOptArgs],
     ):
+
+        # Set defaults
+        q = opt_args.get("q", 1.0)
+        patch_dim = opt_args.get("patch_dim", None)
+        number_of_ta_states = opt_args.get("number_of_ta_states", 256)
+        max_included_literals = opt_args.get("max_included_literals", None)
+        append_negated = opt_args.get("append_negated", True)
+        init_neg_weights = opt_args.get("init_neg_weights", True)
+        negative_polarity = opt_args.get("negative_polarity", True)
+        encode_loc = opt_args.get("encode_loc", True)
+        coalesced = opt_args.get("coalesced", True)
+        h = opt_args.get("h", 1.0)
+        seed = opt_args.get("seed", None)
+        block_size = opt_args.get("block_size", 128)
+
         # Initialize Hyperparams
         self.number_of_clauses_per_class = number_of_clauses_per_class
         self.number_of_ta_states = number_of_ta_states
@@ -110,6 +93,11 @@ class BaseTM:
                 return to_gpu(np.array([(seed + i) for i in range(1, count + 1)], dtype=np.int32))
 
             self.rng_gpu = curandom.XORWOWRandomNumberGenerator(_custom_seed_getter)
+
+        if not hasattr(self, "min_y"):
+            self.min_y = None
+        if not hasattr(self, "max_y"):
+            self.max_y = None
 
         self.init_neg_weights = 1 if init_neg_weights else 0
         self.negative_clauses = 1 if negative_polarity else 0
@@ -164,23 +152,35 @@ class BaseTM:
         return encoded_X
 
     #### FIT AND SCORE ####
-    def _fit(self, encoded_X, encoded_Y, block_size: int | None = None, **kwargs):
+    def _fit(
+        self,
+        encoded_X,
+        encoded_Y,
+        **opt_args: Unpack[FitOptArgs]
+    ):
+
+        # Process optional arguments
+        block_size = opt_args.get("block_size", 128)
+        true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
+        false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
+
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
 
-        # Calculate imbalance modifiers
-        balance = kwargs.get("balance", False)
-        if balance:
-            true_cnt = (encoded_Y > 0).sum(axis=0)
-            false_cnt = (encoded_Y <= 0).sum(axis=0)
-            true_mod = np.asarray(true_cnt / true_cnt.mean(), dtype=np.float64)
-            false_mod = np.asarray(false_cnt / (max(1, self.number_of_outputs - 1) * true_cnt), dtype=np.float64)
-        else:
-            true_mod = np.ones(self.number_of_outputs, dtype=np.float64)
-            false_mod = np.ones(self.number_of_outputs, dtype=np.float64)
+        # # Calculate imbalance modifiers
+        # balance = kwargs.get("balance", False)
+        # if balance:
+        #     true_cnt = (encoded_Y > 0).sum(axis=0)
+        #     false_cnt = (encoded_Y <= 0).sum(axis=0)
+        #     true_mod = np.asarray(true_cnt / true_cnt.mean(), dtype=np.float64)
+        #     false_mod = np.asarray(false_cnt / (max(1, self.number_of_outputs - 1) * true_cnt), dtype=np.float64)
+        # else:
+        #     true_mod = np.ones(self.number_of_outputs, dtype=np.float64)
+        #     false_mod = np.ones(self.number_of_outputs, dtype=np.float64)
+
         true_mod_gpu = mem_alloc(true_mod.nbytes)
         false_mod_gpu = mem_alloc(false_mod.nbytes)
         memcpy_htod(true_mod_gpu, true_mod)
@@ -192,9 +192,6 @@ class BaseTM:
         clause_outputs_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
-
-        if block_size is None:
-            block_size = self.block_size
 
         config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size)
         config_patchwise = kernel_config(self.number_of_clauses * self.number_of_patches, device_props, block_size)
@@ -584,3 +581,5 @@ class BaseTM:
         memcpy_htod(self.ta_state_gpu, ta_state)
         memcpy_htod(self.clause_weights_gpu, clause_weights)
         memcpy_htod(self.patch_weights_gpu, patch_weights)
+
+

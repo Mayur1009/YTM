@@ -46,7 +46,7 @@ if __name__ == "__main__":
     Y_train, Y_test = Y_train_org, Y_test_org
 
     tm = MultiClassTM(
-        number_of_clauses=500,
+        number_of_clauses_per_class=500,
         T=1000,
         s=10,
         dim=(28, 28, 1),

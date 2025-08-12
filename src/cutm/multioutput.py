@@ -1,46 +1,25 @@
+from typing import Unpack
 import numpy as np
-from .base import BaseTM
+from .base import BaseTM, BaseTMOptArgs, FitOptArgs
 
 
 class MultiOutputTM(BaseTM):
     def __init__(
         self,
-        number_of_clauses: int,
+        number_of_clauses_per_class: int,
         T: int,
         s: float,
         dim: tuple[int, int, int],
         n_classes: int,
-        q: float = 1.0,
-        patch_dim: tuple[int, int] | None = None,
-        max_included_literals: int | None = None,
-        number_of_ta_states: int = 256,
-        append_negated: bool = True,
-        init_neg_weights: bool = True,
-        negative_polarity: bool = True,
-        encode_loc: bool = True,
-        coalesced: bool = True,
-        h: float | list[float] = 1.0,
-        seed: int | None = None,
-        block_size: int = 128,
-    ) -> None:
+        **opt_args: Unpack[BaseTMOptArgs]
+    ):
         super().__init__(
-            number_of_clauses,
-            T,
-            s,
+            number_of_clauses_per_class=number_of_clauses_per_class,
+            T=T,
+            s=s,
             dim=dim,
             n_classes=n_classes,
-            q=q,
-            patch_dim=patch_dim,
-            max_included_literals=max_included_literals,
-            number_of_ta_states=number_of_ta_states,
-            append_negated=append_negated,
-            init_neg_weights=init_neg_weights,
-            negative_polarity=negative_polarity,
-            encode_loc=encode_loc,
-            coalesced=coalesced,
-            h=h,
-            seed=seed,
-            block_size=block_size,
+            **opt_args
         )
 
     def fit(
@@ -48,19 +27,15 @@ class MultiOutputTM(BaseTM):
         X: np.ndarray,
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
-        block_size: int | None = None,
-        **kwargs,
+        **opt_args: Unpack[FitOptArgs]
     ) -> None:
         # Input validation
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
 
-        self.max_y = None
-        self.min_y = None
-
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, block_size=block_size, **kwargs)
+        self._fit(encoded_X, encoded_Y, **opt_args)
 
     def score(
         self,

@@ -74,7 +74,7 @@ if __name__ == "__main__":
     (xtrain, ytrain), (xval, yval), (xtest, ytest) = load_dataset(ch)
 
     tm = MultiClassTM(
-        number_of_clauses=10000,
+        number_of_clauses_per_class=10000,
         T=25000,
         s=15,
         q=1,
