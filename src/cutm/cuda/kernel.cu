@@ -499,19 +499,27 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
     }
 }
 
-__device__ inline double update_probability(float v, int y, double mod, double h) {
+__device__ inline double update_probability(double v, double y, double mod, double h) {
     double prob;
-    // Attempt 7
-    if (y > 0) {  
+    // Attempt 9 - Reflecting the curve
+    if (y > 0) {
         if (v <= y * (2 * h - 1))
-            prob = ((double)y - (double)v) / (2 * (double)y);
-        else
-            prob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+            prob = (y - v) / (2 * y);
+        else {
+            double a = (1 - h);
+            double b = (y - v) / (2 * y * a);
+            prob = a * (1 - pow(1 - b, 1.0 / mod));
+            // oldprob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+        }
     } else {
         if (v > y * (2 * h - 1))
-            prob = ((double)y - (double)v) / (2 * (double)y);
-        else
-            prob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+            prob = (y - v) / (2 * y);
+        else {
+            // oldprob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
+            double a = (1 - h);
+            double b = (y - v) / (2 * y * a);
+            prob = a * (1 - pow(1 - b, 1.0 / mod));
+        }
     }
     // prob = ((double)y - (double)v) / (2 * (double)y);
     // prob = pow(prob, mod);
@@ -546,7 +554,7 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
             double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
-            double update_prob = update_probability(clipped_cs, y, mod, H[class_id]);
+            double update_prob = update_probability((double)clipped_cs, (double)y, mod, H[class_id]);
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
