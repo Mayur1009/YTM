@@ -501,7 +501,6 @@ __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patc
 
 __device__ inline double update_probability(double v, double y, double mod, double h) {
     double prob;
-    // Attempt 9 - Reflecting the curve
     if (y > 0) {
         if (v <= y * (2 * h - 1))
             prob = (y - v) / (2 * y);
@@ -509,20 +508,16 @@ __device__ inline double update_probability(double v, double y, double mod, doub
             double a = (1 - h);
             double b = (y - v) / (2 * y * a);
             prob = a * (1 - pow(1 - b, 1.0 / mod));
-            // oldprob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
         }
     } else {
         if (v > y * (2 * h - 1))
             prob = (y - v) / (2 * y);
         else {
-            // oldprob = (1 - h) * pow((((double)y - (double)v) / (2 * y * (1 - h))), mod);
             double a = (1 - h);
             double b = (y - v) / (2 * y * a);
             prob = a * (1 - pow(1 - b, 1.0 / mod));
         }
     }
-    // prob = ((double)y - (double)v) / (2 * (double)y);
-    // prob = pow(prob, mod);
     return prob;
 }
 
@@ -551,10 +546,12 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             int y = Y_batch[e * CLASSES + class_id];
             int local_target = 1 - 2 * (clipped_cs > y);
 
-            if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
+            // Instead of doing this, multiply the update probability by Q_PROB shoulf be the same.....right????
+            // if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;  // Skip the class.
 
             double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
             double update_prob = update_probability((double)clipped_cs, (double)y, mod, H[class_id]);
+            if (local_target == -1) update_prob *= Q_PROB;
 
             float *local_weight = &clause_weights[clause * CLASSES + class_id];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
