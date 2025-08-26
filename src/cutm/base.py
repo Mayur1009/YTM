@@ -15,7 +15,7 @@ from .cuda_utils import kernel_config, get_kernel, device_props
 
 class BaseTMOptArgs(TypedDict, total=False):
     q: float
-    patch_dim: tuple[int, int] | None
+    patch_dim: tuple[int, int]
     number_of_ta_states: int
     max_included_literals: int | None
     append_negated: bool
@@ -27,10 +27,12 @@ class BaseTMOptArgs(TypedDict, total=False):
     seed: int | None
     block_size: int
 
+
 class FitOptArgs(TypedDict, total=False):
     block_size: int
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
+
 
 class BaseTM:
     def __init__(
@@ -42,73 +44,78 @@ class BaseTM:
         n_classes: int,
         **opt_args: Unpack[BaseTMOptArgs],
     ):
+        # Required arguments
+        self.init_args = {
+            "number_of_clauses_per_class": number_of_clauses_per_class,
+            "T": T,
+            "s": s,
+            "dim": dim,
+            "n_classes": n_classes,
+        }
+        # Optional arguments -- Needed to set defaults here
+        self.opt_args: BaseTMOptArgs = {
+            "q": opt_args.get("q", 1.0),
+            "patch_dim": opt_args.get("patch_dim", (dim[0], dim[1])),
+            "number_of_ta_states": opt_args.get("number_of_ta_states", 256),
+            "max_included_literals": opt_args.get("max_included_literals", None),
+            "append_negated": opt_args.get("append_negated", True),
+            "init_neg_weights": opt_args.get("init_neg_weights", True),
+            "negative_polarity": opt_args.get("negative_polarity", True),
+            "encode_loc": opt_args.get("encode_loc", True),
+            "coalesced": opt_args.get("coalesced", True),
+            "h": opt_args.get("h", 1.0),
+            "seed": opt_args.get("seed", None),
+            "block_size": opt_args.get("block_size", 128),
+        }
 
-        # Set defaults
-        q = opt_args.get("q", 1.0)
-        patch_dim = opt_args.get("patch_dim", None)
-        number_of_ta_states = opt_args.get("number_of_ta_states", 256)
-        max_included_literals = opt_args.get("max_included_literals", None)
-        append_negated = opt_args.get("append_negated", True)
-        init_neg_weights = opt_args.get("init_neg_weights", True)
-        negative_polarity = opt_args.get("negative_polarity", True)
-        encode_loc = opt_args.get("encode_loc", True)
-        coalesced = opt_args.get("coalesced", True)
-        h = opt_args.get("h", 1.0)
-        seed = opt_args.get("seed", None)
-        block_size = opt_args.get("block_size", 128)
-
-        # Initialize Hyperparams
         self.number_of_clauses_per_class = number_of_clauses_per_class
-        self.number_of_ta_states = number_of_ta_states
         self.T = T
         self.s = s
         self.dim = dim
         self.number_of_outputs = n_classes
-        self.q = q
-        self.max_included_literals = max_included_literals
-        self.append_negated = 1 if append_negated else 0
-        self.encode_loc = 1 if encode_loc else 0
-        self.coalesced = coalesced
-        self.number_of_clause_banks = 1 if coalesced else self.number_of_outputs
+        self.q = self.opt_args["q"]
+        self.patch_dim = self.opt_args["patch_dim"]
+        self.number_of_ta_states = self.opt_args["number_of_ta_states"]
+        self.max_included_literals = self.opt_args["max_included_literals"]
+        self.append_negated = self.opt_args["append_negated"]
+        self.init_neg_weights = self.opt_args["init_neg_weights"]
+        self.negative_clauses = self.opt_args["negative_polarity"]
+        self.encode_loc = self.opt_args["encode_loc"]
+        self.coalesced = self.opt_args["coalesced"]
+        self.seed = self.opt_args["seed"]
+        self.block_size = self.opt_args["block_size"]
+
+        self.number_of_clause_banks = 1 if self.coalesced else self.number_of_outputs
         self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
 
-        if patch_dim is None:
-            self.patch_dim = (dim[0], dim[1])
+        if isinstance(self.opt_args["h"], list):
+            assert len(self.opt_args["h"]) == n_classes, "If h is a list, it must have length equal to n_classes."
+            self.h = np.asarray(self.opt_args["h"], dtype=np.float64)
         else:
-            self.patch_dim = (patch_dim[0], patch_dim[1])
-
-        if isinstance(h, list):
-            assert len(h) == n_classes, "If h is a list, it must have length equal to n_classes."
-            self.h = np.asarray(h, dtype=np.float64)
-        else:
-            self.h = np.asarray([h] * n_classes, dtype=np.float64)
-
-        self.seed = seed
-        if seed is None:
-            self.rng_gpu = curandom.XORWOWRandomNumberGenerator()
-        else:
-
-            def _custom_seed_getter(count):
-                # Make sure that each thread gets a different seed
-                return to_gpu(np.array([(seed + i) for i in range(1, count + 1)], dtype=np.int32))
-
-            self.rng_gpu = curandom.XORWOWRandomNumberGenerator(_custom_seed_getter)
+            self.h = np.asarray([self.opt_args["h"]] * n_classes, dtype=np.float64)
 
         if not hasattr(self, "min_y"):
             self.min_y = None
         if not hasattr(self, "max_y"):
             self.max_y = None
 
-        self.init_neg_weights = 1 if init_neg_weights else 0
-        self.negative_clauses = 1 if negative_polarity else 0
-        self.initialized = False
+        if self.encode_loc:
+            self.number_of_literals = int(
+                self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
+                + (self.dim[0] - self.patch_dim[0])
+                + (self.dim[1] - self.patch_dim[1])
+            )
+        else:
+            self.number_of_literals = int(self.patch_dim[0] * self.patch_dim[1] * self.dim[2])
 
-        self.block_size = block_size
+        if self.append_negated:
+            self.number_of_literals *= 2
 
-        self._calc_variables()
+        self.number_of_literal_chunks = ((self.number_of_literals - 1) // 32) + 1
+        self.number_of_patches = int((self.dim[0] - self.patch_dim[0] + 1) * (self.dim[1] - self.patch_dim[1] + 1))
+
         self._gpu_init()
         self._init_default_vals(self.block_size)
-        self.initialized = True
 
     def encode(
         self,
@@ -152,13 +159,7 @@ class BaseTM:
         return encoded_X
 
     #### FIT AND SCORE ####
-    def _fit(
-        self,
-        encoded_X,
-        encoded_Y,
-        **opt_args: Unpack[FitOptArgs]
-    ):
-
+    def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
         # Process optional arguments
         block_size = opt_args.get("block_size", 128)
         true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
@@ -169,17 +170,6 @@ class BaseTM:
         encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
-
-        # # Calculate imbalance modifiers
-        # balance = kwargs.get("balance", False)
-        # if balance:
-        #     true_cnt = (encoded_Y > 0).sum(axis=0)
-        #     false_cnt = (encoded_Y <= 0).sum(axis=0)
-        #     true_mod = np.asarray(true_cnt / true_cnt.mean(), dtype=np.float64)
-        #     false_mod = np.asarray(false_cnt / (max(1, self.number_of_outputs - 1) * true_cnt), dtype=np.float64)
-        # else:
-        #     true_mod = np.ones(self.number_of_outputs, dtype=np.float64)
-        #     false_mod = np.ones(self.number_of_outputs, dtype=np.float64)
 
         true_mod_gpu = mem_alloc(true_mod.nbytes)
         false_mod_gpu = mem_alloc(false_mod.nbytes)
@@ -312,13 +302,13 @@ class BaseTM:
         #define PATCH_DIM1 {self.patch_dim[1]}
         #define PATCHES {self.number_of_patches}
         #define LITERALS {self.number_of_literals}
-        #define MAX_INCLUDED_LITERALS {self.max_included_literals}
-        #define APPEND_NEGATED {self.append_negated}
-        #define INIT_NEG_WEIGHTS {self.init_neg_weights}
-        #define NEGATIVE_CLAUSES {self.negative_clauses}
+        #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}
+        #define APPEND_NEGATED {1 if self.append_negated else 0}
+        #define INIT_NEG_WEIGHTS {1 if self.init_neg_weights else 0}
+        #define NEGATIVE_CLAUSES {1 if self.negative_clauses else 0}
         #define CLASSES {self.number_of_outputs}
         #define MAX_TA_STATE {self.number_of_ta_states}
-        #define ENCODE_LOC {self.encode_loc}
+        #define ENCODE_LOC {1 if self.encode_loc else 0}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
         __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
@@ -363,6 +353,14 @@ class BaseTM:
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
         self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
 
+        self.rng_gpu = (
+            curandom.XORWOWRandomNumberGenerator()
+            if self.seed is None
+            else curandom.XORWOWRandomNumberGenerator(
+                lambda count: to_gpu(np.array([(self.seed + i) for i in range(1, count + 1)], dtype=np.int32))  # pyright: ignore[reportOptionalOperand]
+            )
+        )
+
     #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
     def _init_default_vals(self, block_size: int = 128):
         self.kernel_init.prepared_call(
@@ -372,26 +370,6 @@ class BaseTM:
             self.clause_weights_gpu,
         )
         ctx.synchronize()
-
-    def _calc_variables(self):
-        if self.encode_loc:
-            self.number_of_literals = int(
-                self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
-                + (self.dim[0] - self.patch_dim[0])
-                + (self.dim[1] - self.patch_dim[1])
-            )
-        else:
-            self.number_of_literals = int(self.patch_dim[0] * self.patch_dim[1] * self.dim[2])
-
-        if self.append_negated:
-            self.number_of_literals *= 2
-
-        self.number_of_literal_chunks = ((self.number_of_literals - 1) // 32) + 1
-
-        if self.max_included_literals is None:
-            self.max_included_literals = self.number_of_literals
-
-        self.number_of_patches = int((self.dim[0] - self.patch_dim[0] + 1) * (self.dim[1] - self.patch_dim[1] + 1))
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):
@@ -515,36 +493,16 @@ class BaseTM:
     ## SERIALIZATION ##
     def __getstate__(self):
         args = {
-            "number_of_clauses_per_class": self.number_of_clauses_per_class,
-            "T": self.T,
-            "s": self.s,
-            "dim": self.dim,
-            "n_classes": self.number_of_outputs,
-            "q": self.q,
-            "patch_dim": getattr(self, "patch_dim", None),
-            "number_of_ta_states": self.number_of_ta_states,
-            "max_included_literals": self.max_included_literals,
-            "append_negated": bool(self.append_negated),
-            "init_neg_weights": bool(self.init_neg_weights),
-            "negative_polarity": bool(self.negative_clauses),
-            "encode_loc": bool(self.encode_loc),
-            "coalesced": self.coalesced,
-            "h": self.h.tolist(),
-            "seed": self.seed,
-            "block_size": self.block_size,
+            **self.init_args,
+            **self.opt_args,
         }
-        if not self.initialized:
-            return {"initialized": False, "args": args, "state": None}
-
         state_dict = self.get_state_dict()
-        return {"initialized": True, "args": args, "state": state_dict}
+        return {"args": args, "state": state_dict}
 
     def __setstate__(self, state):
         args = state["args"]
         self.__init__(**args)
-        initialized = state["initialized"]
-        if initialized:
-            self.load_state_dict(state)
+        self.load_state_dict(state)
 
     #### SAVE AND LOAD ####
     def get_state_dict(self):
@@ -577,9 +535,6 @@ class BaseTM:
         patch_weights = state_dict["patch_weights"]
         self.min_y = state_dict["min_y"]
         self.max_y = state_dict["max_y"]
-
         memcpy_htod(self.ta_state_gpu, ta_state)
         memcpy_htod(self.clause_weights_gpu, clause_weights)
         memcpy_htod(self.patch_weights_gpu, patch_weights)
-
-
