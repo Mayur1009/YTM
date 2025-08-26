@@ -15,7 +15,7 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         np.random.shuffle(iota)
         with train_fit_timer:
             # tm.fit(X_train[iota], Y_train[iota])
-            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True)
+            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True, clause_drop_p=0.5)
 
         test_timer = Timer()
         with test_timer:
@@ -46,8 +46,8 @@ if __name__ == "__main__":
     X_test = ther_bin.binarize_gray(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
 
     tm = MultiClassTM(
-        number_of_clauses_per_class=1000,
-        T=1500,
+        number_of_clauses_per_class=40000,
+        T=15000,
         s=10,
         dim=(28, 28, 8),
         n_classes=10,
@@ -55,5 +55,5 @@ if __name__ == "__main__":
         seed=10,
         block_size=256,
     )
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=1)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
 

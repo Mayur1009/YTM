@@ -23,7 +23,6 @@ class BaseTMOptArgs(TypedDict, total=False):
     negative_polarity: bool
     encode_loc: bool
     coalesced: bool
-    clause_drop_p: float
     h: float | list[float]
     bias: bool
     seed: int | None
@@ -34,6 +33,9 @@ class FitOptArgs(TypedDict, total=False):
     block_size: int
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
+    clause_drop_p: float
+    norm_true_update_prob: bool
+    norm_false_update_prob: bool
 
 
 class BaseTM:
@@ -65,7 +67,6 @@ class BaseTM:
             "negative_polarity": opt_args.get("negative_polarity", True),
             "encode_loc": opt_args.get("encode_loc", True),
             "coalesced": opt_args.get("coalesced", True),
-            "clause_drop_p": opt_args.get("clause_drop_p", 0.0),
             "h": opt_args.get("h", 1.0),
             "bias": opt_args.get("bias", False),
             "seed": opt_args.get("seed", None),
@@ -77,7 +78,7 @@ class BaseTM:
         self.s = s
         self.dim = dim
         self.number_of_outputs = n_classes
-        self.q = self.opt_args["q"]
+        self.q = min(self.opt_args["q"], float(self.number_of_outputs))
         self.patch_dim = self.opt_args["patch_dim"]
         self.number_of_ta_states = self.opt_args["number_of_ta_states"]
         self.max_included_literals = self.opt_args["max_included_literals"]
@@ -86,7 +87,6 @@ class BaseTM:
         self.negative_clauses = self.opt_args["negative_polarity"]
         self.encode_loc = self.opt_args["encode_loc"]
         self.coalesced = self.opt_args["coalesced"]
-        self.clause_drop_p = self.opt_args["clause_drop_p"]
         self.bias = self.opt_args["bias"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
@@ -158,9 +158,6 @@ class BaseTM:
             no_extern_c=True,
         )
 
-        # self.kernel_init = mod_new_kernel.get_function("initialize")
-        # self.kernel_init.prepare("PPP")
-
         self.kernel_init = mod_new_kernel.get_function("init_weights")
         self.kernel_init.prepare("PP")
 
@@ -180,7 +177,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPPiii")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")
@@ -207,8 +204,6 @@ class BaseTM:
         self._reset_clauses()
         self._reset_weights(True)
         memset_d32(self.patch_weights_gpu, 0, self.number_of_clauses * self.number_of_patches)
-
-        # self._init_default_vals(self.block_size)
 
     def _reset_clauses(self):
         memset_d32(self.ta_state_gpu, self.number_of_ta_states // 2, self.number_of_clauses * self.number_of_literals)
@@ -273,6 +268,9 @@ class BaseTM:
         block_size = opt_args.get("block_size", 128)
         true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
+        clause_drop_p = opt_args.get("clause_drop_p", 0.0)
+        norm_true_update_prob = opt_args.get("norm_true_update_prob", False) # In case of multi-label
+        norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
 
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
@@ -287,8 +285,8 @@ class BaseTM:
         memcpy_htod(false_mod_gpu, false_mod)
 
         # Drop clauses
-        if self.clause_drop_p > 0.0:
-            clause_drop_mask = (self.rng.random(self.number_of_clauses) <= self.clause_drop_p).astype(np.uint32)
+        if clause_drop_p > 0.0:
+            clause_drop_mask = (self.rng.random(self.number_of_clauses) <= clause_drop_p).astype(np.uint32)
         else:
             clause_drop_mask = np.zeros(self.number_of_clauses, dtype=np.uint32)
         clause_drop_mask_gpu = mem_alloc(clause_drop_mask.nbytes)
@@ -353,6 +351,8 @@ class BaseTM:
                 encoded_X_gpu,
                 encoded_Y_gpu,
                 np.int32(e),
+                np.int32(1) if norm_true_update_prob else np.int32(0),
+                np.int32(1) if norm_false_update_prob else np.int32(0),
             )
             ctx.synchronize()
 

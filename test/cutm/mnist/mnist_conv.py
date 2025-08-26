@@ -51,9 +51,8 @@ if __name__ == "__main__":
         s=10,
         dim=(28, 28, 1),
         n_classes=10,
-        patch_dim=(28, 28),
+        patch_dim=(10, 10),
         encode_loc=True,
-        bias=True,
         seed=10,
         block_size=128,
     )
