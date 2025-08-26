@@ -21,6 +21,7 @@
 #define COALESCED 1
 #define CLAUSE_BANKS 1
 __constant__ const double H[CLASSES] = {1};
+#define BIAS 0
 #endif
 
 #include <curand_kernel.h>
@@ -522,9 +523,9 @@ __device__ inline double update_probability(double v, double y, double mod, doub
 }
 
 __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
-                              const float *class_sums, const int *selected_patch_ids, const int *num_includes,
-                              const double *true_mod, const double *false_mod, const unsigned int *X_batch,
-                              const int *Y_batch, const int e) {
+                              float *bias_weights, const float *class_sums, const int *selected_patch_ids,
+                              const int *num_includes, const double *true_mod, const double *false_mod,
+                              const unsigned int *X_batch, const int *Y_batch, const int e) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     curandState localRNG = rng[index];
@@ -564,6 +565,9 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
             if (should_update) {  // CLause update with prob update_p else skip
                 if (type1a) {
                     (*local_weight) += sign * 1.0f;
+#if BIAS
+                    bias_weights[class_id] += sign * 1.0f;
+#endif
 #if (MAX_INCLUDED_LITERALS < LITERALS)
                     if (num_includes[clause] < MAX_INCLUDED_LITERALS) type1a_fb(&localRNG, ta_state, patch);
 #else
@@ -573,8 +577,12 @@ __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, 
                     type1b_fb(&localRNG, ta_state);
                 } else if (type2) {
                     (*local_weight) -= sign * 1.0f;
+#if BIAS
+                    bias_weights[class_id] -= sign * 1.0f;
+#endif
 #if NEGATIVE_CLAUSES == 0
                     if (*local_weight < 1) *local_weight = 1;
+                    if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
 #endif
                     type2_fb(ta_state, patch);
                 }

@@ -6,7 +6,7 @@ import pycuda.autoinit  # noqa: F401
 import pycuda.curandom as curandom
 from pycuda.compiler import SourceModule
 from pycuda.driver import Context as ctx  # pyright: ignore[reportAttributeAccessIssue]
-from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
+from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memcpy_dtod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.gpuarray import to_gpu
 from tqdm import tqdm
 
@@ -24,6 +24,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     encode_loc: bool
     coalesced: bool
     h: float | list[float]
+    bias: bool
     seed: int | None
     block_size: int
 
@@ -64,6 +65,7 @@ class BaseTM:
             "encode_loc": opt_args.get("encode_loc", True),
             "coalesced": opt_args.get("coalesced", True),
             "h": opt_args.get("h", 1.0),
+            "bias": opt_args.get("bias", False),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
         }
@@ -82,6 +84,7 @@ class BaseTM:
         self.negative_clauses = self.opt_args["negative_polarity"]
         self.encode_loc = self.opt_args["encode_loc"]
         self.coalesced = self.opt_args["coalesced"]
+        self.bias = self.opt_args["bias"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
 
@@ -206,7 +209,8 @@ class BaseTM:
             )
             ctx.synchronize()
 
-            memset_d32(class_sum_gpu, 0, self.number_of_outputs)
+            # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
+            memcpy_dtod(class_sum_gpu, self.bias_weights_gpu, self.number_of_outputs * 4)
             self.kernel_select_active.prepared_call(
                 *config_n_clauses,
                 self.rng_gpu.state,
@@ -223,6 +227,7 @@ class BaseTM:
                 self.rng_gpu.state,
                 self.ta_state_gpu,
                 self.clause_weights_gpu,
+                self.bias_weights_gpu,
                 class_sum_gpu,
                 selected_patch_ids_gpu,
                 num_includes_gpu,
@@ -234,6 +239,10 @@ class BaseTM:
             )
             ctx.synchronize()
 
+        #Print bias weights
+        bias_weights = np.empty((self.number_of_outputs), dtype=np.float32)
+        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
+        print(f'{bias_weights=}')
         return
 
     def _pack_clauses_gpu(self):
@@ -262,14 +271,23 @@ class BaseTM:
         max_safe_N = max_uint32 // self.number_of_clauses
 
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
-        class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
+
+        # Initialize class sums with bias weights
+        # class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
+        bias_weights = np.empty((1, self.number_of_outputs), dtype=np.float32)
+        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
+        class_sums = np.tile(bias_weights, (N, 1)).astype(np.float32)
+
         for i in range(0, N, max_safe_N):
             X_safe = encoded_X[i : i + max_safe_N]
             X_gpu = mem_alloc(X_safe.nbytes)
             memcpy_htod(X_gpu, X_safe)
 
-            class_sums_gpu = mem_alloc(X_safe.shape[0] * self.number_of_outputs * 4)
-            memset_d32(class_sums_gpu, 0, X_safe.shape[0] * self.number_of_outputs)
+            # class_sums_gpu = mem_alloc(X_safe.shape[0] * self.number_of_outputs * 4)
+            # memset_d32(class_sums_gpu, 0, X_safe.shape[0] * self.number_of_outputs)
+            cs_safe = class_sums[i : i + max_safe_N]
+            class_sums_gpu = mem_alloc(cs_safe.nbytes)
+            memcpy_htod(class_sums_gpu, cs_safe)
             self.kernel_calc_class_sums_infer_batch.prepared_call(
                 *kernel_config(X_safe.shape[0] * self.number_of_clauses, device_props, block_size),
                 packed_clauses_gpu,
@@ -312,6 +330,7 @@ class BaseTM:
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
         __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
+        #define BIAS {1 if self.bias else 0}
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
@@ -340,7 +359,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")
@@ -352,6 +371,7 @@ class BaseTM:
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
         self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
+        self.bias_weights_gpu = mem_alloc(self.number_of_outputs * 4)
 
         self.rng_gpu = (
             curandom.XORWOWRandomNumberGenerator()
@@ -370,6 +390,8 @@ class BaseTM:
             self.clause_weights_gpu,
         )
         ctx.synchronize()
+
+        memset_d32(self.bias_weights_gpu, 0, self.number_of_outputs)
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):
