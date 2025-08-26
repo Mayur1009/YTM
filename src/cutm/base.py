@@ -23,6 +23,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     negative_polarity: bool
     encode_loc: bool
     coalesced: bool
+    clause_drop_p: float
     h: float | list[float]
     bias: bool
     seed: int | None
@@ -64,6 +65,7 @@ class BaseTM:
             "negative_polarity": opt_args.get("negative_polarity", True),
             "encode_loc": opt_args.get("encode_loc", True),
             "coalesced": opt_args.get("coalesced", True),
+            "clause_drop_p": opt_args.get("clause_drop_p", 0.0),
             "h": opt_args.get("h", 1.0),
             "bias": opt_args.get("bias", False),
             "seed": opt_args.get("seed", None),
@@ -84,6 +86,7 @@ class BaseTM:
         self.negative_clauses = self.opt_args["negative_polarity"]
         self.encode_loc = self.opt_args["encode_loc"]
         self.coalesced = self.opt_args["coalesced"]
+        self.clause_drop_p = self.opt_args["clause_drop_p"]
         self.bias = self.opt_args["bias"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
@@ -117,8 +120,111 @@ class BaseTM:
         self.number_of_literal_chunks = ((self.number_of_literals - 1) // 32) + 1
         self.number_of_patches = int((self.dim[0] - self.patch_dim[0] + 1) * (self.dim[1] - self.patch_dim[1] + 1))
 
+        self.rng = np.random.default_rng(self.seed)
+
         self._gpu_init()
-        self._init_default_vals(self.block_size)
+
+    #### GPU INITIALIZATION ####
+    def _gpu_init(self):
+        self.gpu_macro_string = f"""
+        #define CLAUSES {self.number_of_clauses}
+        #define THRESH {self.T}
+        #define S {self.s}
+        #define Q {self.q}
+        #define DIM0 {self.dim[0]}
+        #define DIM1 {self.dim[1]}
+        #define DIM2 {self.dim[2]}
+        #define PATCH_DIM0 {self.patch_dim[0]}
+        #define PATCH_DIM1 {self.patch_dim[1]}
+        #define PATCHES {self.number_of_patches}
+        #define LITERALS {self.number_of_literals}
+        #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}
+        #define APPEND_NEGATED {1 if self.append_negated else 0}
+        #define INIT_NEG_WEIGHTS {1 if self.init_neg_weights else 0}
+        #define NEGATIVE_CLAUSES {1 if self.negative_clauses else 0}
+        #define CLASSES {self.number_of_outputs}
+        #define MAX_TA_STATE {self.number_of_ta_states}
+        #define ENCODE_LOC {1 if self.encode_loc else 0}
+        #define COALESCED {1 if self.coalesced else 0}
+        #define CLAUSE_BANKS {self.number_of_clause_banks}
+        __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
+        #define BIAS {1 if self.bias else 0}
+        """
+        current_dir = pathlib.Path(__file__).parent
+        kernel_str = get_kernel("cuda/kernel.cu", current_dir)
+        mod_new_kernel = SourceModule(
+            self.gpu_macro_string + kernel_str,
+            options=["-O3", "--use_fast_math"],
+            no_extern_c=True,
+        )
+
+        # self.kernel_init = mod_new_kernel.get_function("initialize")
+        # self.kernel_init.prepare("PPP")
+
+        self.kernel_init = mod_new_kernel.get_function("init_weights")
+        self.kernel_init.prepare("PP")
+
+        self.kernel_encode_batch = mod_new_kernel.get_function("encode_batch")
+        self.kernel_encode_batch.prepare("PPi")
+
+        self.kernel_pack_clauses = mod_new_kernel.get_function("pack_clauses")
+        self.kernel_pack_clauses.prepare("PPP")
+
+        self.kernel_fast_eval = mod_new_kernel.get_function("fast_eval")
+        self.kernel_fast_eval.prepare("PPPPPi")
+
+        self.kernel_select_active = mod_new_kernel.get_function("select_active")
+        self.kernel_select_active.prepare("PPPPPP")
+
+        self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
+        self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
+
+        self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
+
+        self.kernel_transform = mod_new_kernel.get_function("transform")
+        self.kernel_transform.prepare("PPPiP")
+
+        self.kernel_transform_patchwise = mod_new_kernel.get_function("transform_patchwise")
+        self.kernel_transform_patchwise.prepare("PPPiP")
+
+        # Allocate GPU memory
+        self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
+        self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
+        self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
+        self.bias_weights_gpu = mem_alloc(self.number_of_outputs * 4)
+
+        # RNG
+        self.rng_gpu = (
+            curandom.XORWOWRandomNumberGenerator()
+            if self.seed is None
+            else curandom.XORWOWRandomNumberGenerator(
+                lambda count: to_gpu(np.array([(self.seed + i) for i in range(1, count + 1)], dtype=np.int32))  # pyright: ignore[reportOptionalOperand]
+            )
+        )
+
+        # Init ta_state to number_of_ta_states // 2
+        self._reset_clauses()
+        self._reset_weights(True)
+        memset_d32(self.patch_weights_gpu, 0, self.number_of_clauses * self.number_of_patches)
+
+        # self._init_default_vals(self.block_size)
+
+    def _reset_clauses(self):
+        memset_d32(self.ta_state_gpu, self.number_of_ta_states // 2, self.number_of_clauses * self.number_of_literals)
+
+    def _reset_weights(self, reset_bias: bool = True):
+        # TODO: Implement
+        self.kernel_init.prepared_call(
+            *kernel_config(self.number_of_clauses, device_props, self.block_size),
+            self.rng_gpu.state,
+            # self.ta_state_gpu,
+            self.clause_weights_gpu,
+        )
+        ctx.synchronize()
+        if reset_bias:
+            memset_d32(self.bias_weights_gpu, 0, self.number_of_outputs)
+        pass
 
     def encode(
         self,
@@ -174,10 +280,19 @@ class BaseTM:
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(encoded_Y_gpu, encoded_Y)
 
+        # Class probability balancer
         true_mod_gpu = mem_alloc(true_mod.nbytes)
         false_mod_gpu = mem_alloc(false_mod.nbytes)
         memcpy_htod(true_mod_gpu, true_mod)
         memcpy_htod(false_mod_gpu, false_mod)
+
+        # Drop clauses
+        if self.clause_drop_p > 0.0:
+            clause_drop_mask = (self.rng.random(self.number_of_clauses) <= self.clause_drop_p).astype(np.uint32)
+        else:
+            clause_drop_mask = np.zeros(self.number_of_clauses, dtype=np.uint32)
+        clause_drop_mask_gpu = mem_alloc(clause_drop_mask.nbytes)
+        memcpy_htod(clause_drop_mask_gpu, clause_drop_mask)
 
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -203,6 +318,7 @@ class BaseTM:
                 *config_patchwise,
                 packed_clauses_gpu,
                 num_includes_gpu,
+                clause_drop_mask_gpu,
                 encoded_X_gpu,
                 clause_outputs_gpu,
                 np.int32(e),
@@ -233,16 +349,13 @@ class BaseTM:
                 num_includes_gpu,
                 true_mod_gpu,
                 false_mod_gpu,
+                clause_drop_mask_gpu,
                 encoded_X_gpu,
                 encoded_Y_gpu,
                 np.int32(e),
             )
             ctx.synchronize()
 
-        #Print bias weights
-        bias_weights = np.empty((self.number_of_outputs), dtype=np.float32)
-        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
-        print(f'{bias_weights=}')
         return
 
     def _pack_clauses_gpu(self):
@@ -306,92 +419,6 @@ class BaseTM:
 
         return class_sums
 
-    #### GPU INITIALIZATION ####
-    def _gpu_init(self):
-        self.gpu_macro_string = f"""
-        #define CLAUSES {self.number_of_clauses}
-        #define THRESH {self.T}
-        #define S {self.s}
-        #define Q {self.q}
-        #define DIM0 {self.dim[0]}
-        #define DIM1 {self.dim[1]}
-        #define DIM2 {self.dim[2]}
-        #define PATCH_DIM0 {self.patch_dim[0]}
-        #define PATCH_DIM1 {self.patch_dim[1]}
-        #define PATCHES {self.number_of_patches}
-        #define LITERALS {self.number_of_literals}
-        #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}
-        #define APPEND_NEGATED {1 if self.append_negated else 0}
-        #define INIT_NEG_WEIGHTS {1 if self.init_neg_weights else 0}
-        #define NEGATIVE_CLAUSES {1 if self.negative_clauses else 0}
-        #define CLASSES {self.number_of_outputs}
-        #define MAX_TA_STATE {self.number_of_ta_states}
-        #define ENCODE_LOC {1 if self.encode_loc else 0}
-        #define COALESCED {1 if self.coalesced else 0}
-        #define CLAUSE_BANKS {self.number_of_clause_banks}
-        __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
-        #define BIAS {1 if self.bias else 0}
-        """
-        current_dir = pathlib.Path(__file__).parent
-        kernel_str = get_kernel("cuda/kernel.cu", current_dir)
-        mod_new_kernel = SourceModule(
-            self.gpu_macro_string + kernel_str,
-            options=["-O3", "--use_fast_math"],
-            no_extern_c=True,
-        )
-
-        self.kernel_init = mod_new_kernel.get_function("initialize")
-        self.kernel_init.prepare("PPP")
-
-        self.kernel_encode_batch = mod_new_kernel.get_function("encode_batch")
-        self.kernel_encode_batch.prepare("PPi")
-
-        self.kernel_pack_clauses = mod_new_kernel.get_function("pack_clauses")
-        self.kernel_pack_clauses.prepare("PPP")
-
-        self.kernel_fast_eval = mod_new_kernel.get_function("fast_eval")
-        self.kernel_fast_eval.prepare("PPPPi")
-
-        self.kernel_select_active = mod_new_kernel.get_function("select_active")
-        self.kernel_select_active.prepare("PPPPPP")
-
-        self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
-        self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
-
-        self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
-
-        self.kernel_transform = mod_new_kernel.get_function("transform")
-        self.kernel_transform.prepare("PPPiP")
-
-        self.kernel_transform_patchwise = mod_new_kernel.get_function("transform_patchwise")
-        self.kernel_transform_patchwise.prepare("PPPiP")
-
-        # Allocate GPU memory
-        self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
-        self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
-        self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
-        self.bias_weights_gpu = mem_alloc(self.number_of_outputs * 4)
-
-        self.rng_gpu = (
-            curandom.XORWOWRandomNumberGenerator()
-            if self.seed is None
-            else curandom.XORWOWRandomNumberGenerator(
-                lambda count: to_gpu(np.array([(self.seed + i) for i in range(1, count + 1)], dtype=np.int32))  # pyright: ignore[reportOptionalOperand]
-            )
-        )
-
-    #### STATES, WEIGHTS, AND INPUT INITIALIZATION ####
-    def _init_default_vals(self, block_size: int = 128):
-        self.kernel_init.prepared_call(
-            *kernel_config(self.number_of_clauses, device_props, block_size),
-            self.rng_gpu.state,
-            self.ta_state_gpu,
-            self.clause_weights_gpu,
-        )
-        ctx.synchronize()
-
-        memset_d32(self.bias_weights_gpu, 0, self.number_of_outputs)
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):
@@ -428,6 +455,11 @@ class BaseTM:
             return patch_weights.reshape(
                 (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_patches)
             )
+
+    def get_bias_weights(self):
+        bias_weights = np.empty(self.number_of_outputs, dtype=np.float32)
+        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
+        return bias_weights
 
     ######## TRANSFORM #######
 
