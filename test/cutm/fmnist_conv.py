@@ -1,8 +1,7 @@
 import numpy as np
 from keras.datasets import fashion_mnist
 
-from tm_utils import Timer
-from tm_utils.binarizer import ThermometerBinarizer
+from tm_utils import Timer, Binarizer
 from cutm import MultiClassTM
 
 
@@ -14,17 +13,14 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         iota = np.arange(encoded_X_train.shape[0])
         np.random.shuffle(iota)
         with train_fit_timer:
-            # tm.fit(X_train[iota], Y_train[iota])
             tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True, clause_drop_p=0.5)
 
         test_timer = Timer()
         with test_timer:
-            # test_pred, _ = tm.predict(X_test)
             test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True, block_size=256)
 
         train_timer = Timer()
         with train_timer:
-            # train_pred, _ = tm.predict(X_train)
             train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True, block_size=256)
 
         test_acc = np.mean(Y_test == test_pred)
@@ -41,9 +37,11 @@ if __name__ == "__main__":
 
     ch = 8
 
-    ther_bin = ThermometerBinarizer(ch=ch)
-    X_train = ther_bin.binarize_gray(X_train).reshape((X_train.shape[0], -1)).astype(np.uint32)
-    X_test = ther_bin.binarize_gray(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
+    b = Binarizer(ch)
+    b.fit(X_train)
+    X_train = b.transform(X_train).reshape((X_train.shape[0], -1)).astype(np.uint32)
+    X_test = b.transform(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
+
 
     tm = MultiClassTM(
         number_of_clauses_per_class=40000,

@@ -1,4 +1,6 @@
 from time import time
+from .binarizer import Binarizer as Binarizer
+
 
 class Timer:
     start_time: float
