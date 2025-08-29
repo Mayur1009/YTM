@@ -27,10 +27,12 @@ class BaseTMOptArgs(TypedDict, total=False):
     bias: bool
     seed: int | None
     block_size: int
+    grid_size: int | None
 
 
 class FitOptArgs(TypedDict, total=False):
     block_size: int
+    grid_size: int
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     clause_drop_p: float
@@ -71,6 +73,7 @@ class BaseTM:
             "bias": opt_args.get("bias", False),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
+            "grid_size": opt_args.get("grid_size", None),
         }
 
         self.number_of_clauses_per_class = number_of_clauses_per_class
@@ -90,6 +93,7 @@ class BaseTM:
         self.bias = self.opt_args["bias"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
+        self.grid_size = self.opt_args["grid_size"]
 
         self.number_of_clause_banks = 1 if self.coalesced else self.number_of_outputs
         self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
@@ -127,18 +131,18 @@ class BaseTM:
     #### GPU INITIALIZATION ####
     def _gpu_init(self):
         self.gpu_macro_string = f"""
-        #define CLAUSES {self.number_of_clauses}
+        #define CLAUSES {self.number_of_clauses}ULL
         #define THRESH {self.T}
         #define S {self.s}
         #define Q {self.q}
-        #define DIM0 {self.dim[0]}
-        #define DIM1 {self.dim[1]}
-        #define DIM2 {self.dim[2]}
+        #define DIM0 {self.dim[0]}ULL
+        #define DIM1 {self.dim[1]}ULL
+        #define DIM2 {self.dim[2]}ULL
         #define PATCH_DIM0 {self.patch_dim[0]}
         #define PATCH_DIM1 {self.patch_dim[1]}
-        #define PATCHES {self.number_of_patches}
-        #define LITERALS {self.number_of_literals}
-        #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}
+        #define PATCHES {self.number_of_patches}ULL
+        #define LITERALS {self.number_of_literals}ULL
+        #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}ULL
         #define APPEND_NEGATED {1 if self.append_negated else 0}
         #define INIT_NEG_WEIGHTS {1 if self.init_neg_weights else 0}
         #define NEGATIVE_CLAUSES {1 if self.negative_clauses else 0}
@@ -147,7 +151,7 @@ class BaseTM:
         #define ENCODE_LOC {1 if self.encode_loc else 0}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
-        __constant__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
+        __device__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
         #define BIAS {1 if self.bias else 0}
         """
         current_dir = pathlib.Path(__file__).parent
@@ -265,7 +269,8 @@ class BaseTM:
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
         # Process optional arguments
-        block_size = opt_args.get("block_size", 128)
+        block_size = opt_args.get("block_size", self.block_size)
+        grid_size = opt_args.get("grid_size", self.grid_size)
         true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
@@ -299,8 +304,8 @@ class BaseTM:
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
-        config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size)
-        config_patchwise = kernel_config(self.number_of_clauses * self.number_of_patches, device_props, block_size)
+        config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size, grid_size)
+        config_patchwise = kernel_config(self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size)
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -367,18 +372,21 @@ class BaseTM:
             self.ta_state_gpu,
             packed_clauses_gpu,
             includes_gpu,
+            self.grid_size,
         )
         ctx.synchronize()
 
         return packed_clauses_gpu, includes_gpu
 
     def _score_batch(
-        self, encoded_X, block_size: int | None = None
+        self, encoded_X, block_size: int | None = None, grid_size: int | None = None
     ) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         N = encoded_X.shape[0]
 
         if block_size is None:
             block_size = self.block_size
+        if grid_size is None:
+            grid_size = self.grid_size
 
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_clauses
@@ -402,7 +410,7 @@ class BaseTM:
             class_sums_gpu = mem_alloc(cs_safe.nbytes)
             memcpy_htod(class_sums_gpu, cs_safe)
             self.kernel_calc_class_sums_infer_batch.prepared_call(
-                *kernel_config(X_safe.shape[0] * self.number_of_clauses, device_props, block_size),
+                *kernel_config(X_safe.shape[0] * self.number_of_clauses, device_props, block_size, grid_size),
                 packed_clauses_gpu,
                 self.clause_weights_gpu,
                 includes_gpu,
@@ -463,10 +471,12 @@ class BaseTM:
 
     ######## TRANSFORM #######
 
-    def transform(self, X, is_X_encoded: bool = False, block_size: int | None = None):
+    def transform(self, X, is_X_encoded: bool = False, block_size: int | None = None, grid_size: int | None = None):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:
             block_size = self.block_size
+        if grid_size is None:
+            grid_size = self.grid_size
 
         N = encoded_X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
@@ -483,7 +493,7 @@ class BaseTM:
 
         clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * 4)
         self.kernel_transform.prepared_call(
-            *kernel_config(N * self.number_of_clauses, device_props, block_size),
+            *kernel_config(N * self.number_of_clauses, device_props, block_size, grid_size),
             packed_clauses_gpu,
             includes_gpu,
             encoded_X_gpu,
@@ -502,10 +512,13 @@ class BaseTM:
 
         return clause_outputs.reshape((N, self.number_of_clauses))
 
-    def transform_patchwise(self, X, is_X_encoded: bool = False, block_size: int | None = None):
+    def transform_patchwise(self, X, is_X_encoded: bool = False, block_size: int | None = None, grid_size: int | None = None):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:
             block_size = self.block_size
+
+        if grid_size is None:
+            grid_size = self.grid_size
 
         N = encoded_X.shape[0]
         max_uint32 = np.iinfo(np.uint32).max
@@ -525,7 +538,7 @@ class BaseTM:
 
         clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * self.number_of_patches * 4)
         self.kernel_transform_patchwise.prepared_call(
-            *kernel_config(N * self.number_of_clauses * self.number_of_patches, device_props, block_size),
+            *kernel_config(N * self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size),
             packed_clauses_gpu,
             includes_gpu,
             encoded_X_gpu,

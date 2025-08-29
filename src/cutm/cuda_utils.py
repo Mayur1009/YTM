@@ -24,19 +24,22 @@ def get_device_properties():
     return properties
 
 
-def kernel_config(data_size, props, preferred_block_size=128):
+def kernel_config(data_size, props, preferred_block_size=128, preferred_grid_size=None):
     """Get optimal grid and block configuration for 1D kernel"""
 
     # Ensure hardware compliance
     block_size = min(preferred_block_size, props["max_threads_per_block"])
     # block_size = ((block_size + 31) // 32) * 32
 
-    # Calculate grid size
-    grid_size = (data_size + block_size - 1) // block_size
+    if preferred_grid_size is None:
+        # Calculate grid size
+        grid_size = (data_size + block_size - 1) // block_size
 
-    # Limit grid size to reasonable bounds
-    max_blocks = min(65535, props["multiprocessor_count"] * 4)
-    grid_size = min(grid_size, max_blocks)
+        # Limit grid size to reasonable bounds
+        max_blocks = min(65535, props["multiprocessor_count"] * 4)
+        grid_size = min(grid_size, max_blocks)
+    else:
+        grid_size = preferred_grid_size
 
     return (grid_size, 1, 1), (block_size, 1, 1)
 

@@ -1,17 +1,17 @@
 // Ignore this block, it is used to only for neovim clangd lsp.
 #ifdef IS_NEOVIM_CLANGD_ENV
-    #define CLAUSES 100
+    #define CLAUSES 100ULL
     #define THRESH 500
     #define S 10
     #define Q 1
-    #define DIM0 28
-    #define DIM1 28
-    #define DIM2 1
+    #define DIM0 28ULL
+    #define DIM1 28ULL
+    #define DIM2 1ULL
     #define PATCH_DIM0 10
     #define PATCH_DIM1 10
-    #define PATCHES 361
-    #define LITERALS 272
-    #define MAX_INCLUDED_LITERALS 272
+    #define PATCHES 361ULL
+    #define LITERALS 272ULL
+    #define MAX_INCLUDED_LITERALS 272ULL
     #define APPEND_NEGATED 1
     #define INIT_NEG_WEIGHTS 1
     #define NEGATIVE_CLAUSES 1
@@ -20,7 +20,7 @@
     #define ENCODE_LOC 1
     #define COALESCED 1
     #define CLAUSE_BANKS 1
-__constant__ const double H[CLASSES] = {1};
+__device__ const double H[CLASSES] = {1};
     #define BIAS 0
 #endif
 
@@ -44,11 +44,11 @@ typedef unsigned long long ull;
 extern "C" {
     /***********INITIALIZATION***********/
     __global__ void init_weights(curandState *rng, float *clause_weights) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
         curandState localState = rng[index];
 
-        for (int clause = index; clause < CLAUSES; clause += stride) {
+        for (ull clause = index; clause < CLAUSES; clause += stride) {
             for (int class_id = 0; class_id < CLASSES; ++class_id) {
 #if COALESCED  // Coalesced -- all clauses have weight for all classes.
                 clause_weights[clause * CLASSES + class_id] = 1.0f;
@@ -76,8 +76,8 @@ extern "C" {
     __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
         // X -> (N * DIM0 * DIM1 * DIM2)
         // encoded_X -> (N * PATCHES * NUM_LITERAL_CHUNKS)
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
 
         for (ull e_patch = index; e_patch < (ull)(PATCHES * N); e_patch += stride) {
             ull e = e_patch / PATCHES;
@@ -158,17 +158,17 @@ extern "C" {
          * Pack the TA states into chunks of 32 bits. Each chunk represents a set of literals.
          * The number of included literals is also calculated here.
          */
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
-        for (int clause = index; clause < CLAUSES; clause += stride) {
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
+        for (ull clause = index; clause < CLAUSES; clause += stride) {
             const unsigned int *ta_state = &global_ta_states[clause * LITERALS];
             unsigned int *packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
             int total_count = 0;
 
-            for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
+            for (ull chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
                 unsigned int packed_value = 0;
-                int start_lit = chunk * INT_SIZE;
-                int end_lit = min(start_lit + INT_SIZE, LITERALS);
+                ull start_lit = chunk * INT_SIZE;
+                ull end_lit = min(start_lit + INT_SIZE, LITERALS);
 
                 int vectorized_end =
                     start_lit + ((end_lit - start_lit) & ~3);  // Ensure vectorized end is a multiple of 4
@@ -219,16 +219,16 @@ extern "C" {
     __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
                                 int *patch_weights, const unsigned int *X_batch, int *selected_patch_ids,
                                 float *class_sums, const int e) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
 
         curandState localRNG = rng[index];
 
-        for (int clause = index; clause < CLAUSES; clause += stride) {
+        for (ull clause = index; clause < CLAUSES; clause += stride) {
             int active_patches[PATCHES];
             int active_count = 0;
 
-            for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+            for (ull patch_id = 0; patch_id < PATCHES; ++patch_id) {
                 int patch_matched = clause_match(
                     &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
                     &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
@@ -256,8 +256,8 @@ extern "C" {
                               const unsigned int *clause_drop_mask, const unsigned int *X_batch,
                               unsigned int *clause_outputs, const int e) {
         // clause_outputs => (N * CLAUSES * PATCHES)
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
         for (ull clause_patch = index; clause_patch < (ull)CLAUSES * (ull)PATCHES; clause_patch += stride) {
             unsigned int *clause_output = &clause_outputs[clause_patch];
 
@@ -284,12 +284,12 @@ extern "C" {
     /***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
     __global__ void select_active(curandState *rng, const float *clause_weights, const unsigned int *clause_outputs,
                                   int *patch_weights, int *selected_patch_ids, float *class_sums) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
 
         curandState localRNG = rng[index];
 
-        for (int clause = index; clause < CLAUSES; clause += stride) {
+        for (ull clause = index; clause < CLAUSES; clause += stride) {
             int count = 0;
             int selected_id = -1;
             for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
@@ -319,8 +319,8 @@ extern "C" {
     __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
                                                 const int *num_includes, const unsigned int *X_batch, const int N,
                                                 float *class_sums_batch) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
 
         for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
             ull e = e_clause / CLAUSES;
@@ -346,8 +346,8 @@ extern "C" {
     __global__ void transform(const unsigned int *packed_ta_states, const int *num_includes,
                               const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
         // clause_outputs => (N * CLAUSES)
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
         for (ull e_clause = index; e_clause < (ull)N * (ull)CLAUSES; e_clause += stride) {
             ull e = e_clause / CLAUSES;
             ull clause = e_clause % CLAUSES;
@@ -370,8 +370,8 @@ extern "C" {
     __global__ void transform_patchwise(const unsigned int *packed_ta_states, const int *num_includes,
                                         const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
         // clause_outputs => (N * CLAUSES * PATCHES)
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
         for (ull e_clause_patch = index; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES;
              e_clause_patch += stride) {
             unsigned int *clause_output = &clause_outputs[e_clause_patch];
@@ -532,8 +532,8 @@ extern "C" {
                                   const int *num_includes, const double *true_mod, const double *false_mod,
                                   const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *Y_batch,
                                   const int e, const int focusced_pos_sampling, const int focused_neg_sampling) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
 
         // Should this be separate kernel?
@@ -549,7 +549,7 @@ extern "C" {
             local_target == 1 ? (pos_target_sum += update_probs[class_id]) : (neg_target_sum += update_probs[class_id]);
         }
 
-        for (int clause = index; clause < CLAUSES; clause += stride) {
+        for (ull clause = index; clause < CLAUSES; clause += stride) {
             // Skip dropped clauses
             if (clause_drop_mask[clause] == 1) continue;
 
