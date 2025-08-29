@@ -215,9 +215,8 @@ class BaseTM:
     def _reset_weights(self, reset_bias: bool = True):
         # TODO: Implement
         self.kernel_init.prepared_call(
-            *kernel_config(self.number_of_clauses, device_props, self.block_size),
+            *kernel_config(self.number_of_clauses, device_props, self.block_size, self.grid_size),
             self.rng_gpu.state,
-            # self.ta_state_gpu,
             self.clause_weights_gpu,
         )
         ctx.synchronize()
@@ -229,12 +228,16 @@ class BaseTM:
         self,
         X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         block_size: int | None = None,
+        grid_size: int | None = None,
     ) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         assert X.ndim == 2, "X must be a 2D array (samples, dim0 * dim1 * dim2)."
         assert X.dtype == np.uint32, "X must be of type np.uint32."
         N = X.shape[0]
+
         if block_size is None:
             block_size = self.block_size
+        if grid_size is None:
+            grid_size = self.grid_size
 
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_patches
@@ -248,7 +251,7 @@ class BaseTM:
             encoded_X_gpu = mem_alloc(X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks * 4)
             memset_d32(encoded_X_gpu, 0, X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks)
             self.kernel_encode_batch.prepared_call(
-                *kernel_config(X_safe.shape[0] * self.number_of_patches, device_props, block_size),
+                *kernel_config(X_safe.shape[0] * self.number_of_patches, device_props, block_size, grid_size),
                 X_gpu,
                 encoded_X_gpu,
                 np.int32(X_safe.shape[0]),
@@ -274,7 +277,7 @@ class BaseTM:
         true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
-        norm_true_update_prob = opt_args.get("norm_true_update_prob", False) # In case of multi-label
+        norm_true_update_prob = opt_args.get("norm_true_update_prob", False)  # In case of multi-label
         norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
 
         N = encoded_X.shape[0]
@@ -305,7 +308,9 @@ class BaseTM:
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
         config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size, grid_size)
-        config_patchwise = kernel_config(self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size)
+        config_patchwise = kernel_config(
+            self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size
+        )
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -363,16 +368,15 @@ class BaseTM:
 
         return
 
-    def _pack_clauses_gpu(self):
+    def _pack_clauses_gpu(self, block_size, grid_size):
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
         self.kernel_pack_clauses.prepared_call(
-            *kernel_config(self.number_of_clauses, device_props, self.block_size),
+            *kernel_config(self.number_of_clauses, device_props, block_size, grid_size),
             self.ta_state_gpu,
             packed_clauses_gpu,
             includes_gpu,
-            self.grid_size,
         )
         ctx.synchronize()
 
@@ -391,7 +395,7 @@ class BaseTM:
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_clauses
 
-        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
         # Initialize class sums with bias weights
         # class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
@@ -426,7 +430,6 @@ class BaseTM:
             class_sums[i : i + max_safe_N] = class_sums_safe
 
         return class_sums
-
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):
@@ -489,7 +492,7 @@ class BaseTM:
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
         memcpy_htod(encoded_X_gpu, encoded_X)
 
-        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
         clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * 4)
         self.kernel_transform.prepared_call(
@@ -512,7 +515,9 @@ class BaseTM:
 
         return clause_outputs.reshape((N, self.number_of_clauses))
 
-    def transform_patchwise(self, X, is_X_encoded: bool = False, block_size: int | None = None, grid_size: int | None = None):
+    def transform_patchwise(
+        self, X, is_X_encoded: bool = False, block_size: int | None = None, grid_size: int | None = None
+    ):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:
             block_size = self.block_size
@@ -534,7 +539,7 @@ class BaseTM:
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
-        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu()
+        packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
         clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * self.number_of_patches * 4)
         self.kernel_transform_patchwise.prepared_call(

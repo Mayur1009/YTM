@@ -1,6 +1,7 @@
 # WARN: UNTESTED
 import numpy as np
-from .base import BaseTM
+from typing import Unpack
+from .base import BaseTM, BaseTMOptArgs, FitOptArgs
 
 
 class RegressionTM(BaseTM):
@@ -10,34 +11,13 @@ class RegressionTM(BaseTM):
         T,
         s,
         dim: tuple[int, int, int],
-        patch_dim: tuple[int, int] | None = None,
-        max_included_literals=None,
-        number_of_ta_states=256,
-        append_negated=True,
-        init_neg_weights=False,  # Regression does not have negative polarity
-        negative_polarity=False,  # Regression does not have negative polarity
-        coalesced=True,
-        seed: int | None = None,
-        block_size: int = 128,
+        **opt_args: Unpack[BaseTMOptArgs],
     ):
-        super().__init__(
-            number_of_clauses,
-            T,
-            s,
-            dim=dim,
-            n_classes=1,
-            patch_dim=patch_dim,
-            max_included_literals=max_included_literals,
-            number_of_ta_states=number_of_ta_states,
-            append_negated=append_negated,
-            init_neg_weights=init_neg_weights,
-            negative_polarity=negative_polarity,
-            coalesced=coalesced,
-            seed=seed,
-            block_size=block_size,
-        )
+        opt_args["init_neg_weights"] = False  # Regression does not have negative polarity
+        opt_args["negative_polarity"] = False  # Regression does not have negative polarity
+        super().__init__(number_of_clauses, T, s, dim=dim, n_classes=1, **opt_args)
 
-    def fit(self, X: np.ndarray, Y, is_X_encoded=False, block_size: int | None = None):
+    def fit(self, X: np.ndarray, Y, is_X_encoded=False, **opt_args: Unpack[FitOptArgs]):
         X = X.reshape(X.shape[0], X.shape[1], 1)
 
         self.max_y = np.max(Y)
@@ -45,11 +25,11 @@ class RegressionTM(BaseTM):
 
         encoded_Y = ((Y - self.min_y) / (self.max_y - self.min_y) * self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, block_size=block_size)
+        self._fit(encoded_X, encoded_Y, **opt_args)
         return
 
-    def predict(self, X: np.ndarray, is_X_encoded=False, block_size: int | None = None):
+    def predict(self, X: np.ndarray, is_X_encoded=False, block_size: int | None = None, grid_size: int | None = None):
         encoded_X = self.encode(X) if not is_X_encoded else X
-        class_sums = self._score_batch(encoded_X, block_size=block_size)
+        class_sums = self._score_batch(encoded_X, block_size=block_size, grid_size=grid_size)
         preds = 1.0 * (class_sums[0, :]) * (self.max_y - self.min_y) / (self.T) + self.min_y
         return preds

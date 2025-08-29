@@ -24,7 +24,7 @@ def get_device_properties():
     return properties
 
 
-def kernel_config(data_size, props, preferred_block_size=128, preferred_grid_size=None):
+def kernel_config(data_size, props, preferred_block_size, preferred_grid_size):
     """Get optimal grid and block configuration for 1D kernel"""
 
     # Ensure hardware compliance

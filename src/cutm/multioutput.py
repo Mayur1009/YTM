@@ -42,16 +42,18 @@ class MultiOutputTM(BaseTM):
         X: np.ndarray,
         is_X_encoded: bool,
         block_size: int | None = None,
+        grid_size: int | None = None,
     ):
         encoded_X = X if is_X_encoded else self.encode(X)
-        return self._score_batch(encoded_X, block_size=block_size)
+        return self._score_batch(encoded_X, block_size=block_size, grid_size=grid_size)
 
     def predict(
         self,
         X: np.ndarray,
         is_X_encoded: bool = False,
         block_size: int | None = None,
+        grid_size: int | None = None,
     ):
-        class_sums = self.score(X, is_X_encoded, block_size=block_size)
+        class_sums = self.score(X, is_X_encoded, block_size=block_size, grid_size=grid_size)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums
