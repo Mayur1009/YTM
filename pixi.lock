@@ -6669,8 +6669,8 @@ packages:
   timestamp: 1753484064210
 - pypi: ./
   name: ytm
-  version: 0.5.1+dev2
-  sha256: 7d64ef053120cb03bec624dcc09464f60444d98bb665691f2b1c996b8b7dcafa
+  version: 0.5.1+dev3
+  sha256: c2a4abac8f5fee486d90fd174c38caa56a33cfb71e685ac8aa87ebd290fc69dc
   requires_dist:
   - numpy
   - pycuda

@@ -531,22 +531,21 @@ extern "C" {
                                   float *bias_weights, const float *class_sums, const int *selected_patch_ids,
                                   const int *num_includes, const double *true_mod, const double *false_mod,
                                   const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *Y_batch,
-                                  const int e, const int focusced_pos_sampling, const int focused_neg_sampling) {
+                                  const int e, const int norm_true_uprob, const int norm_false_uprob) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
 
         // Should this be separate kernel?
         double update_probs[CLASSES];
-        double pos_target_sum = 0, neg_target_sum = 0;
+        double pos_target_sum = 1e-8;
+        double neg_target_sum = 1e-8;
         for (int class_id = 0; class_id < CLASSES; ++class_id) {
             float clipped_cs = clip_cs(class_sums[class_id]);
             int y = Y_batch[e * CLASSES + class_id];
-            int local_target = 1 - 2 * (clipped_cs > y);
-            update_probs[class_id] =
-                update_probability((double)clipped_cs, (double)y,
-                                   local_target == 1 ? true_mod[class_id] : false_mod[class_id], H[class_id]);
-            local_target == 1 ? (pos_target_sum += update_probs[class_id]) : (neg_target_sum += update_probs[class_id]);
+            update_probs[class_id] = update_probability((double)clipped_cs, (double)y,
+                                                        y > 0 ? true_mod[class_id] : false_mod[class_id], H[class_id]);
+            y > 0 ? (pos_target_sum += update_probs[class_id]) : (neg_target_sum += update_probs[class_id]);
         }
 
         for (ull clause = index; clause < CLAUSES; clause += stride) {
@@ -567,13 +566,15 @@ extern "C" {
 #endif
                 float clipped_cs = clip_cs(class_sums[class_id]);
                 int y = Y_batch[e * CLASSES + class_id];
-                int local_target = 1 - 2 * (clipped_cs > y);
+                if (clipped_cs == y) continue;  // No update if class sum equals target
+                // int local_target = 1 - 2 * (clipped_cs > y);
+                int local_target = y > 0 ? 1 : -1;
 
                 if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;
 
                 double update_prob = update_probs[class_id];
-                if (focusced_pos_sampling && local_target == 1) update_prob = update_prob / pos_target_sum;
-                if (focused_neg_sampling && local_target == -1) update_prob = update_prob / neg_target_sum;
+                if (norm_true_uprob && y > 0) update_prob = update_prob / pos_target_sum;
+                if (norm_false_uprob && y <= 0) update_prob = update_prob / neg_target_sum;
 
                 float *local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
