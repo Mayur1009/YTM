@@ -25,6 +25,8 @@ class BaseTMOptArgs(TypedDict, total=False):
     coalesced: bool
     h: float | list[float]
     bias: bool
+    weighted: bool
+    max_weight: float
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -71,6 +73,8 @@ class BaseTM:
             "coalesced": opt_args.get("coalesced", True),
             "h": opt_args.get("h", 1.0),
             "bias": opt_args.get("bias", False),
+            "weighted": opt_args.get("weighted", True),
+            "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -91,6 +95,8 @@ class BaseTM:
         self.encode_loc = self.opt_args["encode_loc"]
         self.coalesced = self.opt_args["coalesced"]
         self.bias = self.opt_args["bias"]
+        self.weighted = self.opt_args["weighted"]
+        self.max_weight = self.opt_args["max_weight"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
@@ -144,15 +150,16 @@ class BaseTM:
         #define LITERALS {self.number_of_literals}ULL
         #define MAX_INCLUDED_LITERALS {self.number_of_literals if self.max_included_literals is None else self.max_included_literals}ULL
         #define APPEND_NEGATED {1 if self.append_negated else 0}
-        #define INIT_NEG_WEIGHTS {1 if self.init_neg_weights else 0}
         #define NEGATIVE_CLAUSES {1 if self.negative_clauses else 0}
         #define CLASSES {self.number_of_outputs}
-        #define MAX_TA_STATE {self.number_of_ta_states}
+        #define MAX_TA_STATE {self.number_of_ta_states - 1}
         #define ENCODE_LOC {1 if self.encode_loc else 0}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
         __device__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
         #define BIAS {1 if self.bias else 0}
+        #define WEIGHTED {1 if self.weighted else 0}
+        #define MAX_WEIGHT {self.max_weight}
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
@@ -161,9 +168,6 @@ class BaseTM:
             options=["-O3", "--use_fast_math"],
             no_extern_c=True,
         )
-
-        self.kernel_init = mod_new_kernel.get_function("init_weights")
-        self.kernel_init.prepare("PP")
 
         self.kernel_encode_batch = mod_new_kernel.get_function("encode_batch")
         self.kernel_encode_batch.prepare("PPi")
@@ -204,22 +208,38 @@ class BaseTM:
             )
         )
 
-        # Init ta_state to number_of_ta_states // 2
         self._reset_clauses()
         self._reset_weights(True)
         memset_d32(self.patch_weights_gpu, 0, self.number_of_clauses * self.number_of_patches)
 
     def _reset_clauses(self):
-        memset_d32(self.ta_state_gpu, self.number_of_ta_states // 2, self.number_of_clauses * self.number_of_literals)
+        memset_d32(
+            self.ta_state_gpu, (self.number_of_ta_states - 1) // 2, self.number_of_clauses * self.number_of_literals
+        )
+
+    def _init_weights(self):
+        num_neg_polarity = self.number_of_clauses_per_class // 2
+        if self.coalesced:
+            weights = np.zeros((self.number_of_clauses, self.number_of_outputs), dtype=np.float32)
+            for i in range(self.number_of_outputs):
+                wt = np.ones((self.number_of_clauses,), dtype=np.float32)
+                if self.init_neg_weights:
+                    wt[num_neg_polarity:] = -1.0
+                weights[:, i] = self.rng.permutation(wt)
+        else:
+            w = []
+            for i in range(self.number_of_outputs):
+                wt = np.zeros((self.number_of_clauses_per_class, self.number_of_outputs), dtype=np.float32)
+                wt[:, i] = 1.0
+                if self.init_neg_weights:
+                    wt[num_neg_polarity:, i] = -1.0
+                w.append(wt)
+            weights = np.vstack(w)
+
+        memcpy_htod(self.clause_weights_gpu, weights)
 
     def _reset_weights(self, reset_bias: bool = True):
-        # TODO: Implement
-        self.kernel_init.prepared_call(
-            *kernel_config(self.number_of_clauses, device_props, self.block_size, self.grid_size),
-            self.rng_gpu.state,
-            self.clause_weights_gpu,
-        )
-        ctx.synchronize()
+        self._init_weights()
         if reset_bias:
             memset_d32(self.bias_weights_gpu, 0, self.number_of_outputs)
         pass

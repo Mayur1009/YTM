@@ -13,7 +13,6 @@
     #define LITERALS 272ULL
     #define MAX_INCLUDED_LITERALS 272ULL
     #define APPEND_NEGATED 1
-    #define INIT_NEG_WEIGHTS 1
     #define NEGATIVE_CLAUSES 1
     #define CLASSES 10
     #define MAX_TA_STATE 255
@@ -22,6 +21,8 @@
     #define CLAUSE_BANKS 1
 __device__ const double H[CLASSES] = {1};
     #define BIAS 0
+    #define WEIGHTED 1
+    #define MAX_WEIGHT 3.4e38f
 #endif
 
 #include <curand_kernel.h>
@@ -42,36 +43,6 @@ __device__ const double H[CLASSES] = {1};
 typedef unsigned long long ull;
 
 extern "C" {
-    /***********INITIALIZATION***********/
-    __global__ void init_weights(curandState *rng, float *clause_weights) {
-        ull index = blockIdx.x * blockDim.x + threadIdx.x;
-        ull stride = blockDim.x * gridDim.x;
-        curandState localState = rng[index];
-
-        for (ull clause = index; clause < CLAUSES; clause += stride) {
-            for (int class_id = 0; class_id < CLASSES; ++class_id) {
-#if COALESCED  // Coalesced -- all clauses have weight for all classes.
-                clause_weights[clause * CLASSES + class_id] = 1.0f;
-    #if INIT_NEG_WEIGHTS
-                clause_weights[clause * CLASSES + class_id] = (1.0f - 2.0f * (float)(curand(&localState) % 2));
-    #endif
-#else
-                if (class_id == clause / CLAUSES_PER_BANK) {  // Clause belongs to this class.
-                    clause_weights[clause * CLASSES + class_id] = 1.0f;
-    #if INIT_NEG_WEIGHTS  // Initialize negative polarity in second half of the clause bank.
-                    if ((clause % CLAUSES_PER_BANK) >= (CLAUSES_PER_BANK / 2))
-                        clause_weights[clause * CLASSES + class_id] = -1.0f;
-    #endif
-                } else {
-                    clause_weights[clause * CLASSES + class_id] = 0.0f;
-                }
-#endif
-            }
-        }
-
-        rng[index] = localState;
-    }
-
     /***********INPUT ENCODING***********/
     __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
         // X -> (N * DIM0 * DIM1 * DIM2)
@@ -586,7 +557,10 @@ extern "C" {
 
                 if (should_update) {  // CLause update with prob update_p else skip
                     if (type1a) {
-                        (*local_weight) += sign * 1.0f;
+#if WEIGHTED
+                        if (fabs(*local_weight) < MAX_WEIGHT)
+                            (*local_weight) += sign * 1.0f;
+#endif
 #if BIAS
                         bias_weights[class_id] += sign * 1.0f;
 #endif
@@ -598,7 +572,10 @@ extern "C" {
                     } else if (type1b) {
                         type1b_fb(&localRNG, ta_state);
                     } else if (type2) {
-                        (*local_weight) -= sign * 1.0f;
+#if WEIGHTED
+                        if (fabs(*local_weight) < MAX_WEIGHT)
+                            (*local_weight) -= sign * 1.0f;
+#endif
 #if BIAS
                         bias_weights[class_id] -= sign * 1.0f;
 #endif
