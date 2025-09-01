@@ -40,6 +40,7 @@ class FitOptArgs(TypedDict, total=False):
     clause_drop_p: float
     norm_true_update_prob: bool
     norm_false_update_prob: bool
+    co_occ_sampling: bool
 
 
 class BaseTM:
@@ -289,6 +290,37 @@ class BaseTM:
 
         return encoded_X
 
+    def _target_sampling(self, Y, co_occ_sampling: bool = False):
+        N = Y.shape[0]
+        targets = np.zeros_like(Y, dtype=np.int32)
+        targets[Y > 0] = 1
+
+        coocc = np.zeros((self.number_of_outputs, self.number_of_outputs), dtype=np.float32)
+
+        # Calc co-occurrence matrix
+        # coocc[i, j] = P(j == 1 | i == 1)
+        if co_occ_sampling:
+            pair_cnt = Y.T @ Y
+            coocc = pair_cnt / np.diag(pair_cnt)[:, None]
+
+        for i in range(N):
+            true_classes = np.where(Y[i, :] > 0)[0]
+            false_classes = np.where(Y[i, :] <= 0)[0]
+
+            # select false classes based on q and co-occurrence
+            for j in false_classes:
+                p_j_given_true_classes = np.prod(coocc[true_classes, j])
+                if (self.rng.random() > (self.q) / max(1, self.number_of_outputs - 1)) or (
+                    self.rng.random() <= p_j_given_true_classes
+                ):
+                    # Skip this class
+                    targets[i, j] = 0
+                else:
+                    # Select the class
+                    targets[i, j] = -1
+
+        return targets
+
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
         # Process optional arguments
@@ -299,12 +331,16 @@ class BaseTM:
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
         norm_true_update_prob = opt_args.get("norm_true_update_prob", False)  # In case of multi-label
         norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
+        co_occ_sampling = opt_args.get("co_occ_sampling", False)
 
         N = encoded_X.shape[0]
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
-        encoded_Y_gpu = mem_alloc(encoded_Y.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
-        memcpy_htod(encoded_Y_gpu, encoded_Y)
+
+        # Precompute targets for each sample. 1 means the sample belongs to the class. -1 means, selected not classes. 0 means ignore.
+        targets = self._target_sampling((encoded_Y > 0).astype(np.int32), co_occ_sampling)
+        targets_gpu = mem_alloc(targets.nbytes)
+        memcpy_htod(targets_gpu, targets)
 
         # Class probability balancer
         true_mod_gpu = mem_alloc(true_mod.nbytes)
@@ -379,7 +415,7 @@ class BaseTM:
                 false_mod_gpu,
                 clause_drop_mask_gpu,
                 encoded_X_gpu,
-                encoded_Y_gpu,
+                targets_gpu,
                 np.int32(e),
                 np.int32(1) if norm_true_update_prob else np.int32(0),
                 np.int32(1) if norm_false_update_prob else np.int32(0),

@@ -501,7 +501,7 @@ extern "C" {
     __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                                   float *bias_weights, const float *class_sums, const int *selected_patch_ids,
                                   const int *num_includes, const double *true_mod, const double *false_mod,
-                                  const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *Y_batch,
+                                  const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *targets,
                                   const int e, const int norm_true_uprob, const int norm_false_uprob) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
@@ -509,14 +509,22 @@ extern "C" {
 
         // Should this be separate kernel?
         double update_probs[CLASSES];
-        double pos_target_sum = 1e-8;
-        double neg_target_sum = 1e-8;
+        double total_true_pob = 1e-8;
+        double total_false_prob = 1e-8;
         for (int class_id = 0; class_id < CLASSES; ++class_id) {
             float clipped_cs = clip_cs(class_sums[class_id]);
-            int y = Y_batch[e * CLASSES + class_id];
-            update_probs[class_id] = update_probability((double)clipped_cs, (double)y,
-                                                        y > 0 ? true_mod[class_id] : false_mod[class_id], H[class_id]);
-            y > 0 ? (pos_target_sum += update_probs[class_id]) : (neg_target_sum += update_probs[class_id]);
+            int local_target = targets[e * CLASSES + class_id];
+            int y = THRESH * (local_target == 1 ? 1 : -1);
+            double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
+            update_probs[class_id] = update_probability((double)clipped_cs, (double)y, mod, H[class_id]);
+
+            if (local_target == 1) {
+                total_true_pob += (update_probs[class_id]);
+                // total_false_prob += (1.0 - update_probs[class_id]);
+            } else {
+                total_false_prob += (update_probs[class_id]);
+                // total_true_pob += (1.0 - update_probs[class_id]);
+            }
         }
 
         for (ull clause = index; clause < CLAUSES; clause += stride) {
@@ -535,17 +543,12 @@ extern "C" {
 #else
             for (ull class_id = 0; class_id < CLASSES; ++class_id) {
 #endif
-                float clipped_cs = clip_cs(class_sums[class_id]);
-                int y = Y_batch[e * CLASSES + class_id];
-                if (clipped_cs == y) continue;  // No update if class sum equals target
-                // int local_target = 1 - 2 * (clipped_cs > y);
-                int local_target = y > 0 ? 1 : -1;
-
-                if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;
+                int local_target = targets[e * CLASSES + class_id];
+                if (local_target == 0) continue;
 
                 double update_prob = update_probs[class_id];
-                if (norm_true_uprob && y > 0) update_prob = update_prob / pos_target_sum;
-                if (norm_false_uprob && y <= 0) update_prob = update_prob / neg_target_sum;
+                if (norm_true_uprob && local_target == 1) update_prob = update_prob / total_true_pob;
+                if (norm_false_uprob && local_target == -1) update_prob = update_prob / total_false_prob;
 
                 float *local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
@@ -558,8 +561,7 @@ extern "C" {
                 if (should_update) {  // CLause update with prob update_p else skip
                     if (type1a) {
 #if WEIGHTED
-                        if (fabs(*local_weight) < MAX_WEIGHT)
-                            (*local_weight) += sign * 1.0f;
+                        if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
 #endif
 #if BIAS
                         bias_weights[class_id] += sign * 1.0f;
@@ -573,8 +575,7 @@ extern "C" {
                         type1b_fb(&localRNG, ta_state);
                     } else if (type2) {
 #if WEIGHTED
-                        if (fabs(*local_weight) < MAX_WEIGHT)
-                            (*local_weight) -= sign * 1.0f;
+                        if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
 #endif
 #if BIAS
                         bias_weights[class_id] -= sign * 1.0f;
