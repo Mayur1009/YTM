@@ -7,7 +7,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">= 3.11"
-version = "0.5.1+dev3"
+version = "0.5.1+dev4"
 
 [build-system]
 build-backend = "hatchling.build"
