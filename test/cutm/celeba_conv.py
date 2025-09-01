@@ -96,7 +96,7 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
 
         test_timer = Timer()
         with test_timer:
-            test_preds, test_cs = tm.predict(encoded_X_test, is_X_encoded=True, block_size=1024)
+            test_preds, test_cs = tm.predict(encoded_X_test, is_X_encoded=True)
         test_time = test_timer.elapsed()
 
         test_prob = (np.clip(test_cs, -tm.T, tm.T) + tm.T) / (2 * tm.T)
