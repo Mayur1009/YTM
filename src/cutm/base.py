@@ -323,25 +323,27 @@ class BaseTM:
                     targets[i, j] = 0
                     continue
 
-        print(np.sum(targets == 1, axis=0))
-        print(np.sum(targets == -1, axis=0))
-        print(np.sum(targets == 0, axis=0))
-
         return targets
 
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
+        N = encoded_X.shape[0]
         # Process optional arguments
         block_size = opt_args.get("block_size", self.block_size)
         grid_size = opt_args.get("grid_size", self.grid_size)
-        true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
-        false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
         norm_true_update_prob = opt_args.get("norm_true_update_prob", False)  # In case of multi-label
         norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
         label_sampling = opt_args.get("label_sampling", False)
 
-        N = encoded_X.shape[0]
+        # Calculate default mods based on label distribution
+        sample_per_label = np.sum(encoded_Y > 0, axis=0)
+        not_samples_per_label = N - sample_per_label
+        default_true_mod = sample_per_label / sample_per_label.mean()
+        default_false_mod = not_samples_per_label / (sample_per_label * (self.number_of_outputs - 1))
+        true_mod = np.asarray(opt_args.get("true_mod", default_true_mod), dtype=np.float64)
+        false_mod = np.asarray(opt_args.get("false_mod", default_false_mod), dtype=np.float64)
+
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
 
