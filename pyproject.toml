@@ -16,6 +16,9 @@ requires = ["hatchling"]
 [tool.hatch.build]
 sources =["src"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/ytm", "src/cutm", "src/pytm", "src/tm_utils"]
+
 [tool.setuptools.package-data]
 "*" = ["cuda/*.cu"]
 
