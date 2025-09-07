@@ -2,7 +2,7 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
     #define CLAUSES 100ULL
     #define THRESH 500
-    #define S 10
+    #define S 10.0
     #define Q 1
     #define DIM0 28ULL
     #define DIM1 28ULL
@@ -23,6 +23,7 @@ __device__ const double H[CLASSES] = {1};
     #define BIAS 0
     #define WEIGHTED 1
     #define MAX_WEIGHT 3.4e38f
+    #define S_NEG_POLARITY S
 #endif
 
 #include <curand_kernel.h>
@@ -30,6 +31,7 @@ __device__ const double H[CLASSES] = {1};
 #define CLAUSES_PER_BANK (CLAUSES / CLAUSE_BANKS)
 #define VECTORIZED_LIMIT (LITERALS & ~3)
 #define S_INV (1.0f / S)
+#define S_NEG_POLARITY_INV (1.0f / S_NEG_POLARITY)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
 #define HALF_STATE (MAX_TA_STATE / 2)
 #define INT_SIZE 32
@@ -378,7 +380,9 @@ extern "C" {
         }
     }
 
-    __device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, const unsigned int *patch) {
+    __device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, const unsigned int *patch,
+                                     const int sign) {
+        float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
         for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
             uint4 ta_vec = *((uint4 *)&ta_state[li]);
             uint4 patch_vec = {
@@ -393,10 +397,10 @@ extern "C" {
             ta_vec.z += (patch_vec.z == 1 && ta_vec.z < MAX_TA_STATE);
             ta_vec.w += (patch_vec.w == 1 && ta_vec.w < MAX_TA_STATE);
 
-            ta_vec.x -= (patch_vec.x == 0 && ta_vec.x > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.y -= (patch_vec.y == 0 && ta_vec.y > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.z -= (patch_vec.z == 0 && ta_vec.z > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.w -= (patch_vec.w == 0 && ta_vec.w > 0 && curand_uniform(rng) <= S_INV);
+            ta_vec.x -= (patch_vec.x == 0 && ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.y -= (patch_vec.y == 0 && ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.z -= (patch_vec.z == 0 && ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.w -= (patch_vec.w == 0 && ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
 
             // Write back the vectorized results
             *((uint4 *)&ta_state[li]) = ta_vec;
@@ -407,34 +411,36 @@ extern "C" {
             unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
             if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
                 ta_state[li] += 1;
-            } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
+            } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
         }
     }
 
-    __device__ inline void type1b_fb_scalar(curandState *rng, unsigned int *ta_state) {
+    __device__ inline void type1b_fb_scalar(curandState *rng, unsigned int *ta_state, const int sign) {
+        float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
         for (int li = 0; li < LITERALS; ++li) {
-            if (ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
+            if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
         }
     }
 
-    __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state) {
+    __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state, const int sign) {
+        float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
         for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
             uint4 ta_vec = *((uint4 *)&ta_state[li]);
 
-            ta_vec.x -= (ta_vec.x > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.y -= (ta_vec.y > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.z -= (ta_vec.z > 0 && curand_uniform(rng) <= S_INV);
-            ta_vec.w -= (ta_vec.w > 0 && curand_uniform(rng) <= S_INV);
+            ta_vec.x -= (ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.y -= (ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.z -= (ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.w -= (ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
 
             *((uint4 *)&ta_state[li]) = ta_vec;
         }
 
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-            if (ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
+            if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
         }
@@ -569,10 +575,10 @@ extern "C" {
 #if (MAX_INCLUDED_LITERALS < LITERALS)
                         if (num_includes[clause] < MAX_INCLUDED_LITERALS) type1a_fb(&localRNG, ta_state, patch);
 #else
-                        type1a_fb(&localRNG, ta_state, patch);
+                        type1a_fb(&localRNG, ta_state, patch, sign);
 #endif
                     } else if (type1b) {
-                        type1b_fb(&localRNG, ta_state);
+                        type1b_fb(&localRNG, ta_state, sign);
                     } else if (type2) {
 #if WEIGHTED
                         if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;

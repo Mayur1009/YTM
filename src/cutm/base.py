@@ -27,6 +27,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     bias: bool
     weighted: bool
     max_weight: float
+    s_neg_polarity: float
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -35,9 +36,9 @@ class BaseTMOptArgs(TypedDict, total=False):
 class FitOptArgs(TypedDict, total=False):
     block_size: int
     grid_size: int
+    clause_drop_p: float
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
-    clause_drop_p: float
     norm_true_update_prob: bool
     norm_false_update_prob: bool
     label_sampling: bool | int
@@ -76,6 +77,7 @@ class BaseTM:
             "bias": opt_args.get("bias", False),
             "weighted": opt_args.get("weighted", True),
             "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
+            "s_neg_polarity": opt_args.get("s_neg_polarity", s),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -98,6 +100,7 @@ class BaseTM:
         self.bias = self.opt_args["bias"]
         self.weighted = self.opt_args["weighted"]
         self.max_weight = self.opt_args["max_weight"]
+        self.s_neg_polarity = self.opt_args["s_neg_polarity"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
@@ -161,6 +164,7 @@ class BaseTM:
         #define BIAS {1 if self.bias else 0}
         #define WEIGHTED {1 if self.weighted else 0}
         #define MAX_WEIGHT {self.max_weight}
+        #define S_NEG_POLARITY {self.s_neg_polarity}
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
