@@ -299,14 +299,25 @@ class BaseTM:
         targets = np.zeros_like(Y, dtype=np.int32)
 
         if label_sampling is False or label_sampling <= 0:
+            # Original behaviour
             targets[Y > 0] = 1
+            p = self.q / max(1, self.number_of_outputs - 1)
+            for i in range(N):
+                # Each negeative class can get feedback with prob (q / number_of_outputs - 1)
+                false_classes = np.where(Y[i, :] <= 0)[0]
+                not_skip = self.rng.random(size=len(false_classes)) <= p
+                targets[i, false_classes[not_skip]] = -1
         else:
+            # Drop label such that the TM sees the same number of labels for each class
             per_class_counts = np.sum(Y > 0, axis=0)
-            assert len(per_class_counts) == self.number_of_outputs, "Mismatch in number of classes"
+
+            # min_cnt is the number of true labels to keep for each class.
             if isinstance(label_sampling, bool) and label_sampling is True:
                 min_cnt = np.min(per_class_counts)
             else:
                 min_cnt = min(N, label_sampling)
+
+            # Select min-cnt true labels for each class
             for i in range(self.number_of_outputs):
                 inds = np.where(Y[:, i] > 0)[0]
                 if len(inds) > min_cnt:
@@ -315,17 +326,29 @@ class BaseTM:
                 else:
                     targets[inds, i] = 1
 
-        for i in range(N):
-            selected_trues = np.where(targets[i, :] > 0)[0]
-            if len(selected_trues) == 0:
-                continue
-
-            false_classes = np.where(Y[i, :] <= 0)[0]
-            targets[i, false_classes] = -1
-            for j in false_classes:
-                if self.rng.random() > (self.q) / max(1, self.number_of_outputs - 1):
-                    targets[i, j] = 0
+            # Based on the number of selected true labels per sample, we also select the same amount of false labels.
+            # So, if a sample has 3 true labels, we select 3 false labels.
+            for i in range(N):
+                selected_trues = np.where(targets[i, :] > 0)[0]
+                if len(selected_trues) == 0:
                     continue
+
+                false_classes = np.where(Y[i, :] <= 0)[0]
+                sel_false = self.rng.choice(false_classes, size=min(len(selected_trues), len(false_classes)), replace=False)
+                targets[i, sel_false] = -1
+
+
+            # Or, maybe we should also randomly select min_cnt false labels for each class as well.
+            # not_per_class_counts = N - per_class_counts
+            # min_not_cnt = np.min(not_per_class_counts)
+            # min_not_cnt = int(self.q * min_cnt)
+            # for i in range(self.number_of_outputs):
+            #     inds = np.where(Y[:, i] <= 0)[0]
+            #     if len(inds) > min_not_cnt:
+            #         sel = self.rng.choice(inds, size=min_not_cnt, replace=False)
+            #         targets[sel, i] = -1
+            #     else:
+            #         targets[inds, i] = -1
 
         return targets
 
