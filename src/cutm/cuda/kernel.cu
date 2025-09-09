@@ -508,29 +508,19 @@ extern "C" {
                                   float *bias_weights, const float *class_sums, const int *selected_patch_ids,
                                   const int *num_includes, const double *true_mod, const double *false_mod,
                                   const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *targets,
-                                  const int e, const int norm_true_uprob, const int norm_false_uprob) {
+                                  const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
 
         // Should this be separate kernel?
         double update_probs[CLASSES];
-        double total_true_pob = 1e-8;
-        double total_false_prob = 1e-8;
         for (int class_id = 0; class_id < CLASSES; ++class_id) {
             float clipped_cs = clip_cs(class_sums[class_id]);
             int local_target = targets[e * CLASSES + class_id];
             int y = THRESH * (local_target == 1 ? 1 : -1);
             double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
             update_probs[class_id] = update_probability((double)clipped_cs, (double)y, mod, H[class_id]);
-
-            if (local_target == 1) {
-                total_true_pob += (update_probs[class_id]);
-                // total_false_prob += (1.0 - update_probs[class_id]);
-            } else {
-                total_false_prob += (update_probs[class_id]);
-                // total_true_pob += (1.0 - update_probs[class_id]);
-            }
         }
 
         for (ull clause = index; clause < CLAUSES; clause += stride) {
@@ -552,44 +542,45 @@ extern "C" {
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
-                double update_prob = update_probs[class_id];
-                if (norm_true_uprob && local_target == 1) update_prob = update_prob / total_true_pob;
-                if (norm_false_uprob && local_target == -1) update_prob = update_prob / total_false_prob;
-
                 float *local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
-                bool should_update = (curand_uniform(&localRNG) <= update_prob);
-                bool type1a =
-                    ((local_target * sign) > 0 && local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS);
-                bool type1b = ((local_target * sign) > 0 &&
-                               !(local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS));
-                bool type2 = ((local_target * sign) < 0 && local_clause_output);
+                double update_prob = update_probs[class_id];
 
-                if (should_update) {  // CLause update with prob update_p else skip
-                    if (type1a) {
+                bool should_update = (curand_uniform(&localRNG) <= update_prob);
+                bool clause_has_space = (num_includes[clause] <= MAX_INCLUDED_LITERALS);
+                bool t1 = (local_target * sign) > 0;
+
+                bool type1a = (should_update && t1 && local_clause_output && clause_has_space);
+                bool type1b = (should_update && t1 && !(local_clause_output && clause_has_space));
+                bool type2 = (should_update && (local_target * sign) < 0 && local_clause_output);
+
+                if (type1a) {
 #if WEIGHTED
-                        if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
+                    if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
 #endif
 #if BIAS
-                        bias_weights[class_id] += sign * 1.0f;
+                    bias_weights[class_id] += sign * 1.0f;
 #endif
-                        type1a_fb(&localRNG, ta_state, patch, sign);
-                    } else if (type1b) {
-                        type1b_fb(&localRNG, ta_state, sign);
-                    } else if (type2) {
+                    type1a_fb(&localRNG, ta_state, patch, sign);
+                }
+
+                if (type1b) {
+                    type1b_fb(&localRNG, ta_state, sign);
+                }
+
+                if (type2) {
 #if WEIGHTED
-                        if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
+                    if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
 #endif
 #if BIAS
-                        bias_weights[class_id] -= sign * 1.0f;
+                    bias_weights[class_id] -= sign * 1.0f;
 #endif
 #if NEGATIVE_CLAUSES == 0
-                        if (*local_weight < 1) *local_weight = 1;
-                        if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
+                    if (*local_weight < 1) *local_weight = 1;
+                    if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
 #endif
-                        type2_fb(ta_state, patch);
-                    }
+                    type2_fb(ta_state, patch);
                 }
             }
         }

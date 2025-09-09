@@ -40,8 +40,6 @@ class FitOptArgs(TypedDict, total=False):
     shuffle: bool
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
-    norm_true_update_prob: bool
-    norm_false_update_prob: bool
     label_sampling: bool | int
 
 
@@ -191,7 +189,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPPiii")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")
@@ -367,8 +365,6 @@ class BaseTM:
         block_size = opt_args.get("block_size", self.block_size)
         grid_size = opt_args.get("grid_size", self.grid_size)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
-        norm_true_update_prob = opt_args.get("norm_true_update_prob", False)  # In case of multi-label
-        norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
         label_sampling = opt_args.get("label_sampling", False)
 
         # Calculate default mods based on label distribution
@@ -466,8 +462,6 @@ class BaseTM:
                 encoded_X_gpu,
                 targets_gpu,
                 np.int32(e),
-                np.int32(1) if norm_true_update_prob else np.int32(0),
-                np.int32(1) if norm_false_update_prob else np.int32(0),
             )
             ctx.synchronize()
 
