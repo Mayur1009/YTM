@@ -23,19 +23,19 @@ class BaseTMOptArgs(TypedDict, total=False):
     negative_polarity: bool
     encode_loc: bool
     coalesced: bool
-    h: float | list[float]
-    bias: bool
+    h: float | list[float] # Experimental
+    bias: bool  # Does not work
     seed: int | None
     block_size: int
 
 
 class FitOptArgs(TypedDict, total=False):
     block_size: int
-    true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
-    false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
+    true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]  # Experimental
+    false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]  # Experimental
     clause_drop_p: float
-    norm_true_update_prob: bool
-    norm_false_update_prob: bool
+    norm_true_update_prob: bool  # Do not use
+    norm_false_update_prob: bool  # Do not use
 
 
 class BaseTM:
@@ -269,7 +269,7 @@ class BaseTM:
         true_mod = np.asarray(opt_args.get("true_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         false_mod = np.asarray(opt_args.get("false_mod", np.ones(self.number_of_outputs)), dtype=np.float64)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
-        norm_true_update_prob = opt_args.get("norm_true_update_prob", False) # In case of multi-label
+        norm_true_update_prob = opt_args.get("norm_true_update_prob", False)  # In case of multi-label
         norm_false_update_prob = opt_args.get("norm_false_update_prob", False)
 
         N = encoded_X.shape[0]
@@ -418,7 +418,6 @@ class BaseTM:
             class_sums[i : i + max_safe_N] = class_sums_safe
 
         return class_sums
-
 
     #### CAUSE and WEIGHT OPERATIONS ####
     def get_ta_state(self):

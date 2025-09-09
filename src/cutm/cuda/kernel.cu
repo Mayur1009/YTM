@@ -507,23 +507,24 @@ extern "C" {
 
     __device__ inline double update_probability(double v, double y, double mod, double h) {
         double prob;
-        if (y > 0) {
-            if (v <= y * (2 * h - 1))
-                prob = (y - v) / (2 * y);
-            else {
-                double a = (1 - h);
-                double b = (y - v) / (2 * y * a);
-                prob = a * (1 - pow(1 - b, 1.0 / mod));
-            }
-        } else {
-            if (v > y * (2 * h - 1))
-                prob = (y - v) / (2 * y);
-            else {
-                double a = (1 - h);
-                double b = (y - v) / (2 * y * a);
-                prob = a * (1 - pow(1 - b, 1.0 / mod));
-            }
-        }
+        // if (y > 0) {
+        //     if (v <= y * (2 * h - 1))
+        //         prob = (y - v) / (2 * y);
+        //     else {
+        //         double a = (1 - h);
+        //         double b = (y - v) / (2 * y * a);
+        //         prob = a * (1 - pow(1 - b, 1.0 / mod));
+        //     }
+        // } else {
+        //     if (v > y * (2 * h - 1))
+        //         prob = (y - v) / (2 * y);
+        //     else {
+        //         double a = (1 - h);
+        //         double b = (y - v) / (2 * y * a);
+        //         prob = a * (1 - pow(1 - b, 1.0 / mod));
+        //     }
+        // }
+        prob = (y - v) / (2 * y);
         return prob;
     }
 
@@ -572,15 +573,17 @@ extern "C" {
                 if (local_target == -1 && curand_uniform(&localRNG) > Q_PROB) continue;
 
                 double update_prob = update_probs[class_id];
-                if (focusced_pos_sampling && local_target == 1) update_prob = update_prob / pos_target_sum;
-                if (focused_neg_sampling && local_target == -1) update_prob = update_prob / neg_target_sum;
+                // if (focusced_pos_sampling && local_target == 1) update_prob = update_prob / pos_target_sum;
+                // if (focused_neg_sampling && local_target == -1) update_prob = update_prob / neg_target_sum;
 
                 float *local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
                 bool should_update = (curand_uniform(&localRNG) <= update_prob);
-                bool type1a = ((local_target * sign) > 0 && local_clause_output);
-                bool type1b = ((local_target * sign) > 0 && !local_clause_output);
+                bool type1a =
+                    ((local_target * sign) > 0 && local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS);
+                bool type1b = ((local_target * sign) > 0 &&
+                               !(local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS));
                 bool type2 = ((local_target * sign) < 0 && local_clause_output);
 
                 if (should_update) {  // CLause update with prob update_p else skip
@@ -589,11 +592,7 @@ extern "C" {
 #if BIAS
                         bias_weights[class_id] += sign * 1.0f;
 #endif
-#if (MAX_INCLUDED_LITERALS < LITERALS)
-                        if (num_includes[clause] < MAX_INCLUDED_LITERALS) type1a_fb(&localRNG, ta_state, patch);
-#else
                         type1a_fb(&localRNG, ta_state, patch);
-#endif
                     } else if (type1b) {
                         type1b_fb(&localRNG, ta_state);
                     } else if (type2) {
