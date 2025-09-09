@@ -560,8 +560,10 @@ extern "C" {
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
                 bool should_update = (curand_uniform(&localRNG) <= update_prob);
-                bool type1a = ((local_target * sign) > 0 && local_clause_output);
-                bool type1b = ((local_target * sign) > 0 && !local_clause_output);
+                bool type1a =
+                    ((local_target * sign) > 0 && local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS);
+                bool type1b = ((local_target * sign) > 0 &&
+                               !(local_clause_output && num_includes[clause] <= MAX_INCLUDED_LITERALS));
                 bool type2 = ((local_target * sign) < 0 && local_clause_output);
 
                 if (should_update) {  // CLause update with prob update_p else skip
@@ -572,11 +574,7 @@ extern "C" {
 #if BIAS
                         bias_weights[class_id] += sign * 1.0f;
 #endif
-#if (MAX_INCLUDED_LITERALS < LITERALS)
-                        if (num_includes[clause] < MAX_INCLUDED_LITERALS) type1a_fb(&localRNG, ta_state, patch);
-#else
                         type1a_fb(&localRNG, ta_state, patch, sign);
-#endif
                     } else if (type1b) {
                         type1b_fb(&localRNG, ta_state, sign);
                     } else if (type2) {
