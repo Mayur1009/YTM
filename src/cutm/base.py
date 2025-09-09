@@ -37,6 +37,7 @@ class FitOptArgs(TypedDict, total=False):
     block_size: int
     grid_size: int
     clause_drop_p: float
+    shuffle: bool
     true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     norm_true_update_prob: bool
@@ -355,6 +356,13 @@ class BaseTM:
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
         N = encoded_X.shape[0]
+
+        shuffle = opt_args.get("shuffle", True)
+        if shuffle:
+            perm = self.rng.permutation(N)
+            encoded_X = encoded_X[perm]
+            encoded_Y = encoded_Y[perm]
+
         # Process optional arguments
         block_size = opt_args.get("block_size", self.block_size)
         grid_size = opt_args.get("grid_size", self.grid_size)
