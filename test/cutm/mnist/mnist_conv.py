@@ -16,7 +16,7 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         np.random.shuffle(iota)
         with train_fit_timer:
             # tm.fit(X_train[iota], Y_train[iota])
-            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True, block_size=16)
+            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True)
 
         test_timer = Timer()
         with test_timer:

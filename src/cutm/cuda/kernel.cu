@@ -19,7 +19,6 @@
     #define ENCODE_LOC 1
     #define COALESCED 1
     #define CLAUSE_BANKS 1
-__device__ const double H[CLASSES] = {1};
     #define BIAS 0
     #define WEIGHTED 1
     #define MAX_WEIGHT 3.4e38f
@@ -482,33 +481,15 @@ extern "C" {
         }
     }
 
-    __device__ inline double update_probability(double v, double y, double mod, double h) {
-        double prob;
-        if (y > 0) {
-            if (v <= y * (2 * h - 1))
-                prob = (y - v) / (2 * y);
-            else {
-                double a = (1 - h);
-                double b = (y - v) / (2 * y * a);
-                prob = a * (1 - pow(1 - b, 1.0 / mod));
-            }
-        } else {
-            if (v > y * (2 * h - 1))
-                prob = (y - v) / (2 * y);
-            else {
-                double a = (1 - h);
-                double b = (y - v) / (2 * y * a);
-                prob = a * (1 - pow(1 - b, 1.0 / mod));
-            }
-        }
+    __device__ inline double uprob_fun(double v, double y) {
+        double prob = (y - v) / (2 * y);
         return prob;
     }
 
     __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                                   float *bias_weights, const float *class_sums, const int *selected_patch_ids,
-                                  const int *num_includes, const double *true_mod, const double *false_mod,
-                                  const unsigned int *clause_drop_mask, const unsigned int *X_batch, const int *targets,
-                                  const int e) {
+                                  const int *num_includes, const unsigned int *clause_drop_mask,
+                                  const unsigned int *X_batch, const int *targets, const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
@@ -519,8 +500,7 @@ extern "C" {
             float clipped_cs = clip_cs(class_sums[class_id]);
             int local_target = targets[e * CLASSES + class_id];
             int y = THRESH * (local_target == 1 ? 1 : -1);
-            double mod = local_target == 1 ? true_mod[class_id] : false_mod[class_id];
-            update_probs[class_id] = update_probability((double)clipped_cs, (double)y, mod, H[class_id]);
+            update_probs[class_id] = uprob_fun((double)clipped_cs, (double)y);
         }
 
         for (ull clause = index; clause < CLAUSES; clause += stride) {

@@ -23,7 +23,6 @@ class BaseTMOptArgs(TypedDict, total=False):
     negative_polarity: bool
     encode_loc: bool
     coalesced: bool
-    h: float | list[float]
     bias: bool
     weighted: bool
     max_weight: float
@@ -38,8 +37,6 @@ class FitOptArgs(TypedDict, total=False):
     grid_size: int
     clause_drop_p: float
     shuffle: bool
-    true_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
-    false_mod: list[float] | np.ndarray[tuple[int], np.dtype[np.float64]]
     label_sampling: bool | int
 
 
@@ -72,7 +69,6 @@ class BaseTM:
             "negative_polarity": opt_args.get("negative_polarity", True),
             "encode_loc": opt_args.get("encode_loc", True),
             "coalesced": opt_args.get("coalesced", True),
-            "h": opt_args.get("h", 1.0),
             "bias": opt_args.get("bias", False),
             "weighted": opt_args.get("weighted", True),
             "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
@@ -107,11 +103,6 @@ class BaseTM:
         self.number_of_clause_banks = 1 if self.coalesced else self.number_of_outputs
         self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
 
-        if isinstance(self.opt_args["h"], list):
-            assert len(self.opt_args["h"]) == n_classes, "If h is a list, it must have length equal to n_classes."
-            self.h = np.asarray(self.opt_args["h"], dtype=np.float64)
-        else:
-            self.h = np.asarray([self.opt_args["h"]] * n_classes, dtype=np.float64)
 
         if not hasattr(self, "min_y"):
             self.min_y = None
@@ -159,7 +150,6 @@ class BaseTM:
         #define ENCODE_LOC {1 if self.encode_loc else 0}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
-        __device__ const double H[{self.number_of_outputs}] = {{{",".join(map(str, self.h))}}};
         #define BIAS {1 if self.bias else 0}
         #define WEIGHTED {1 if self.weighted else 0}
         #define MAX_WEIGHT {self.max_weight}
@@ -189,7 +179,7 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")
@@ -367,14 +357,6 @@ class BaseTM:
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
         label_sampling = opt_args.get("label_sampling", False)
 
-        # Calculate default mods based on label distribution
-        sample_per_label = np.sum(encoded_Y > 0, axis=0)
-        not_samples_per_label = N - sample_per_label
-        default_true_mod = sample_per_label / sample_per_label.mean()
-        default_false_mod = not_samples_per_label / (sample_per_label * (self.number_of_outputs - 1))
-        true_mod = np.asarray(opt_args.get("true_mod", default_true_mod), dtype=np.float64)
-        false_mod = np.asarray(opt_args.get("false_mod", default_false_mod), dtype=np.float64)
-
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
 
@@ -382,12 +364,6 @@ class BaseTM:
         targets = self._target_sampling((encoded_Y > 0).astype(np.int32), label_sampling)
         targets_gpu = mem_alloc(targets.nbytes)
         memcpy_htod(targets_gpu, targets)
-
-        # Class probability balancer
-        true_mod_gpu = mem_alloc(true_mod.nbytes)
-        false_mod_gpu = mem_alloc(false_mod.nbytes)
-        memcpy_htod(true_mod_gpu, true_mod)
-        memcpy_htod(false_mod_gpu, false_mod)
 
         # Drop clauses
         if clause_drop_p > 0.0:
@@ -456,8 +432,6 @@ class BaseTM:
                 class_sum_gpu,
                 selected_patch_ids_gpu,
                 num_includes_gpu,
-                true_mod_gpu,
-                false_mod_gpu,
                 clause_drop_mask_gpu,
                 encoded_X_gpu,
                 targets_gpu,
