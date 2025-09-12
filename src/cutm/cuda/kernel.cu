@@ -23,12 +23,18 @@
     #define WEIGHTED 1
     #define MAX_WEIGHT 3.4e38f
     #define S_NEG_POLARITY S
+__device__ double H[CLASSES] = {0.5};
 #endif
 
 #include <curand_kernel.h>
 
 #define CLAUSES_PER_BANK (CLAUSES / CLAUSE_BANKS)
-#define VECTORIZED_LIMIT (LITERALS & ~3)
+#if ((LITERALS / 2) & 1)        // Ensure that LITERALS/2 is even, because the vectorized code does not work
+                                // otherwise.......dont know why....some memory aligment issue
+    #define VECTORIZED_LIMIT 0  // odd
+#else
+    #define VECTORIZED_LIMIT (LITERALS & ~3)  // even
+#endif
 #define S_INV (1.0f / S)
 #define S_NEG_POLARITY_INV (1.0f / S_NEG_POLARITY)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
@@ -136,40 +142,32 @@ extern "C" {
             const unsigned int *ta_state = &global_ta_states[clause * LITERALS];
             unsigned int *packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
             int total_count = 0;
+            memset(packed_clause, 0, NUM_LITERAL_CHUNKS * sizeof(unsigned int));
+            for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
+                uint4 ta_vec = *((uint4 *)&ta_state[li]);
 
-            for (ull chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
-                unsigned int packed_value = 0;
-                ull start_lit = chunk * INT_SIZE;
-                ull end_lit = min(start_lit + INT_SIZE, LITERALS);
-
-                int vectorized_end =
-                    start_lit + ((end_lit - start_lit) & ~3);  // Ensure vectorized end is a multiple of 4
-                for (int li = start_lit; li < vectorized_end; li += 4) {
-                    uint4 ta_vec = *((uint4 *)&ta_state[li]);
-                    if (ta_vec.x > HALF_STATE) {
-                        packed_value |= (1u << (li % INT_SIZE));
-                        total_count++;
-                    }
-                    if (ta_vec.y > HALF_STATE) {
-                        packed_value |= (1u << ((li + 1) % INT_SIZE));
-                        total_count++;
-                    }
-                    if (ta_vec.z > HALF_STATE) {
-                        packed_value |= (1u << ((li + 2) % INT_SIZE));
-                        total_count++;
-                    }
-                    if (ta_vec.w > HALF_STATE) {
-                        packed_value |= (1u << ((li + 3) % INT_SIZE));
-                        total_count++;
-                    }
+                if (ta_vec.x > HALF_STATE) {
+                    packed_clause[li / INT_SIZE] |= (1u << (li % INT_SIZE));
+                    total_count++;
                 }
-                for (int li = vectorized_end; li < end_lit; ++li) {
-                    if (ta_state[li] > HALF_STATE) {
-                        packed_value |= (1u << (li % INT_SIZE));
-                        total_count++;
-                    }
+                if (ta_vec.y > HALF_STATE) {
+                    packed_clause[(li + 1) / INT_SIZE] |= (1u << ((li + 1) % INT_SIZE));
+                    total_count++;
                 }
-                packed_clause[chunk] = packed_value;
+                if (ta_vec.z > HALF_STATE) {
+                    packed_clause[(li + 2) / INT_SIZE] |= (1u << ((li + 2) % INT_SIZE));
+                    total_count++;
+                }
+                if (ta_vec.w > HALF_STATE) {
+                    packed_clause[(li + 3) / INT_SIZE] |= (1u << ((li + 3) % INT_SIZE));
+                    total_count++;
+                }
+            }
+            for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
+                if (ta_state[li] > HALF_STATE) {
+                    packed_clause[li / INT_SIZE] |= (1u << (li % INT_SIZE));
+                    total_count++;
+                }
             }
             num_includes[clause] = total_count;
         }
