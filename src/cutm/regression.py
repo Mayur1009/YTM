@@ -25,8 +25,7 @@ class RegressionTM(BaseTM):
 
         encoded_Y = ((Y - self.min_y) / (self.max_y - self.min_y) * self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, **opt_args)
-        return
+        return self._fit(encoded_X, encoded_Y, **opt_args)
 
     def predict(self, X: np.ndarray, is_X_encoded=False, block_size: int | None = None, grid_size: int | None = None):
         encoded_X = self.encode(X) if not is_X_encoded else X

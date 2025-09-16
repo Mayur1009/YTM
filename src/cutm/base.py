@@ -41,6 +41,7 @@ class FitOptArgs(TypedDict, total=False):
     label_sampling: bool | int
     g_pos: float | list[float]
     g_neg: float | list[float]
+    log: bool
 
 
 def _float_or_list_to_array(x: float | list[float], size: int):
@@ -375,12 +376,25 @@ class BaseTM:
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
         N = encoded_X.shape[0]
+        logged_data = {}
+
+        # To log some data per sample during fitting
+        log = opt_args.get("log", False)
+
+        if log:
+            logged_data["opt_args"] = opt_args
 
         shuffle = opt_args.get("shuffle", True)
+        iota = np.arange(N)
+
         if shuffle:
-            perm = self.rng.permutation(N)
-            encoded_X = encoded_X[perm]
-            encoded_Y = encoded_Y[perm]
+            self.rng.shuffle(iota)
+
+        if log:
+            logged_data["iota"] = iota
+
+        encoded_X = encoded_X[iota]
+        encoded_Y = encoded_Y[iota]
 
         # Process optional arguments
         block_size = opt_args.get("block_size", self.block_size)
@@ -397,6 +411,9 @@ class BaseTM:
         targets = self._target_sampling((encoded_Y > 0).astype(np.int32), label_sampling)
         targets_gpu = mem_alloc(targets.nbytes)
         memcpy_htod(targets_gpu, targets)
+
+        if log:
+            logged_data["targets"] = targets
 
         # Drop clauses
         if clause_drop_p > 0.0:
@@ -415,7 +432,7 @@ class BaseTM:
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
-        update_probs_gpu = mem_alloc(self.number_of_outputs * 8) # double
+        update_probs_gpu = mem_alloc(self.number_of_outputs * 8)  # double
         clause_outputs_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
@@ -425,6 +442,10 @@ class BaseTM:
             self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size
         )
         config_outputs = kernel_config(self.number_of_outputs, device_props, block_size, grid_size)
+
+        if log:
+            class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
+            update_probs = np.zeros((N, self.number_of_outputs), dtype=np.float64)
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -490,7 +511,15 @@ class BaseTM:
             )
             ctx.synchronize()
 
-        return
+            if log:
+                memcpy_dtoh(class_sums[e : e + 1], class_sum_gpu)  # pyright: ignore[reportPossiblyUnboundVariable]
+                memcpy_dtoh(update_probs[e : e + 1], update_probs_gpu)  # pyright: ignore[reportPossiblyUnboundVariable]
+
+        if log:
+            logged_data["class_sums"] = class_sums  # pyright: ignore[reportPossiblyUnboundVariable]
+            logged_data["update_probs"] = update_probs  # pyright: ignore[reportPossiblyUnboundVariable]
+
+        return logged_data
 
     def _pack_clauses_gpu(self, block_size, grid_size):
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)

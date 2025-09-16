@@ -28,14 +28,14 @@ class MultiOutputTM(BaseTM):
         Y: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
         is_X_encoded: bool = False,
         **opt_args: Unpack[FitOptArgs]
-    ) -> None:
+    ):
         # Input validation
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
 
         encoded_Y = np.where(Y == 1, self.T, -self.T).astype(np.int32)
         encoded_X = self.encode(X) if not is_X_encoded else X
-        self._fit(encoded_X, encoded_Y, **opt_args)
+        return self._fit(encoded_X, encoded_Y, **opt_args)
 
     def score(
         self,
