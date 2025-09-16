@@ -597,7 +597,7 @@ class BaseTM:
 
     def get_literals(self):
         ta_states = self.get_ta_state()
-        return (ta_states > (self.number_of_ta_states // 2)).astype(np.uint32)
+        return (ta_states > ((self.number_of_ta_states - 1) // 2)).astype(np.uint32)
 
     def get_weights(self):
         clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)

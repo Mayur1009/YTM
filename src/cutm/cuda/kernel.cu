@@ -462,18 +462,18 @@ extern "C" {
                 (patch[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
             };
 
-            // Increment ta_state elements where patch is 0
-            ta_vec.x += (patch_vec.x == 0);
-            ta_vec.y += (patch_vec.y == 0);
-            ta_vec.z += (patch_vec.z == 0);
-            ta_vec.w += (patch_vec.w == 0);
+            // Increment ta_state elements where patch is 0 and ta_state <= HALF_STATE
+            ta_vec.x += (patch_vec.x == 0 && ta_vec.x <= HALF_STATE);
+            ta_vec.y += (patch_vec.y == 0 && ta_vec.y <= HALF_STATE);
+            ta_vec.z += (patch_vec.z == 0 && ta_vec.z <= HALF_STATE);
+            ta_vec.w += (patch_vec.w == 0 && ta_vec.w <= HALF_STATE);
 
             *((uint4 *)&ta_state[li]) = ta_vec;
         }
 
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
             unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (patch_bit == 0) {
+            if (patch_bit == 0 && ta_state[li] <= HALF_STATE) {
                 ta_state[li] += 1;
             }
         }
