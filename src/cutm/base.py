@@ -27,6 +27,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     weighted: bool
     max_weight: float
     s_neg_polarity: float
+    h: float | list[float]
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -38,6 +39,18 @@ class FitOptArgs(TypedDict, total=False):
     clause_drop_p: float
     shuffle: bool
     label_sampling: bool | int
+    g_pos: float | list[float]
+    g_neg: float | list[float]
+
+
+def _float_or_list_to_array(x: float | list[float], size: int):
+    if isinstance(x, float) or isinstance(x, int):
+        return np.array([x] * size, dtype=np.float64)
+    elif isinstance(x, list):
+        assert len(x) == size, f"List must be of size {size}."
+        return np.array(x, dtype=np.float64)
+    else:
+        raise ValueError("x must be a float or a list of floats.")
 
 
 class BaseTM:
@@ -73,6 +86,7 @@ class BaseTM:
             "weighted": opt_args.get("weighted", True),
             "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
             "s_neg_polarity": opt_args.get("s_neg_polarity", s),
+            "h": opt_args.get("h", 0.5),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -96,13 +110,13 @@ class BaseTM:
         self.weighted = self.opt_args["weighted"]
         self.max_weight = self.opt_args["max_weight"]
         self.s_neg_polarity = self.opt_args["s_neg_polarity"]
+        self.h = _float_or_list_to_array(self.opt_args["h"], self.number_of_outputs)
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
 
         self.number_of_clause_banks = 1 if self.coalesced else self.number_of_outputs
         self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
-
 
         if not hasattr(self, "min_y"):
             self.min_y = None
@@ -154,6 +168,7 @@ class BaseTM:
         #define WEIGHTED {1 if self.weighted else 0}
         #define MAX_WEIGHT {self.max_weight}
         #define S_NEG_POLARITY {self.s_neg_polarity}
+        __device__ double H[{self.number_of_outputs}] = {{{", ".join([str(h) for h in self.h])}}};
         """
         current_dir = pathlib.Path(__file__).parent
         kernel_str = get_kernel("cuda/kernel.cu", current_dir)
@@ -178,8 +193,11 @@ class BaseTM:
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiP")
 
+        self.kernel_class_sum_to_update_prob = mod_new_kernel.get_function("class_sum_to_update_prob")
+        self.kernel_class_sum_to_update_prob.prepare("PPPPiP")
+
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiP")
@@ -323,9 +341,10 @@ class BaseTM:
                     continue
 
                 false_classes = np.where(Y[i, :] <= 0)[0]
-                sel_false = self.rng.choice(false_classes, size=min(len(selected_trues), len(false_classes)), replace=False)
+                sel_false = self.rng.choice(
+                    false_classes, size=min(len(selected_trues), len(false_classes)), replace=False
+                )
                 targets[i, sel_false] = -1
-
 
             # Or, maybe we should also randomly select min_cnt false labels for each class as well.
             # not_per_class_counts = N - per_class_counts
@@ -356,6 +375,8 @@ class BaseTM:
         grid_size = opt_args.get("grid_size", self.grid_size)
         clause_drop_p = opt_args.get("clause_drop_p", 0.0)
         label_sampling = opt_args.get("label_sampling", False)
+        g_pos = _float_or_list_to_array(opt_args.get("g_pos", 1.0), self.number_of_outputs)
+        g_neg = _float_or_list_to_array(opt_args.get("g_neg", 1.0), self.number_of_outputs)
 
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         memcpy_htod(encoded_X_gpu, encoded_X)
@@ -373,9 +394,16 @@ class BaseTM:
         clause_drop_mask_gpu = mem_alloc(clause_drop_mask.nbytes)
         memcpy_htod(clause_drop_mask_gpu, clause_drop_mask)
 
+        # gamma
+        g_pos_gpu = mem_alloc(g_pos.nbytes)
+        g_neg_gpu = mem_alloc(g_neg.nbytes)
+        memcpy_htod(g_pos_gpu, g_pos)
+        memcpy_htod(g_neg_gpu, g_neg)
+
         # Initialize GPU memory for temporary data
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
+        update_probs_gpu = mem_alloc(self.number_of_outputs * 8) # double
         clause_outputs_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
         selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
         num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
@@ -384,10 +412,10 @@ class BaseTM:
         config_patchwise = kernel_config(
             self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size
         )
+        config_outputs = kernel_config(self.number_of_outputs, device_props, block_size, grid_size)
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
-
             if np.all(targets[e, :] == 0):
                 continue
 
@@ -423,6 +451,16 @@ class BaseTM:
             )
             ctx.synchronize()
 
+            self.kernel_class_sum_to_update_prob.prepared_call(
+                *config_outputs,
+                class_sum_gpu,
+                targets_gpu,
+                g_pos_gpu,
+                g_neg_gpu,
+                np.int32(e),
+                update_probs_gpu,
+            )
+
             self.kernel_clause_update.prepared_call(
                 *config_n_clauses,
                 self.rng_gpu.state,
@@ -435,6 +473,7 @@ class BaseTM:
                 clause_drop_mask_gpu,
                 encoded_X_gpu,
                 targets_gpu,
+                update_probs_gpu,
                 np.int32(e),
             )
             ctx.synchronize()

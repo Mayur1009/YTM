@@ -33,7 +33,7 @@ def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
         ytrain_suf = ytrain[iota]
         train_timer = Timer()
         with train_timer:
-            tm.fit(xtrain_suf, ytrain_suf, is_X_encoded=True)
+            tm.fit(xtrain_suf, ytrain_suf, is_X_encoded=True, label_sampling=True)
 
         # Train
         preds_train, cs_train = tm.predict(encoded_xtrain, is_X_encoded=True)
@@ -66,7 +66,7 @@ def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
         print(
             f"Epoch {epoch + 1}|Time: {train_timer.elapsed():.4f}s|Train Acc: {train_acc:.4f}|Train AUC: {auc_train:.4f}|Val Acc: {acc_val:.4f}|Val AUC: {auc_val:.4f}|Test Acc: {acc_test:.4f}|AUC: {auc_test:.4f}"
         )
-        # print(f"Confusion Matrix:\n{cm_test}")
+        print(f"Confusion Matrix:\n{cm_test}")
 
 
 if __name__ == "__main__":
@@ -81,7 +81,6 @@ if __name__ == "__main__":
         dim=(28, 28, ch),
         n_classes=4,
         patch_dim=(9, 9),
-        seed=10,
         block_size=256,
     )
 

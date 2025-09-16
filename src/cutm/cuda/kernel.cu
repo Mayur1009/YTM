@@ -479,27 +479,56 @@ extern "C" {
         }
     }
 
-    __device__ inline double uprob_fun(double v, double y) {
+    __device__ inline double uprob_fun(double v, double y, double h, double g) {
+        int tcs = (2 * y * h) - y;
         double prob = (y - v) / (2 * y);
+
+        // Formula:
+        // For y > 0:
+        //    if v <= tcs:
+        //      prob = 1.0 - (h^(1-g) * (1-prob)^g)
+        //    else:
+        //      prob = (1-h)^(1-g) * prob^g
+        //  For y < 0:
+        //    if v <= tcs:
+        //      prob = (1-h)^(1-g) * prob^g
+        //    else:
+        //      prob = 1.0 - (h^(1-g) * (1-prob)^g)
+
+        if ((y > 0) == (v > tcs)) {
+            prob = pow((1.0 - h), (1.0 - g)) * pow(prob, g);
+        } else {
+            prob = 1.0 - (pow(h, 1.0 - g) * pow((1.0 - prob), g));
+        }
+
         return prob;
+    }
+
+    __global__ void class_sum_to_update_prob(const float *class_sums, const int *targets, const double *g_pos,
+                                             const double *g_neg, const int e, double *u_prob) {
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
+        for (ull class_id = index; class_id < CLASSES; class_id += stride) {
+            float clipped_cs = clip_cs(class_sums[class_id]);
+            int local_target = targets[e * CLASSES + class_id];
+            if (local_target == 0) {
+                u_prob[class_id] = 0.0;
+                continue;
+            }
+            double y = (double)THRESH * (double)local_target;
+            double g = (local_target == 1) ? g_pos[class_id] : g_neg[class_id];
+            u_prob[class_id] = uprob_fun((double)clipped_cs, y, H[class_id], g);
+        }
     }
 
     __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
                                   float *bias_weights, const float *class_sums, const int *selected_patch_ids,
                                   const int *num_includes, const unsigned int *clause_drop_mask,
-                                  const unsigned int *X_batch, const int *targets, const int e) {
+                                  const unsigned int *X_batch, const int *targets, const double *update_probs,
+                                  const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
-
-        // Should this be separate kernel?
-        double update_probs[CLASSES];
-        for (int class_id = 0; class_id < CLASSES; ++class_id) {
-            float clipped_cs = clip_cs(class_sums[class_id]);
-            int local_target = targets[e * CLASSES + class_id];
-            int y = THRESH * (local_target == 1 ? 1 : -1);
-            update_probs[class_id] = uprob_fun((double)clipped_cs, (double)y);
-        }
 
         for (ull clause = index; clause < CLAUSES; clause += stride) {
             // Skip dropped clauses

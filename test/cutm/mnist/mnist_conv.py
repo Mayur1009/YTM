@@ -52,7 +52,6 @@ if __name__ == "__main__":
         dim=(28, 28, 1),
         n_classes=10,
         patch_dim=(10, 10),
-        encode_loc=True,
         seed=10,
         block_size=128,
     )
