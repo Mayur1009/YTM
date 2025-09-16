@@ -5,8 +5,9 @@ import numpy as np
 from medmnist.dataset import PneumoniaMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
-from cutm import MultiClassTM
+from cutm import BinaryTM
 from tm_utils import Binarizer, Timer
+
 
 def load_dataset(ch=8):
     train = PneumoniaMNIST(split="train", download=True)
@@ -19,7 +20,6 @@ def load_dataset(ch=8):
     xtrain = b.transform(train.imgs).reshape(len(train.imgs), -1).astype(np.uint32)
     xval = b.transform(val.imgs).reshape(len(val.imgs), -1).astype(np.uint32)
     xtest = b.transform(test.imgs).reshape(len(test.imgs), -1).astype(np.uint32)
-
     return (
         (xtrain, train.labels.squeeze()),
         (xval, val.labels.squeeze()),
@@ -39,7 +39,7 @@ def balance(y):
     return np.concatenate([c0_inds, c1_inds])
 
 
-def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
+def train(tm: BinaryTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
     for epoch in range(epochs):
         balanced_indices = balance(ytrain)
         xtrain = xtrain[balanced_indices]
@@ -55,31 +55,22 @@ def train(tm: MultiClassTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
 
         # Train
         preds_train, cs_train = tm.predict(xtrain)
-        prob_train = (np.clip(cs_train, -tm.T, tm.T) + tm.T) / (2 * tm.T)
-        prob_train = prob_train / (np.sum(prob_train, axis=1, keepdims=True) + 1e-7)
+        prob_train = (np.clip(cs_train.squeeze(), -tm.T, tm.T) + tm.T) / (2 * tm.T)
         train_acc = accuracy_score(ytrain, preds_train)
-        ytrain_bin = np.zeros((len(ytrain), 2))
-        ytrain_bin[np.arange(len(ytrain)), ytrain] = 1
-        auc_train = roc_auc_score(ytrain_bin, prob_train)
+        auc_train = roc_auc_score(ytrain, prob_train)
 
         # Validation
         preds_val, cs_val = tm.predict(xval)
-        prob_val = (np.clip(cs_val, -tm.T, tm.T) + tm.T) / (2 * tm.T)
-        prob_val = prob_val / (np.sum(prob_val, axis=1, keepdims=True) + 1e-7)
+        prob_val = (np.clip(cs_val.squeeze(), -tm.T, tm.T) + tm.T) / (2 * tm.T)
         acc_val = accuracy_score(yval, preds_val)
-        yval_bin = np.zeros((len(yval), 2))
-        yval_bin[np.arange(len(yval)), yval] = 1
-        auc_val = roc_auc_score(yval_bin, prob_val)
+        auc_val = roc_auc_score(yval, prob_val)
 
         # Test
         preds, cs_test = tm.predict(xtest)
-        prob_test = (np.clip(cs_test, -tm.T, tm.T) + tm.T) / (2 * tm.T)
-        prob_test = prob_test / (np.sum(prob_test, axis=1, keepdims=True) + 1e-7)
+        prob_test = (np.clip(cs_test.squeeze(), -tm.T, tm.T) + tm.T) / (2 * tm.T)
         acc_test = np.mean(preds == ytest)
         cm_test = confusion_matrix(ytest, preds)
-        ytest_bin = np.zeros((len(ytest), 2))
-        ytest_bin[np.arange(len(ytest)), ytest] = 1
-        auc_test = roc_auc_score(ytest_bin, prob_test)
+        auc_test = roc_auc_score(ytest, prob_test)
 
         print(
             f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
@@ -91,13 +82,12 @@ if __name__ == "__main__":
     ch = 8
     (xtrain, ytrain), (xval, yval), (xtest, ytest) = load_dataset(ch)
 
-    tm = MultiClassTM(
+    tm = BinaryTM(
         number_of_clauses_per_class=80,
         T=500,
         s=5,
         q=1,
         dim=(28, 28, ch),
-        n_classes=2,
         patch_dim=(10, 10),
         seed=10,
         block_size=4,

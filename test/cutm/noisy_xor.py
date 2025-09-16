@@ -1,5 +1,5 @@
 import numpy as np
-from cutm import MultiClassTM
+from cutm import BinaryTM
 
 
 def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):
@@ -15,7 +15,7 @@ def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):
     return X, Y
 
 
-def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
+def train(tm: BinaryTM, X_train, Y_train, X_test, Y_test, epochs=1):
     encoded_X_train = tm.encode(X_train)
     encoded_X_test = tm.encode(X_test)
     for epoch in range(epochs):
@@ -35,12 +35,11 @@ if __name__ == "__main__":
     X_train, Y_train = generate_NoisyXOR(num_samples=500, noise=0.1, seed=10)
     X_test, Y_test = generate_NoisyXOR(num_samples=200, noise=0, seed=11)
 
-    tm = MultiClassTM(
+    tm = BinaryTM(
         number_of_clauses_per_class=4,
         T=2,
         s=2,
         dim=(2, 1, 1),
-        n_classes=2,
         weighted=False,
         coalesced=False,
         number_of_ta_states=16,
