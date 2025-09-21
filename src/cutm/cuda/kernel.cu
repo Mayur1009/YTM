@@ -517,7 +517,10 @@ extern "C" {
             }
             double y = (double)THRESH * (double)local_target;
             double g = (local_target == 1) ? g_pos[class_id] : g_neg[class_id];
-            u_prob[class_id] = uprob_fun((double)clipped_cs, y, H[class_id], g);
+            double h = (local_target == 1) ? H[class_id] : (1.0 - H[class_id]);
+            if (h == 1.0) h = 0.999999;
+            if (h == 0.0) h = 0.000001;
+            u_prob[class_id] = uprob_fun((double)clipped_cs, y, h, g);
         }
     }
 
