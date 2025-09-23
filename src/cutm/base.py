@@ -65,6 +65,10 @@ class BaseTM:
         n_classes: int,
         **opt_args: Unpack[BaseTMOptArgs],
     ):
+        unexpected_args = set(opt_args.keys()) - set(BaseTMOptArgs.__annotations__.keys())
+        if unexpected_args:
+            raise TypeError(f"Unexpected keyword arguments: {unexpected_args}")
+
         # Required arguments
         self.init_args = {
             "number_of_clauses_per_class": number_of_clauses_per_class,
@@ -379,6 +383,10 @@ class BaseTM:
 
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
+        unexpected_args = set(opt_args.keys()) - set(FitOptArgs.__annotations__.keys())
+        if unexpected_args:
+            raise TypeError(f"Unexpected keyword arguments: {unexpected_args}")
+
         N = encoded_X.shape[0]
         logged_data = {}
 
