@@ -28,6 +28,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     max_weight: float
     s_neg_polarity: float
     h: float | list[float]
+    allow_polarity_change: bool
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -88,6 +89,7 @@ class BaseTM:
             "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
             "s_neg_polarity": opt_args.get("s_neg_polarity", s),
             "h": opt_args.get("h", 0.5),
+            "allow_polarity_change": opt_args.get("allow_polarity_change", True),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -112,6 +114,7 @@ class BaseTM:
         self.max_weight = self.opt_args["max_weight"]
         self.s_neg_polarity = self.opt_args["s_neg_polarity"]
         self.h = _float_or_list_to_array(self.opt_args["h"], self.number_of_outputs)
+        self.allow_polarity_change = self.opt_args["allow_polarity_change"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
@@ -169,6 +172,7 @@ class BaseTM:
         #define WEIGHTED {1 if self.weighted else 0}
         #define MAX_WEIGHT {self.max_weight}
         #define S_NEG_POLARITY {self.s_neg_polarity}
+        #define ALLOW_POLARITY_CHANGE {1 if self.allow_polarity_change else 0}
         __device__ double H[{self.number_of_outputs}] = {{{", ".join([str(h) for h in self.h])}}};
         """
         current_dir = pathlib.Path(__file__).parent

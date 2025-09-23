@@ -33,18 +33,22 @@ def train(tm: BinaryTM, X_train, Y_train, X_test, Y_test, epochs=1):
 
 if __name__ == "__main__":
     X_train, Y_train = generate_NoisyXOR(num_samples=500, noise=0.1, seed=10)
-    X_test, Y_test = generate_NoisyXOR(num_samples=200, noise=0, seed=11)
+    X_test, Y_test = generate_NoisyXOR(num_samples=100, noise=0, seed=11)
 
     tm = BinaryTM(
         number_of_clauses_per_class=4,
-        T=2,
+        T=15,
         s=2,
         dim=(2, 1, 1),
-        weighted=False,
-        coalesced=False,
         number_of_ta_states=16,
+        coalesced=False,
+        allow_polarity_change=False,
+        seed=10,
         block_size=2
     )
+
+    weights = tm.get_weights()
+    print("Weights:", weights)
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=100)
 

@@ -23,6 +23,7 @@
     #define WEIGHTED 1
     #define MAX_WEIGHT 3.4e38f
     #define S_NEG_POLARITY S
+    #define ALLOW_POLARITY_CHANGE 1
 __device__ double H[CLASSES] = {0.5};
 #endif
 
@@ -582,6 +583,10 @@ extern "C" {
                 if (type2) {
 #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
+    #if ALLOW_POLARITY_CHANGE == 0
+                    if (sign == 1 && *local_weight < 0) *local_weight = 1;
+                    if (sign == -1 && *local_weight >= 0) *local_weight = -1;
+    #endif
 #endif
 #if BIAS
                     bias_weights[class_id] -= sign * 1.0f;
