@@ -1,5 +1,6 @@
 import pathlib
 from typing import TypedDict, Unpack
+import warnings
 
 import numpy as np
 import pycuda.autoinit  # noqa: F401
@@ -267,12 +268,15 @@ class BaseTM:
 
     def encode(
         self,
-        X: np.ndarray[tuple[int, int], np.dtype[np.uint32]],
+        X: np.ndarray,
         block_size: int | None = None,
         grid_size: int | None = None,
     ) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
-        assert X.ndim == 2, "X must be a 2D array (samples, dim0 * dim1 * dim2)."
         assert X.dtype == np.uint32, "X must be of type np.uint32."
+        if X.ndim > 2:
+            warnings.warn(f"X has shape = {X.shape}. Collapsing to 2D array. New shape: {(X.shape[0], int(np.prod(X.shape[1:])))}")
+            X = X.reshape((X.shape[0], -1))
+
         N = X.shape[0]
 
         if block_size is None:
