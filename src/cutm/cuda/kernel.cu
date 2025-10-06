@@ -52,8 +52,9 @@ typedef unsigned long long ull;
 
 extern "C" {
     /***********INPUT ENCODING***********/
-    __global__ void encode_batch(const unsigned int *X, unsigned int *encoded_X, const int N) {
-        // X -> (N * DIM0 * DIM1 * DIM2)
+    __global__ void encode_batch(const int *X, unsigned int *encoded_X, const int N) {
+        // X -> (N * DIM0 * DIM1 * DIM2) array with possible values {-1, 0, 1}.
+        // 1 -> feat present, -1 -> feat absent, 0 -> dont care
         // encoded_X -> (N * PATCHES * NUM_LITERAL_CHUNKS)
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
@@ -69,6 +70,9 @@ extern "C" {
             ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
             unsigned int *patch_output = &encoded_X[encX_offset];
 
+            // Initialization.
+            // By default, all values in encoded_X are set to 0 (in python code).
+            // So, only need to initialize all negated literals to 1.
 #if APPEND_NEGATED
             for (int literal = LITERALS / 2; literal < LITERALS; ++literal) {
                 int chunk_nr = literal / INT_SIZE;
@@ -77,6 +81,7 @@ extern "C" {
             }
 #endif
 
+            // Encoding the location of the patch with thermometer encoding
             for (int lit = 0; lit < patch_coordinate_y; ++lit) {
                 int chunk_nr = lit / INT_SIZE;
                 int chunk_pos = lit % INT_SIZE;
@@ -99,25 +104,34 @@ extern "C" {
 #endif
             }
 
-            // Iterate over all pixels in the patch
+            // Iterate over features in a patch, that are either 1 (present) or 0 (dont care). -1(absent) is already
+            // taken care of in the initialization.
             for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_DIM1; ++p_y) {
                 for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_DIM0; ++p_x) {
                     for (int z = 0; z < DIM2; ++z) {
                         unsigned long long dense_idx =
                             e * (ull)(DIM0 * DIM1 * DIM2) + p_y * (ull)(DIM0 * DIM2) + p_x * (ull)DIM2 + z;
 
-                        if (X[dense_idx] > 0) {
-                            int rel_y = p_y - patch_coordinate_y;
-                            int rel_x = p_x - patch_coordinate_x;
+                        int rel_y = p_y - patch_coordinate_y;
+                        int rel_x = p_x - patch_coordinate_x;
 #if ENCODE_LOC
-                            int patch_pos = (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + rel_y * PATCH_DIM0 * DIM2 +
-                                            rel_x * DIM2 + z;
+                        int patch_pos =
+                            (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
 #else
-                            int patch_pos = rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+                        int patch_pos = rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
 #endif
+                        if (X[dense_idx] == 1) {
                             int chunk_nr = patch_pos / INT_SIZE;
                             int chunk_pos = patch_pos % INT_SIZE;
                             patch_output[chunk_nr] |= (1u << chunk_pos);
+#if APPEND_NEGATED
+                            int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
+                            int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
+                            patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+#endif
+                        } else if (X[dense_idx] == 0) {
+                            // Dont care value. 0 in both positive and negative literals.
+                            // positive literal is already 0, only need to set negative literal to 0
 #if APPEND_NEGATED
                             int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
                             int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;

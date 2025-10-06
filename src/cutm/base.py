@@ -1,5 +1,5 @@
 import pathlib
-from typing import TypedDict, Unpack
+from typing import Literal, TypedDict, Unpack
 
 import numpy as np
 import pycuda.autoinit  # noqa: F401
@@ -268,12 +268,44 @@ class BaseTM:
     def encode(
         self,
         X: np.ndarray,
+        input_type: Literal["binary", "ternary"] = "binary",
         block_size: int | None = None,
         grid_size: int | None = None,
     ) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
-        assert X.dtype == np.uint32, "X must be of type np.uint32."
-        if X.ndim > 2:
-            X = X.reshape((X.shape[0], self.dim[0] * self.dim[1] * self.dim[2]))
+        """
+        Encoding input X into bit-packed format, which is suitable for the TM.
+        In case of convolutional TM, this also extracts patches from the input
+        and appends the pathch location if encode_loc is True.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data. Internally reshaped to 2D array of shape (N, dim[0] * dim[1] * dim[2]), and data type converted to np.int32.
+        input_type : Literal["binary", "ternary"]
+            Input data can be "binary" (the normal case), or "ternary" (dont know the use case yet, so dont use).
+        block_size : int | None
+            CUDA kernel parameter
+        grid_size : int | None
+            CUDA kernel parameter
+
+        Returns
+        -------
+        np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
+            Encoded X of shape (N, number_of_patches, number_of_literal_chunks), of dtype np.uint32. Each value is a bit-packed representation of 32 literals.
+
+        """
+
+        # Convert to proper data type and shape
+        X = X.astype(np.int32).reshape((X.shape[0], self.dim[0], self.dim[1], self.dim[2]))
+
+        # Validate `input_type`, and convert {0,1} to {-1,1} if binary
+        if input_type == "binary":
+            assert np.min(X) >= 0 and np.max(X) <= 1, "X must be binary (contain only 0 or 1)."
+            X = X * 2 - 1  # Convert to -1, 1
+        elif input_type == "ternary":
+            assert np.min(X) >= -1 and np.max(X) <= 1, "X must be ternary (contain only -1, 0 or 1)."
+        else:
+            raise ValueError("input_type must be 'binary' or 'ternary'.")
 
         N = X.shape[0]
 
@@ -282,6 +314,7 @@ class BaseTM:
         if grid_size is None:
             grid_size = self.grid_size
 
+        # Calculate maximum number of samples that can be processed at once. Necessary to avoid GPU memory issues.
         max_uint32 = np.iinfo(np.uint32).max
         max_safe_N = max_uint32 // self.number_of_patches
 
@@ -289,10 +322,15 @@ class BaseTM:
         for i in range(0, N, max_safe_N):
             X_safe = X[i : i + max_safe_N]
             X_gpu = mem_alloc(X_safe.nbytes)
+
+            # Copy data to GPU
             memcpy_htod(X_gpu, X_safe)
 
+            # Allocate memory to store output and initialize to zero
             encoded_X_gpu = mem_alloc(X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks * 4)
             memset_d32(encoded_X_gpu, 0, X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks)
+
+            # Encode kernel
             self.kernel_encode_batch.prepared_call(
                 *kernel_config(X_safe.shape[0] * self.number_of_patches, device_props, block_size, grid_size),
                 X_gpu,
@@ -301,6 +339,7 @@ class BaseTM:
             )
             ctx.synchronize()
 
+            # Copy back to CPU
             encoded_X_safe = np.empty(
                 (X_safe.shape[0] * self.number_of_patches * self.number_of_literal_chunks), dtype=np.uint32
             )
