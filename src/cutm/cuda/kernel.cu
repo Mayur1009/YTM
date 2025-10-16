@@ -52,7 +52,7 @@ typedef unsigned long long ull;
 
 extern "C" {
     /***********INPUT ENCODING***********/
-    __global__ void encode_batch(const int *X, unsigned int *encoded_X, const int N) {
+    __global__ void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
         // X -> (N * DIM0 * DIM1 * DIM2) array with possible values {-1, 0, 1}.
         // 1 -> feat present, -1 -> feat absent, 0 -> dont care
         // encoded_X -> (N * PATCHES * NUM_LITERAL_CHUNKS)
@@ -68,7 +68,7 @@ extern "C" {
             int patch_coordinate_x = patch_id % (DIM0 - PATCH_DIM0 + 1);
 
             ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
-            unsigned int *patch_output = &encoded_X[encX_offset];
+            unsigned int* patch_output = &encoded_X[encX_offset];
 
             // Initialization.
             // By default, all values in encoded_X are set to 0 (in python code).
@@ -145,8 +145,8 @@ extern "C" {
     }
 
     /***********CLAUSE PACKING***********/
-    __global__ void pack_clauses(const unsigned int *global_ta_states, unsigned int *packed_clauses,
-                                 int *num_includes) {
+    __global__ void pack_clauses(const unsigned int* global_ta_states, unsigned int* packed_clauses,
+                                 int* num_includes) {
         /*
          * Pack the TA states into chunks of 32 bits. Each chunk represents a set of literals.
          * The number of included literals is also calculated here.
@@ -154,12 +154,12 @@ extern "C" {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull clause = index; clause < CLAUSES; clause += stride) {
-            const unsigned int *ta_state = &global_ta_states[clause * LITERALS];
-            unsigned int *packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
+            const unsigned int* ta_state = &global_ta_states[clause * LITERALS];
+            unsigned int* packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
             int total_count = 0;
             memset(packed_clause, 0, NUM_LITERAL_CHUNKS * sizeof(unsigned int));
             for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
-                uint4 ta_vec = *((uint4 *)&ta_state[li]);
+                uint4 ta_vec = *((uint4*)&ta_state[li]);
 
                 if (ta_vec.x > HALF_STATE) {
                     packed_clause[li / INT_SIZE] |= (1u << (li % INT_SIZE));
@@ -189,62 +189,64 @@ extern "C" {
     }
 
     /***********CLAUSE EVALUATION***********/
-    __device__ inline int clause_match(const unsigned int *ta_state, const unsigned int *X) {
+    __device__ inline int clause_match(const unsigned int* ta_state, const unsigned int* X,
+                                       const unsigned int* literal_mask) {
         for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk)
-            if ((ta_state[chunk] & X[chunk]) != ta_state[chunk]) return 0;
-
-        if ((ta_state[NUM_LITERAL_CHUNKS - 1] & (X[NUM_LITERAL_CHUNKS - 1] & FILTER)) !=
-            (ta_state[NUM_LITERAL_CHUNKS - 1] & FILTER))
+            if ((ta_state[chunk] & (X[chunk] & literal_mask[chunk])) != (ta_state[chunk] & literal_mask[chunk]))
+                return 0;
+        if ((ta_state[NUM_LITERAL_CHUNKS - 1] &
+             (X[NUM_LITERAL_CHUNKS - 1] & literal_mask[NUM_LITERAL_CHUNKS - 1] & FILTER)) !=
+            (ta_state[NUM_LITERAL_CHUNKS - 1] & literal_mask[NUM_LITERAL_CHUNKS - 1] & FILTER))
             return 0;
 
         return 1;
     }
 
     /***********CLAUSE EVALUATION---SLOWER***********/
-    __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
-                                int *patch_weights, const unsigned int *X_batch, int *selected_patch_ids,
-                                float *class_sums, const int e) {
-        ull index = blockIdx.x * blockDim.x + threadIdx.x;
-        ull stride = blockDim.x * gridDim.x;
-
-        curandState localRNG = rng[index];
-
-        for (ull clause = index; clause < CLAUSES; clause += stride) {
-            int active_patches[PATCHES];
-            int active_count = 0;
-
-            for (ull patch_id = 0; patch_id < PATCHES; ++patch_id) {
-                int patch_matched = clause_match(
-                    &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                    &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
-                if (patch_matched) {
-                    active_patches[active_count] = patch_id;
-                    active_count++;
-                }
-            }
-            if (active_count > 0) {
-                int random_index = curand(&localRNG) % active_count;
-                selected_patch_ids[clause] = active_patches[random_index];
-                patch_weights[clause * PATCHES + active_patches[random_index]] = 1;
-                for (int class_id = 0; class_id < CLASSES; ++class_id) {
-                    atomicAdd(&class_sums[0 * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
-                }
-            } else {
-                selected_patch_ids[clause] = -1;
-            }
-        }
-        rng[index] = localRNG;
-    }
+    // __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
+    //                             int *patch_weights, const unsigned int *X_batch, int *selected_patch_ids,
+    //                             float *class_sums, const int e) {
+    //     ull index = blockIdx.x * blockDim.x + threadIdx.x;
+    //     ull stride = blockDim.x * gridDim.x;
+    //
+    //     curandState localRNG = rng[index];
+    //
+    //     for (ull clause = index; clause < CLAUSES; clause += stride) {
+    //         int active_patches[PATCHES];
+    //         int active_count = 0;
+    //
+    //         for (ull patch_id = 0; patch_id < PATCHES; ++patch_id) {
+    //             int patch_matched = clause_match(
+    //                 &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+    //                 &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+    //             if (patch_matched) {
+    //                 active_patches[active_count] = patch_id;
+    //                 active_count++;
+    //             }
+    //         }
+    //         if (active_count > 0) {
+    //             int random_index = curand(&localRNG) % active_count;
+    //             selected_patch_ids[clause] = active_patches[random_index];
+    //             patch_weights[clause * PATCHES + active_patches[random_index]] = 1;
+    //             for (int class_id = 0; class_id < CLASSES; ++class_id) {
+    //                 atomicAdd(&class_sums[0 * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
+    //             }
+    //         } else {
+    //             selected_patch_ids[clause] = -1;
+    //         }
+    //     }
+    //     rng[index] = localRNG;
+    // }
 
     /***********FAST EVALUATION KERNELS***********/
-    __global__ void fast_eval(const unsigned int *packed_ta_states, const int *num_includes,
-                              const unsigned int *clause_drop_mask, const unsigned int *X_batch,
-                              unsigned int *clause_outputs, const int e) {
+    __global__ void fast_eval(const unsigned int* packed_ta_states, const int* num_includes,
+                              const unsigned int* clause_drop_mask, const unsigned int* literal_mask,
+                              const unsigned int* X_batch, unsigned int* clause_outputs, const int e) {
         // clause_outputs => (N * CLAUSES * PATCHES)
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull clause_patch = index; clause_patch < (ull)CLAUSES * (ull)PATCHES; clause_patch += stride) {
-            unsigned int *clause_output = &clause_outputs[clause_patch];
+            unsigned int* clause_output = &clause_outputs[clause_patch];
 
             ull clause = clause_patch / PATCHES;
             ull patch_id = clause_patch % PATCHES;
@@ -260,15 +262,15 @@ extern "C" {
                 continue;
             }
 
-            *clause_output =
-                clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+            *clause_output = clause_match(
+                &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS], literal_mask);
         }
     }
 
     /***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
-    __global__ void select_active(curandState *rng, const float *clause_weights, const unsigned int *clause_outputs,
-                                  int *patch_weights, int *selected_patch_ids, float *class_sums) {
+    __global__ void select_active(curandState* rng, const float* clause_weights, const unsigned int* clause_outputs,
+                                  int* patch_weights, int* selected_patch_ids, float* class_sums) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
 
@@ -301,9 +303,9 @@ extern "C" {
     }
 
     /***********FAST CLASS SUMS CALCULATION FOR INFERENCE***********/
-    __global__ void calc_class_sums_infer_batch(const unsigned int *packed_ta_states, const float *clause_weights,
-                                                const int *num_includes, const unsigned int *X_batch, const int N,
-                                                float *class_sums_batch) {
+    __global__ void calc_class_sums_infer_batch(const unsigned int* packed_ta_states, const float* clause_weights,
+                                                const int* num_includes, const unsigned int* X_batch, const int N,
+                                                float* class_sums_batch, const unsigned int* literal_mask) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
 
@@ -314,7 +316,8 @@ extern "C" {
             int clause_output = 0;
             for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
                 if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                                 &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+                                 &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS],
+                                 literal_mask)) {
                     clause_output = 1;
                     break;
                 }
@@ -328,8 +331,9 @@ extern "C" {
     }
 
     /***********TRNAFORM KERNELS***********/
-    __global__ void transform(const unsigned int *packed_ta_states, const int *num_includes,
-                              const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
+    __global__ void transform(const unsigned int* packed_ta_states, const int* num_includes,
+                              const unsigned int* X_batch, const int N, unsigned int* clause_outputs,
+                              const unsigned int* literal_mask) {
         // clause_outputs => (N * CLAUSES)
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
@@ -343,7 +347,8 @@ extern "C" {
             int clause_output = 0;
             for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
                 if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                                 &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS])) {
+                                 &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS],
+                                 literal_mask)) {
                     clause_output = 1;
                     break;
                 }
@@ -352,14 +357,15 @@ extern "C" {
         }
     }
 
-    __global__ void transform_patchwise(const unsigned int *packed_ta_states, const int *num_includes,
-                                        const unsigned int *X_batch, const int N, unsigned int *clause_outputs) {
+    __global__ void transform_patchwise(const unsigned int* packed_ta_states, const int* num_includes,
+                                        const unsigned int* X_batch, const int N, unsigned int* clause_outputs,
+                                        const unsigned int* literal_mask) {
         // clause_outputs => (N * CLAUSES * PATCHES)
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull e_clause_patch = index; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES;
              e_clause_patch += stride) {
-            unsigned int *clause_output = &clause_outputs[e_clause_patch];
+            unsigned int* clause_output = &clause_outputs[e_clause_patch];
 
             ull e_clause = e_clause_patch / PATCHES;
             ull patch_id = e_clause_patch % PATCHES;
@@ -372,31 +378,32 @@ extern "C" {
                 continue;
             }
 
-            *clause_output =
-                clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
+            *clause_output = clause_match(
+                &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS], literal_mask);
         }
     }
 
     /***********CLAUSE UPDATE KERNELS***********/
     __device__ inline float clip_cs(float cs) { return (cs > THRESH) ? THRESH : ((cs < -THRESH) ? -THRESH : cs); }
 
-    __device__ inline void type1a_fb_scalar(curandState *rng, unsigned int *ta_state, const unsigned int *patch) {
-        for (int li = 0; li < LITERALS; ++li) {
-            unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
-                ta_state[li] += 1;
-            } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
-                ta_state[li] -= 1;
-            }
-        }
-    }
+    // __device__ inline void type1a_fb_scalar(curandState *rng, unsigned int *ta_state, const unsigned int *patch,
+    // const unsigned int *literal_mask) {
+    //     for (int li = 0; li < LITERALS; ++li) {
+    //         unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+    //         if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
+    //             ta_state[li] += 1;
+    //         } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
+    //             ta_state[li] -= 1;
+    //         }
+    //     }
+    // }
 
-    __device__ inline void type1a_fb(curandState *rng, unsigned int *ta_state, const unsigned int *patch,
-                                     const int sign) {
+    __device__ inline void type1a_fb(curandState* rng, unsigned int* ta_state, const unsigned int* patch,
+                                     const int sign, const unsigned int* literal_mask) {
         float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
         for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
-            uint4 ta_vec = *((uint4 *)&ta_state[li]);
+            uint4 ta_vec = *((uint4*)&ta_state[li]);
             uint4 patch_vec = {
                 (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
                 (patch[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
@@ -404,72 +411,91 @@ extern "C" {
                 (patch[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
             };
 
-            ta_vec.x += (patch_vec.x == 1 && ta_vec.x < MAX_TA_STATE);
-            ta_vec.y += (patch_vec.y == 1 && ta_vec.y < MAX_TA_STATE);
-            ta_vec.z += (patch_vec.z == 1 && ta_vec.z < MAX_TA_STATE);
-            ta_vec.w += (patch_vec.w == 1 && ta_vec.w < MAX_TA_STATE);
+            uint4 lit_up = {
+                (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
+                (literal_mask[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 2) / INT_SIZE] >> ((li + 2) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
+            };
 
-            ta_vec.x -= (patch_vec.x == 0 && ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.y -= (patch_vec.y == 0 && ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.z -= (patch_vec.z == 0 && ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.w -= (patch_vec.w == 0 && ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.x += (lit_up.x == 1 && patch_vec.x == 1 && ta_vec.x < MAX_TA_STATE);
+            ta_vec.y += (lit_up.y == 1 && patch_vec.y == 1 && ta_vec.y < MAX_TA_STATE);
+            ta_vec.z += (lit_up.z == 1 && patch_vec.z == 1 && ta_vec.z < MAX_TA_STATE);
+            ta_vec.w += (lit_up.w == 1 && patch_vec.w == 1 && ta_vec.w < MAX_TA_STATE);
+
+            ta_vec.x -= (lit_up.x == 1 && patch_vec.x == 0 && ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.y -= (lit_up.y == 1 && patch_vec.y == 0 && ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.z -= (lit_up.z == 1 && patch_vec.z == 0 && ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.w -= (lit_up.w == 1 && patch_vec.w == 0 && ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
 
             // Write back the vectorized results
-            *((uint4 *)&ta_state[li]) = ta_vec;
+            *((uint4*)&ta_state[li]) = ta_vec;
         }
 
         // Handle remaining literals (when LITERALS % 4 != 0)
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
             unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
+            unsigned int lit_up = (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+            if (lit_up == 1 && patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
                 ta_state[li] += 1;
-            } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
+            } else if (lit_up == 1 && patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
         }
     }
 
-    __device__ inline void type1b_fb_scalar(curandState *rng, unsigned int *ta_state, const int sign) {
-        float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
-        for (int li = 0; li < LITERALS; ++li) {
-            if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
-                ta_state[li] -= 1;
-            }
-        }
-    }
+    // __device__ inline void type1b_fb_scalar(curandState *rng, unsigned int *ta_state, const int sign, const unsigned
+    // int *literal_mask) {
+    //     float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
+    //     for (int li = 0; li < LITERALS; ++li) {
+    //         if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
+    //             ta_state[li] -= 1;
+    //         }
+    //     }
+    // }
 
-    __device__ inline void type1b_fb(curandState *rng, unsigned int *ta_state, const int sign) {
+    __device__ inline void type1b_fb(curandState* rng, unsigned int* ta_state, const int sign,
+                                     const unsigned int* literal_mask) {
         float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
         for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
-            uint4 ta_vec = *((uint4 *)&ta_state[li]);
+            uint4 ta_vec = *((uint4*)&ta_state[li]);
+            uint4 lit_up = {
+                (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
+                (literal_mask[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 2) / INT_SIZE] >> ((li + 2) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
+            };
 
-            ta_vec.x -= (ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.y -= (ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.z -= (ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
-            ta_vec.w -= (ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.x -= (lit_up.x == 1 && ta_vec.x > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.y -= (lit_up.y == 1 && ta_vec.y > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.z -= (lit_up.z == 1 && ta_vec.z > 0 && curand_uniform(rng) <= s_inv);
+            ta_vec.w -= (lit_up.w == 1 && ta_vec.w > 0 && curand_uniform(rng) <= s_inv);
 
-            *((uint4 *)&ta_state[li]) = ta_vec;
+            *((uint4*)&ta_state[li]) = ta_vec;
         }
 
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-            if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
+            unsigned int lit_up = (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+            if (lit_up == 1 && ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
         }
     }
 
-    __device__ inline void type2_fb_scalar(unsigned int *ta_state, const unsigned int *patch) {
-        for (int li = 0; li < LITERALS; ++li) {
-            unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (patch_bit == 0 && ta_state[li] <= HALF_STATE) {
-                ta_state[li] += 1;
-            }
-        }
-    }
+    // __device__ inline void type2_fb_scalar(unsigned int *ta_state, const unsigned int *patch, const unsigned int
+    // *literal_mask) {
+    //     for (int li = 0; li < LITERALS; ++li) {
+    //         unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+    //         if (patch_bit == 0 && ta_state[li] <= HALF_STATE) {
+    //             ta_state[li] += 1;
+    //         }
+    //     }
+    // }
 
-    __device__ inline void type2_fb(unsigned int *ta_state, const unsigned int *patch) {
+    __device__ inline void type2_fb(unsigned int* ta_state, const unsigned int* patch,
+                                    const unsigned int* literal_mask) {
         for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
-            uint4 ta_vec = *((uint4 *)&ta_state[li]);
+            uint4 ta_vec = *((uint4*)&ta_state[li]);
             uint4 patch_vec = {
                 (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
                 (patch[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
@@ -477,18 +503,26 @@ extern "C" {
                 (patch[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
             };
 
-            // Increment ta_state elements where patch is 0 and ta_state <= HALF_STATE
-            ta_vec.x += (patch_vec.x == 0 && ta_vec.x <= HALF_STATE);
-            ta_vec.y += (patch_vec.y == 0 && ta_vec.y <= HALF_STATE);
-            ta_vec.z += (patch_vec.z == 0 && ta_vec.z <= HALF_STATE);
-            ta_vec.w += (patch_vec.w == 0 && ta_vec.w <= HALF_STATE);
+            uint4 lit_up = {
+                (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u,
+                (literal_mask[(li + 1) / INT_SIZE] >> ((li + 1) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 2) / INT_SIZE] >> ((li + 2) % INT_SIZE)) & 1u,
+                (literal_mask[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
+            };
 
-            *((uint4 *)&ta_state[li]) = ta_vec;
+            // Increment ta_state elements where patch is 0 and ta_state <= HALF_STATE
+            ta_vec.x += (lit_up.x == 1 && patch_vec.x == 0 && ta_vec.x <= HALF_STATE);
+            ta_vec.y += (lit_up.y == 1 && patch_vec.y == 0 && ta_vec.y <= HALF_STATE);
+            ta_vec.z += (lit_up.z == 1 && patch_vec.z == 0 && ta_vec.z <= HALF_STATE);
+            ta_vec.w += (lit_up.w == 1 && patch_vec.w == 0 && ta_vec.w <= HALF_STATE);
+
+            *((uint4*)&ta_state[li]) = ta_vec;
         }
 
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
             unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (patch_bit == 0 && ta_state[li] <= HALF_STATE) {
+            unsigned int lit_up = (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
+            if (lit_up == 1 && patch_bit == 0 && ta_state[li] <= HALF_STATE) {
                 ta_state[li] += 1;
             }
         }
@@ -519,8 +553,8 @@ extern "C" {
         return prob;
     }
 
-    __global__ void class_sum_to_update_prob(const float *class_sums, const int *targets, const double *g_pos,
-                                             const double *g_neg, const int e, double *u_prob) {
+    __global__ void class_sum_to_update_prob(const float* class_sums, const int* targets, const double* g_pos,
+                                             const double* g_neg, const int e, double* u_prob) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull class_id = index; class_id < CLASSES; class_id += stride) {
@@ -539,11 +573,11 @@ extern "C" {
         }
     }
 
-    __global__ void clause_update(curandState *rng, unsigned int *global_ta_states, float *clause_weights,
-                                  float *bias_weights, const float *class_sums, const int *selected_patch_ids,
-                                  const int *num_includes, const unsigned int *clause_drop_mask,
-                                  const unsigned int *X_batch, const int *targets, const double *update_probs,
-                                  const int e) {
+    __global__ void clause_update(curandState* rng, unsigned int* global_ta_states, float* clause_weights,
+                                  float* bias_weights, const float* class_sums, const int* selected_patch_ids,
+                                  const int* num_includes, const unsigned int* clause_drop_mask,
+                                  const unsigned int* literal_mask, const unsigned int* X_batch, const int* targets,
+                                  const double* update_probs, const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
@@ -552,10 +586,10 @@ extern "C" {
             // Skip dropped clauses
             if (clause_drop_mask[clause] == 1) continue;
 
-            unsigned int *ta_state = &global_ta_states[clause * LITERALS];
+            unsigned int* ta_state = &global_ta_states[clause * LITERALS];
             int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
-            const unsigned int *X = &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS)];
-            const unsigned int *patch =
+            const unsigned int* X = &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS)];
+            const unsigned int* patch =
                 selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
 #if COALESCED == 0
@@ -567,7 +601,7 @@ extern "C" {
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
-                float *local_weight = &clause_weights[clause * CLASSES + class_id];
+                float* local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
                 double update_prob = update_probs[class_id];
@@ -587,11 +621,11 @@ extern "C" {
 #if BIAS
                     bias_weights[class_id] += sign * 1.0f;
 #endif
-                    type1a_fb(&localRNG, ta_state, patch, sign);
+                    type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
                 }
 
                 if (type1b) {
-                    type1b_fb(&localRNG, ta_state, sign);
+                    type1b_fb(&localRNG, ta_state, sign, literal_mask);
                 }
 
                 if (type2) {
@@ -609,7 +643,7 @@ extern "C" {
                     if (*local_weight < 1) *local_weight = 1;
                     if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
 #endif
-                    type2_fb(ta_state, patch);
+                    type2_fb(ta_state, patch, literal_mask);
                 }
             }
         }
