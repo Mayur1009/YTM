@@ -144,6 +144,42 @@ extern "C" {
         }
     }
 
+    /************Autoencoder Input and target encoding*************/
+    __global__ void accumulate_examples(curandState* rng, const unsigned int* encoded_X,
+                                        const unsigned int* active_outputs, const int* inds_per_output,
+                                        const int* not_inds_per_output, const int inds_max_len,
+                                        const unsigned int* inds_lens, const unsigned int* not_inds_lens,
+                                        const unsigned int accu, const unsigned int N, unsigned int* accumulated_X,
+                                        int* targets) {
+        ull index = blockIdx.x * blockDim.x + threadIdx.x;
+        ull stride = blockDim.x * gridDim.x;
+        curandState localRNG = rng[index];
+
+        for (ull acc_i = index; acc_i < N; acc_i += stride) {
+            int o = acc_i % CLASSES;  // output index
+
+            unsigned int* acc_X = &accumulated_X[acc_i * PATCHES * NUM_LITERAL_CHUNKS];
+            int y = curand(&localRNG) & 1;  // Decide if Y should be 1 or 0
+            targets[acc_i * CLASSES + o] = (y == 1) ? 1 : -1;
+
+            // Accumulation
+            const int* index_arr = (y == 1) ? inds_per_output : not_inds_per_output;
+            const unsigned int* lens_arr = (y == 1) ? inds_lens : not_inds_lens;
+            unsigned int len = lens_arr[o];
+
+            for (int a = 0; a < accu; a++) {
+                // Randomly select an index from the appropriate indices array
+                unsigned int ind = curand(&localRNG) % len;
+                unsigned int chosen_ind = index_arr[o * inds_max_len + ind];
+                // OR acc_X with encoded_X[chosen_ind]
+                const unsigned int* enc_X = &encoded_X[chosen_ind * PATCHES * NUM_LITERAL_CHUNKS];
+                ull total_chunks = PATCHES * NUM_LITERAL_CHUNKS;
+                for (ull p = 0; p < total_chunks; p++) acc_X[p] |= enc_X[p];
+            }
+        }
+        rng[index] = localRNG;
+    }
+
     /***********CLAUSE PACKING***********/
     __global__ void pack_clauses(const unsigned int* global_ta_states, unsigned int* packed_clauses,
                                  int* num_includes) {
