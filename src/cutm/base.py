@@ -42,7 +42,6 @@ class FitOptArgs(TypedDict, total=False):
     label_sampling: bool | int
     g_pos: float | list[float]
     g_neg: float | list[float]
-    skip_literal: list[int] | np.ndarray[tuple[int], np.dtype[np.uint32]]
     log: bool
 
 
@@ -215,11 +214,15 @@ class BaseTM:
         self.kernel_transform_patchwise = mod_new_kernel.get_function("transform_patchwise")
         self.kernel_transform_patchwise.prepare("PPPiPP")
 
+        self.kernel_accumulate_examples = mod_new_kernel.get_function("accumulate_examples")
+        self.kernel_accumulate_examples.prepare("PPPPPiPPiiPP")
+
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
         self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
         self.bias_weights_gpu = mem_alloc(self.number_of_outputs * 4)
+        self.literal_mask_gpu = mem_alloc(self.number_of_literal_chunks * 4)
 
         # RNG
         self.rng_gpu = (
@@ -233,6 +236,8 @@ class BaseTM:
         self._reset_clauses()
         self._reset_weights(True)
         memset_d32(self.patch_weights_gpu, 0, self.number_of_clauses * self.number_of_patches)
+        memset_d32(self.literal_mask_gpu, 0xFFFFFFFF, self.number_of_literal_chunks)
+        # memset_d32(self.literal_mask_gpu, 0, self.number_of_literal_chunks)
 
     def _reset_clauses(self):
         memset_d32(
@@ -426,16 +431,36 @@ class BaseTM:
 
         return targets
 
-    def _create_literal_mask(self, skip_literal):
-        skip_literal = np.array(skip_literal, dtype=np.uint32)
-        assert skip_literal.shape[0] == self.number_of_literals, "skip_literal must be of length number_of_literals."
-        literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
-        if np.any(skip_literal):
-            for litid in np.where(skip_literal > 0)[0]:
+    # def _create_literal_mask(self, skip_literal):
+    #     skip_literal = np.array(skip_literal, dtype=np.uint32)
+    #     assert skip_literal.shape[0] == self.number_of_literals, "skip_literal must be of length number_of_literals."
+    #     literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
+    #     if np.any(skip_literal):
+    #         for litid in np.where(skip_literal > 0)[0]:
+    #             chunk_nr = litid // 32
+    #             chunk_pos = litid % 32
+    #             literal_mask[chunk_nr] &= ~(np.uint32(1) << chunk_pos)
+    #     return literal_mask
+
+    def freeze_literals(self, literal_inds: list[int]):
+        """
+        Freeze the given literals, so that they are not used in evaluation or update steps.
+        Literals not in the list are unfrozen. So, passing an empty list unfreezes all literals.
+
+        Parameters
+        ----------
+        literal_inds : list[int]
+            List of literal indices to be frozen.
+        """
+        # Create a literal_mask from literal_inds, and update a global self.literal_mask and self.literal_mask_gpu variable.
+        lit_msk = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
+        if len(literal_inds) > 0:
+            for litid in literal_inds:
                 chunk_nr = litid // 32
                 chunk_pos = litid % 32
-                literal_mask[chunk_nr] &= ~(np.uint32(1) << chunk_pos)
-        return literal_mask
+                lit_msk[chunk_nr] &= ~(np.uint32(1) << chunk_pos)
+        self.literal_mask = lit_msk
+        memcpy_htod(self.literal_mask_gpu, self.literal_mask)
 
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
@@ -471,14 +496,10 @@ class BaseTM:
         else:
             clause_drop_mask = np.zeros(self.number_of_clauses, dtype=np.uint32)
 
-        # Create literal_active_mask from skip_literals
-        literal_mask = self._create_literal_mask(opt_args.get("skip_literal", [0] * self.number_of_literals))
-
         # Allocate Gpu memory
         encoded_X_gpu = mem_alloc(encoded_X.nbytes)
         targets_gpu = mem_alloc(targets.nbytes)
         clause_drop_mask_gpu = mem_alloc(clause_drop_mask.nbytes)
-        literal_mask_gpu = mem_alloc(literal_mask.nbytes)
         g_pos_gpu = mem_alloc(g_pos.nbytes)
         g_neg_gpu = mem_alloc(g_neg.nbytes)
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -492,7 +513,6 @@ class BaseTM:
         memcpy_htod(encoded_X_gpu, encoded_X)
         memcpy_htod(targets_gpu, targets)
         memcpy_htod(clause_drop_mask_gpu, clause_drop_mask)
-        memcpy_htod(literal_mask_gpu, literal_mask)
         memcpy_htod(g_pos_gpu, g_pos)
         memcpy_htod(g_neg_gpu, g_neg)
 
@@ -535,7 +555,7 @@ class BaseTM:
                 packed_clauses_gpu,
                 num_includes_gpu,
                 clause_drop_mask_gpu,
-                literal_mask_gpu,
+                self.literal_mask_gpu,
                 encoded_X_gpu,
                 clause_outputs_gpu,
                 np.int32(e),
@@ -584,7 +604,7 @@ class BaseTM:
                 selected_patch_ids_gpu,
                 num_includes_gpu,
                 clause_drop_mask_gpu,
-                literal_mask_gpu,
+                self.literal_mask_gpu,
                 encoded_X_gpu,
                 targets_gpu,
                 update_probs_gpu,
@@ -602,6 +622,79 @@ class BaseTM:
             logged_data["update_probs"] = update_probs  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return logged_data
+
+    def _fit_sample(self):
+        # Bit-pack included literals, so that we can use bitwise operations to process INT_SIZE literals at once. Also calculate number of includes per clause.
+        self.kernel_pack_clauses.prepared_call(
+            *config_n_clauses,
+            self.ta_state_gpu,
+            packed_clauses_gpu,
+            num_includes_gpu,
+        )
+        ctx.synchronize()
+
+        # Evaluate clauses. Calculates the clause_outputs_gpu
+        self.kernel_fast_eval.prepared_call(
+            *config_patchwise,
+            packed_clauses_gpu,
+            num_includes_gpu,
+            clause_drop_mask_gpu,
+            self.literal_mask_gpu,
+            encoded_X_gpu,
+            clause_outputs_gpu,
+            np.int32(e),
+        )
+        ctx.synchronize()
+
+        # Reset class sums.
+        # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
+        memcpy_dtod(
+            class_sum_gpu, self.bias_weights_gpu, self.number_of_outputs * 4
+        )  # bias is basically zero......related to a failed experiment
+
+        # Select a patch for each clause, and also calculate the class sum.
+        self.kernel_select_active.prepared_call(
+            *config_n_clauses,
+            self.rng_gpu.state,
+            self.clause_weights_gpu,
+            clause_outputs_gpu,
+            self.patch_weights_gpu,
+            selected_patch_ids_gpu,
+            class_sum_gpu,
+        )
+        ctx.synchronize()
+
+        # Calculate the class sums to update probabilities.
+        # This also implements a curved uprob functions.
+        self.kernel_class_sum_to_update_prob.prepared_call(
+            *config_outputs,
+            class_sum_gpu,
+            targets_gpu,
+            g_pos_gpu,
+            g_neg_gpu,
+            np.int32(e),
+            update_probs_gpu,
+        )
+        ctx.synchronize()
+
+        # Finally, we can update the clauses.
+        self.kernel_clause_update.prepared_call(
+            *config_n_clauses,
+            self.rng_gpu.state,
+            self.ta_state_gpu,
+            self.clause_weights_gpu,
+            self.bias_weights_gpu,
+            class_sum_gpu,
+            selected_patch_ids_gpu,
+            num_includes_gpu,
+            clause_drop_mask_gpu,
+            self.literal_mask_gpu,
+            encoded_X_gpu,
+            targets_gpu,
+            update_probs_gpu,
+            np.int32(e),
+        )
+        ctx.synchronize()
 
     def _pack_clauses_gpu(self, block_size, grid_size):
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
@@ -635,11 +728,6 @@ class BaseTM:
         # Pack clauses
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
-        # Create literal mask. No masking is done for inference.
-        literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
-        literal_mask_gpu = mem_alloc(literal_mask.nbytes)
-        memcpy_htod(literal_mask_gpu, literal_mask)
-
         # Initialize class sums with bias weights....which is basically zero
         # class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
         bias_weights = np.empty((1, self.number_of_outputs), dtype=np.float32)
@@ -666,7 +754,7 @@ class BaseTM:
                 X_gpu,
                 np.int32(X_safe.shape[0]),
                 class_sums_gpu,
-                literal_mask_gpu,
+                self.literal_mask_gpu,
             )
             ctx.synchronize()
 
@@ -738,10 +826,6 @@ class BaseTM:
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
         memcpy_htod(encoded_X_gpu, encoded_X)
 
-        literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
-        literal_mask_gpu = mem_alloc(literal_mask.nbytes)
-        memcpy_htod(literal_mask_gpu, literal_mask)
-
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
         clause_outputs_gpu = mem_alloc(N * self.number_of_clauses * 4)
@@ -752,7 +836,7 @@ class BaseTM:
             encoded_X_gpu,
             np.int32(N),
             clause_outputs_gpu,
-            literal_mask_gpu,
+            self.literal_mask_gpu,
         )
         ctx.synchronize()
 
@@ -787,10 +871,6 @@ class BaseTM:
         encoded_X_gpu = mem_alloc(N * self.number_of_patches * self.number_of_literal_chunks * 4)
         memcpy_htod(encoded_X_gpu, encoded_X)
 
-        literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
-        literal_mask_gpu = mem_alloc(literal_mask.nbytes)
-        memcpy_htod(literal_mask_gpu, literal_mask)
-
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
         includes_gpu = mem_alloc(self.number_of_clauses * 4)
 
@@ -804,7 +884,7 @@ class BaseTM:
             encoded_X_gpu,
             np.int32(N),
             clause_outputs_gpu,
-            literal_mask_gpu,
+            self.literal_mask_gpu,
         )
         ctx.synchronize()
         clause_outputs = np.zeros((N * self.number_of_clauses * self.number_of_patches), dtype=np.uint32)
