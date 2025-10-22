@@ -462,59 +462,142 @@ class BaseTM:
         self.literal_mask = lit_msk
         memcpy_htod(self.literal_mask_gpu, self.literal_mask)
 
-    #### FIT AND SCORE ####
-    def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
-        # Validate optional arguments
+    def _validate_fit_args(self, **opt_args: Unpack[FitOptArgs]):
         unexpected_args = set(opt_args.keys()) - set(FitOptArgs.__annotations__.keys())
         if unexpected_args:
             raise TypeError(f"Unexpected keyword arguments: {unexpected_args}")
+        args = {
+            "block_size": opt_args.get("block_size", self.block_size),
+            "grid_size": opt_args.get("grid_size", self.grid_size),
+            "clause_drop_p": opt_args.get("clause_drop_p", 0.0),
+            "shuffle": opt_args.get("shuffle", True),
+            "label_sampling": opt_args.get("label_sampling", False),
+            "g_pos": _float_or_list_to_array(opt_args.get("g_pos", 1.0), self.number_of_outputs),
+            "g_neg": _float_or_list_to_array(opt_args.get("g_neg", 1.0), self.number_of_outputs),
+            "log": opt_args.get("log", False),
+        }
+        return args
 
-        N = encoded_X.shape[0]
-
-        # Shuffle input
-        shuffle = opt_args.get("shuffle", True)
-        iota = np.arange(N)
-        if shuffle:
-            self.rng.shuffle(iota)
-        encoded_X = encoded_X[iota]
-        encoded_Y = encoded_Y[iota]
-
-        # Process optional arguments
-        block_size = opt_args.get("block_size", self.block_size)
-        grid_size = opt_args.get("grid_size", self.grid_size)
-        clause_drop_p = opt_args.get("clause_drop_p", 0.0)
-        label_sampling = opt_args.get("label_sampling", False)
-        g_pos = _float_or_list_to_array(opt_args.get("g_pos", 1.0), self.number_of_outputs)
-        g_neg = _float_or_list_to_array(opt_args.get("g_neg", 1.0), self.number_of_outputs)
-
-        # Precompute targets for each sample. 1 means the sample belongs to the class. -1 means, selected not classes. 0 means ignore.
-        targets = self._target_sampling((encoded_Y > 0).astype(np.int32), label_sampling)
-
+    def _fit_allocate_gpu(self, args, encoded_X, targets):
         # Drop clauses
+        clause_drop_p = args["clause_drop_p"]
         if clause_drop_p > 0.0:
             clause_drop_mask = (self.rng.random(self.number_of_clauses) <= clause_drop_p).astype(np.uint32)
         else:
             clause_drop_mask = np.zeros(self.number_of_clauses, dtype=np.uint32)
-
-        # Allocate Gpu memory
-        encoded_X_gpu = mem_alloc(encoded_X.nbytes)
-        targets_gpu = mem_alloc(targets.nbytes)
-        clause_drop_mask_gpu = mem_alloc(clause_drop_mask.nbytes)
-        g_pos_gpu = mem_alloc(g_pos.nbytes)
-        g_neg_gpu = mem_alloc(g_neg.nbytes)
-        packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
-        class_sum_gpu = mem_alloc(self.number_of_outputs * 4)
-        update_probs_gpu = mem_alloc(self.number_of_outputs * 8)  # double
-        clause_outputs_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
-        selected_patch_ids_gpu = mem_alloc(self.number_of_clauses * 4)
-        num_includes_gpu = mem_alloc(self.number_of_clauses * 4)
+        gpu_buffers = {
+            "encoded_X_gpu": mem_alloc(encoded_X.nbytes),
+            "targets_gpu": mem_alloc(targets.nbytes),
+            "clause_drop_mask_gpu": mem_alloc(clause_drop_mask.nbytes),
+            "g_pos_gpu": mem_alloc(args["g_pos"].nbytes),
+            "g_neg_gpu": mem_alloc(args["g_neg"].nbytes),
+            "packed_clauses_gpu": mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4),
+            "class_sum_gpu": mem_alloc(self.number_of_outputs * 4),
+            "update_probs_gpu": mem_alloc(self.number_of_outputs * 8),  # double
+            "clause_outputs_gpu": mem_alloc(self.number_of_clauses * self.number_of_patches * 4),
+            "selected_patch_ids_gpu": mem_alloc(self.number_of_clauses * 4),
+            "num_includes_gpu": mem_alloc(self.number_of_clauses * 4),
+        }
 
         # Copy stuff to GPU
-        memcpy_htod(encoded_X_gpu, encoded_X)
-        memcpy_htod(targets_gpu, targets)
-        memcpy_htod(clause_drop_mask_gpu, clause_drop_mask)
-        memcpy_htod(g_pos_gpu, g_pos)
-        memcpy_htod(g_neg_gpu, g_neg)
+        memcpy_htod(gpu_buffers["encoded_X_gpu"], encoded_X)
+        memcpy_htod(gpu_buffers["targets_gpu"], targets)
+        memcpy_htod(gpu_buffers["clause_drop_mask_gpu"], clause_drop_mask)
+        memcpy_htod(gpu_buffers["g_pos_gpu"], args["g_pos"])
+        memcpy_htod(gpu_buffers["g_neg_gpu"], args["g_neg"])
+
+        return gpu_buffers
+
+    def _fit_sample(self, gpu_buffers: dict, e: int, kconfs: dict):
+        # Bit-pack included literals, so that we can use bitwise operations to process INT_SIZE literals at once. Also calculate number of includes per clause.
+        self.kernel_pack_clauses.prepared_call(
+            *kconfs["config_n_clauses"],
+            self.ta_state_gpu,
+            gpu_buffers["packed_clauses_gpu"],
+            gpu_buffers["num_includes_gpu"],
+        )
+        ctx.synchronize()
+
+        # Evaluate clauses. Calculates the clause_outputs_gpu
+        self.kernel_fast_eval.prepared_call(
+            *kconfs["config_patchwise"],
+            gpu_buffers["packed_clauses_gpu"],
+            gpu_buffers["num_includes_gpu"],
+            gpu_buffers["clause_drop_mask_gpu"],
+            self.literal_mask_gpu,
+            gpu_buffers["encoded_X_gpu"],
+            gpu_buffers["clause_outputs_gpu"],
+            np.int32(e),
+        )
+        ctx.synchronize()
+
+        # Reset class sums.
+        # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
+        memcpy_dtod(
+            gpu_buffers["class_sum_gpu"], self.bias_weights_gpu, self.number_of_outputs * 4
+        )  # bias is basically zero......related to a failed experiment
+
+        # Select a patch for each clause, and also calculate the class sum.
+        self.kernel_select_active.prepared_call(
+            *kconfs["config_n_clauses"],
+            self.rng_gpu.state,
+            self.clause_weights_gpu,
+            gpu_buffers["clause_outputs_gpu"],
+            self.patch_weights_gpu,
+            gpu_buffers["selected_patch_ids_gpu"],
+            gpu_buffers["class_sum_gpu"],
+        )
+        ctx.synchronize()
+
+        # Calculate the class sums to update probabilities.
+        # This also implements a curved uprob functions.
+        self.kernel_class_sum_to_update_prob.prepared_call(
+            *kconfs["config_outputs"],
+            gpu_buffers["class_sum_gpu"],
+            gpu_buffers["targets_gpu"],
+            gpu_buffers["g_pos_gpu"],
+            gpu_buffers["g_neg_gpu"],
+            np.int32(e),
+            gpu_buffers["update_probs_gpu"],
+        )
+        ctx.synchronize()
+
+        # Finally, we can update the clauses.
+        self.kernel_clause_update.prepared_call(
+            *kconfs["config_n_clauses"],
+            self.rng_gpu.state,
+            self.ta_state_gpu,
+            self.clause_weights_gpu,
+            self.bias_weights_gpu,
+            gpu_buffers["class_sum_gpu"],
+            gpu_buffers["selected_patch_ids_gpu"],
+            gpu_buffers["num_includes_gpu"],
+            gpu_buffers["clause_drop_mask_gpu"],
+            self.literal_mask_gpu,
+            gpu_buffers["encoded_X_gpu"],
+            gpu_buffers["targets_gpu"],
+            gpu_buffers["update_probs_gpu"],
+            np.int32(e),
+        )
+        ctx.synchronize()
+
+    #### FIT AND SCORE ####
+    def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
+        N = encoded_X.shape[0]
+        args = self._validate_fit_args(**opt_args)
+
+        # Shuffle input
+        iota = np.arange(N)
+        if args["shuffle"]:
+            self.rng.shuffle(iota)
+        encoded_X = encoded_X[iota]
+        encoded_Y = encoded_Y[iota]
+
+        # Precompute targets for each sample. 1 means the sample belongs to the class. -1 means, selected not classes. 0 means ignore.
+        targets = self._target_sampling((encoded_Y > 0).astype(np.int32), args["label_sampling"])
+
+        # Allocate GPU buffers and copy data
+        gpu_buffers = self._fit_allocate_gpu(args, encoded_X, targets)
 
         # Prepare logging dictionary
         logged_data = {}
@@ -527,11 +610,17 @@ class BaseTM:
             update_probs = np.zeros((N, self.number_of_outputs), dtype=np.float64)
 
         # Kernel configurations
-        config_n_clauses = kernel_config(self.number_of_clauses, device_props, block_size, grid_size)
-        config_patchwise = kernel_config(
-            self.number_of_clauses * self.number_of_patches, device_props, block_size, grid_size
-        )
-        config_outputs = kernel_config(self.number_of_outputs, device_props, block_size, grid_size)
+        kconfs = {
+            "config_n_clauses": kernel_config(
+                self.number_of_clauses, device_props, args["block_size"], args["grid_size"]
+            ),
+            "config_patchwise": kernel_config(
+                self.number_of_clauses * self.number_of_patches, device_props, args["block_size"], args["grid_size"]
+            ),
+            "config_outputs": kernel_config(
+                self.number_of_outputs, device_props, args["block_size"], args["grid_size"]
+            ),
+        }
 
         # Main fit loop over all the samples
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
@@ -540,161 +629,18 @@ class BaseTM:
             if np.all(targets[e, :] == 0):
                 continue
 
-            # Bit-pack included literals, so that we can use bitwise operations to process INT_SIZE literals at once. Also calculate number of includes per clause.
-            self.kernel_pack_clauses.prepared_call(
-                *config_n_clauses,
-                self.ta_state_gpu,
-                packed_clauses_gpu,
-                num_includes_gpu,
-            )
-            ctx.synchronize()
-
-            # Evaluate clauses. Calculates the clause_outputs_gpu
-            self.kernel_fast_eval.prepared_call(
-                *config_patchwise,
-                packed_clauses_gpu,
-                num_includes_gpu,
-                clause_drop_mask_gpu,
-                self.literal_mask_gpu,
-                encoded_X_gpu,
-                clause_outputs_gpu,
-                np.int32(e),
-            )
-            ctx.synchronize()
-
-            # Reset class sums.
-            # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-            memcpy_dtod(
-                class_sum_gpu, self.bias_weights_gpu, self.number_of_outputs * 4
-            )  # bias is basically zero......related to a failed experiment
-
-            # Select a patch for each clause, and also calculate the class sum.
-            self.kernel_select_active.prepared_call(
-                *config_n_clauses,
-                self.rng_gpu.state,
-                self.clause_weights_gpu,
-                clause_outputs_gpu,
-                self.patch_weights_gpu,
-                selected_patch_ids_gpu,
-                class_sum_gpu,
-            )
-            ctx.synchronize()
-
-            # Calculate the class sums to update probabilities.
-            # This also implements a curved uprob functions.
-            self.kernel_class_sum_to_update_prob.prepared_call(
-                *config_outputs,
-                class_sum_gpu,
-                targets_gpu,
-                g_pos_gpu,
-                g_neg_gpu,
-                np.int32(e),
-                update_probs_gpu,
-            )
-            ctx.synchronize()
-
-            # Finally, we can update the clauses.
-            self.kernel_clause_update.prepared_call(
-                *config_n_clauses,
-                self.rng_gpu.state,
-                self.ta_state_gpu,
-                self.clause_weights_gpu,
-                self.bias_weights_gpu,
-                class_sum_gpu,
-                selected_patch_ids_gpu,
-                num_includes_gpu,
-                clause_drop_mask_gpu,
-                self.literal_mask_gpu,
-                encoded_X_gpu,
-                targets_gpu,
-                update_probs_gpu,
-                np.int32(e),
-            )
-            ctx.synchronize()
+            self._fit_sample(gpu_buffers, e, kconfs)
 
             # If saving the logs, copy class sums and update probs back to CPU
             if log:
-                memcpy_dtoh(class_sums[e : e + 1], class_sum_gpu)  # pyright: ignore[reportPossiblyUnboundVariable]
-                memcpy_dtoh(update_probs[e : e + 1], update_probs_gpu)  # pyright: ignore[reportPossiblyUnboundVariable]
+                memcpy_dtoh(class_sums[e : e + 1], gpu_buffers["class_sum_gpu"])  # pyright: ignore[reportPossiblyUnboundVariable]
+                memcpy_dtoh(update_probs[e : e + 1], gpu_buffers["update_probs_gpu"])  # pyright: ignore[reportPossiblyUnboundVariable]
 
         if log:
             logged_data["class_sums"] = class_sums  # pyright: ignore[reportPossiblyUnboundVariable]
             logged_data["update_probs"] = update_probs  # pyright: ignore[reportPossiblyUnboundVariable]
 
         return logged_data
-
-    def _fit_sample(self):
-        # Bit-pack included literals, so that we can use bitwise operations to process INT_SIZE literals at once. Also calculate number of includes per clause.
-        self.kernel_pack_clauses.prepared_call(
-            *config_n_clauses,
-            self.ta_state_gpu,
-            packed_clauses_gpu,
-            num_includes_gpu,
-        )
-        ctx.synchronize()
-
-        # Evaluate clauses. Calculates the clause_outputs_gpu
-        self.kernel_fast_eval.prepared_call(
-            *config_patchwise,
-            packed_clauses_gpu,
-            num_includes_gpu,
-            clause_drop_mask_gpu,
-            self.literal_mask_gpu,
-            encoded_X_gpu,
-            clause_outputs_gpu,
-            np.int32(e),
-        )
-        ctx.synchronize()
-
-        # Reset class sums.
-        # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-        memcpy_dtod(
-            class_sum_gpu, self.bias_weights_gpu, self.number_of_outputs * 4
-        )  # bias is basically zero......related to a failed experiment
-
-        # Select a patch for each clause, and also calculate the class sum.
-        self.kernel_select_active.prepared_call(
-            *config_n_clauses,
-            self.rng_gpu.state,
-            self.clause_weights_gpu,
-            clause_outputs_gpu,
-            self.patch_weights_gpu,
-            selected_patch_ids_gpu,
-            class_sum_gpu,
-        )
-        ctx.synchronize()
-
-        # Calculate the class sums to update probabilities.
-        # This also implements a curved uprob functions.
-        self.kernel_class_sum_to_update_prob.prepared_call(
-            *config_outputs,
-            class_sum_gpu,
-            targets_gpu,
-            g_pos_gpu,
-            g_neg_gpu,
-            np.int32(e),
-            update_probs_gpu,
-        )
-        ctx.synchronize()
-
-        # Finally, we can update the clauses.
-        self.kernel_clause_update.prepared_call(
-            *config_n_clauses,
-            self.rng_gpu.state,
-            self.ta_state_gpu,
-            self.clause_weights_gpu,
-            self.bias_weights_gpu,
-            class_sum_gpu,
-            selected_patch_ids_gpu,
-            num_includes_gpu,
-            clause_drop_mask_gpu,
-            self.literal_mask_gpu,
-            encoded_X_gpu,
-            targets_gpu,
-            update_probs_gpu,
-            np.int32(e),
-        )
-        ctx.synchronize()
 
     def _pack_clauses_gpu(self, block_size, grid_size):
         packed_clauses_gpu = mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4)
