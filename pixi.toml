@@ -8,7 +8,7 @@ platforms = ["linux-64"]
 cuda = "12"
 
 [dependencies]
-python = ">=3.11"
+python = ">=3.11,<3.12"
 jupyterlab = ">=4.4.4,<5"
 ipdb = ">=0.13.13,<0.14"
 line_profiler = ">=4.2.0,<5"
@@ -16,3 +16,4 @@ cuda = ">=12.9.1,<13"
 
 [pypi-dependencies]
 ytm = { path = ".", editable = true, extras = ["examples"] }
+tmu = ">=0.8.3,<0.9"
