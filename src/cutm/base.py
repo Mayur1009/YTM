@@ -29,6 +29,12 @@ class BaseTMOptArgs(TypedDict, total=False):
     s_neg_polarity: float
     h: float | list[float]
     allow_polarity_change: bool
+    initial_weight: float
+    initial_state: int | Literal["random"] | Literal["middle"]
+    include_state: int | Literal["middle"]
+    type1a_fb: bool
+    type1b_fb: bool
+    type2_fb: bool
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -94,6 +100,12 @@ class BaseTM:
             "s_neg_polarity": opt_args.get("s_neg_polarity", s),
             "h": opt_args.get("h", 0.5),
             "allow_polarity_change": opt_args.get("allow_polarity_change", True),
+            "initial_weight": opt_args.get("initial_weight", 1.0),
+            "initial_state": opt_args.get("initial_state", "middle"),
+            "include_state": opt_args.get("include_state", "middle"),
+            "type1a_fb": opt_args.get("type1a_fb", True),
+            "type1b_fb": opt_args.get("type1b_fb", True),
+            "type2_fb": opt_args.get("type2_fb", True),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -119,9 +131,37 @@ class BaseTM:
         self.s_neg_polarity = self.opt_args["s_neg_polarity"]
         self.h = _float_or_list_to_array(self.opt_args["h"], self.number_of_outputs)
         self.allow_polarity_change = self.opt_args["allow_polarity_change"]
+        self.initial_weight = self.opt_args["initial_weight"]
+        self.type1a_fb = self.opt_args["type1a_fb"]
+        self.type1b_fb = self.opt_args["type1b_fb"]
+        self.type2_fb = self.opt_args["type2_fb"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
+
+        if self.opt_args["initial_state"] == "middle":
+            self.initial_state = (self.number_of_ta_states - 1) // 2
+        elif self.opt_args["initial_state"] == "random":
+            self.initial_state = -1
+        elif (
+            isinstance(self.opt_args["initial_state"], int)
+            and 0 <= self.opt_args["initial_state"] < self.number_of_ta_states
+        ):
+            self.initial_state = self.opt_args["initial_state"]
+        else:
+            raise ValueError(
+                "initial_state must be 'middle', 'random', or an integer between 0 and number_of_ta_states - 1."
+            )
+
+        if self.opt_args["include_state"] == "middle":
+            self.include_state = ((self.number_of_ta_states - 1) // 2) + 1
+        elif (
+            isinstance(self.opt_args["include_state"], int)
+            and 0 <= self.opt_args["include_state"] < self.number_of_ta_states
+        ):
+            self.include_state = self.opt_args["include_state"]
+        else:
+            raise ValueError("include_state must be 'middle' or an integer between 0 and number_of_ta_states - 1.")
 
         self.number_of_clause_banks = 1 if self.coalesced else self.number_of_outputs
         self.number_of_clauses = self.number_of_clause_banks * self.number_of_clauses_per_class
@@ -177,6 +217,10 @@ class BaseTM:
         #define MAX_WEIGHT {self.max_weight}
         #define S_NEG_POLARITY {self.s_neg_polarity}
         #define ALLOW_POLARITY_CHANGE {1 if self.allow_polarity_change else 0}
+        #define INCLUDE_TA_STATE {self.include_state}
+        #define TYPE1A_FB {1 if self.type1a_fb else 0}
+        #define TYPE1B_FB {1 if self.type1b_fb else 0}
+        #define TYPE2_FB {1 if self.type2_fb else 0}
         __device__ double H[{self.number_of_outputs}] = {{{", ".join([str(h) for h in self.h])}}};
         """
         current_dir = pathlib.Path(__file__).parent
@@ -239,31 +283,50 @@ class BaseTM:
         memset_d32(self.literal_mask_gpu, 0xFFFFFFFF, self.number_of_literal_chunks)
         # memset_d32(self.literal_mask_gpu, 0, self.number_of_literal_chunks)
 
-    def _reset_clauses(self):
-        memset_d32(
-            self.ta_state_gpu, (self.number_of_ta_states - 1) // 2, self.number_of_clauses * self.number_of_literals
-        )
+    def _init_clauses(self):
+        if self.initial_state == -1:
+            # Random initialization
+            ta_states = self.rng.integers(
+                low=0,
+                high=self.number_of_ta_states,
+                size=(self.number_of_clauses * self.number_of_literals),
+                dtype=np.uint32,
+            )
+        else:
+            # Fixed initialization
+            ta_states = np.full(
+                (self.number_of_clauses * self.number_of_literals),
+                self.initial_state,
+                dtype=np.uint32,
+            )
+        memcpy_htod(self.ta_state_gpu, ta_states)
 
     def _init_weights(self):
         num_neg_polarity = self.number_of_clauses_per_class // 2
         if self.coalesced:
             weights = np.zeros((self.number_of_clauses, self.number_of_outputs), dtype=np.float32)
             for i in range(self.number_of_outputs):
-                wt = np.ones((self.number_of_clauses,), dtype=np.float32)
+                wt = np.ones((self.number_of_clauses,), dtype=np.float32) * self.initial_weight
                 if self.init_neg_weights:
-                    wt[num_neg_polarity:] = -1.0
+                    wt[num_neg_polarity:] = -1.0 * self.initial_weight
                 weights[:, i] = self.rng.permutation(wt)
         else:
             w = []
             for i in range(self.number_of_outputs):
                 wt = np.zeros((self.number_of_clauses_per_class, self.number_of_outputs), dtype=np.float32)
-                wt[:, i] = 1.0
+                wt[:, i] = 1.0 * self.initial_weight
                 if self.init_neg_weights:
-                    wt[num_neg_polarity:, i] = -1.0
+                    wt[num_neg_polarity:, i] = -1.0 * self.initial_weight
                 w.append(wt)
             weights = np.vstack(w)
 
         memcpy_htod(self.clause_weights_gpu, weights)
+
+    def _reset_clauses(self):
+        self._init_clauses()
+        # memset_d32(
+        #     self.ta_state_gpu, (self.number_of_ta_states - 1) // 2, self.number_of_clauses * self.number_of_literals
+        # )
 
     def _reset_weights(self, reset_bias: bool = True):
         self._init_weights()

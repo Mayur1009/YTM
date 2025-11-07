@@ -24,6 +24,10 @@
     #define MAX_WEIGHT 3.4e38f
     #define S_NEG_POLARITY S
     #define ALLOW_POLARITY_CHANGE 1
+    #define INCLUDE_TA_STATE 128
+    #define TYPE1A_FB 1
+    #define TYPE1B_FB 1
+    #define TYPE2_FB 1
 __device__ double H[CLASSES] = {0.5};
 #endif
 
@@ -39,7 +43,6 @@ __device__ double H[CLASSES] = {0.5};
 #define S_INV (1.0f / S)
 #define S_NEG_POLARITY_INV (1.0f / S_NEG_POLARITY)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
-#define HALF_STATE (MAX_TA_STATE / 2)
 #define INT_SIZE 32
 #define NUM_LITERAL_CHUNKS (((LITERALS - 1) / INT_SIZE) + 1)
 #if ((LITERALS % INT_SIZE) != 0)
@@ -197,25 +200,25 @@ extern "C" {
             for (int li = 0; li < VECTORIZED_LIMIT; li += 4) {
                 uint4 ta_vec = *((uint4*)&ta_state[li]);
 
-                if (ta_vec.x > HALF_STATE) {
+                if (ta_vec.x >= INCLUDE_TA_STATE) {
                     packed_clause[li / INT_SIZE] |= (1u << (li % INT_SIZE));
                     total_count++;
                 }
-                if (ta_vec.y > HALF_STATE) {
+                if (ta_vec.y >= INCLUDE_TA_STATE) {
                     packed_clause[(li + 1) / INT_SIZE] |= (1u << ((li + 1) % INT_SIZE));
                     total_count++;
                 }
-                if (ta_vec.z > HALF_STATE) {
+                if (ta_vec.z >= INCLUDE_TA_STATE) {
                     packed_clause[(li + 2) / INT_SIZE] |= (1u << ((li + 2) % INT_SIZE));
                     total_count++;
                 }
-                if (ta_vec.w > HALF_STATE) {
+                if (ta_vec.w >= INCLUDE_TA_STATE) {
                     packed_clause[(li + 3) / INT_SIZE] |= (1u << ((li + 3) % INT_SIZE));
                     total_count++;
                 }
             }
             for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
-                if (ta_state[li] > HALF_STATE) {
+                if (ta_state[li] >= INCLUDE_TA_STATE) {
                     packed_clause[li / INT_SIZE] |= (1u << (li % INT_SIZE));
                     total_count++;
                 }
@@ -522,7 +525,7 @@ extern "C" {
     // *literal_mask) {
     //     for (int li = 0; li < LITERALS; ++li) {
     //         unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-    //         if (patch_bit == 0 && ta_state[li] <= HALF_STATE) {
+    //         if (patch_bit == 0 && ta_state[li] < INCLUDE_TA_STATE) {
     //             ta_state[li] += 1;
     //         }
     //     }
@@ -546,11 +549,11 @@ extern "C" {
                 (literal_mask[(li + 3) / INT_SIZE] >> ((li + 3) % INT_SIZE)) & 1u,
             };
 
-            // Increment ta_state elements where patch is 0 and ta_state <= HALF_STATE
-            ta_vec.x += (lit_up.x == 1 && patch_vec.x == 0 && ta_vec.x <= HALF_STATE);
-            ta_vec.y += (lit_up.y == 1 && patch_vec.y == 0 && ta_vec.y <= HALF_STATE);
-            ta_vec.z += (lit_up.z == 1 && patch_vec.z == 0 && ta_vec.z <= HALF_STATE);
-            ta_vec.w += (lit_up.w == 1 && patch_vec.w == 0 && ta_vec.w <= HALF_STATE);
+            // Increment ta_state elements where patch is 0 and ta_state < INCLUDE_TA_STATE
+            ta_vec.x += (lit_up.x == 1 && patch_vec.x == 0 && ta_vec.x < INCLUDE_TA_STATE);
+            ta_vec.y += (lit_up.y == 1 && patch_vec.y == 0 && ta_vec.y < INCLUDE_TA_STATE);
+            ta_vec.z += (lit_up.z == 1 && patch_vec.z == 0 && ta_vec.z < INCLUDE_TA_STATE);
+            ta_vec.w += (lit_up.w == 1 && patch_vec.w == 0 && ta_vec.w < INCLUDE_TA_STATE);
 
             *((uint4*)&ta_state[li]) = ta_vec;
         }
@@ -558,7 +561,7 @@ extern "C" {
         for (int li = VECTORIZED_LIMIT; li < LITERALS; ++li) {
             unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
             unsigned int lit_up = (literal_mask[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-            if (lit_up == 1 && patch_bit == 0 && ta_state[li] <= HALF_STATE) {
+            if (lit_up == 1 && patch_bit == 0 && ta_state[li] < INCLUDE_TA_STATE) {
                 ta_state[li] += 1;
             }
         }
@@ -646,9 +649,9 @@ extern "C" {
                 bool clause_has_space = (num_includes[clause] <= MAX_INCLUDED_LITERALS);
                 bool t1 = (local_target * sign) > 0;
 
-                bool type1a = (should_update && t1 && local_clause_output && clause_has_space);
-                bool type1b = (should_update && t1 && !(local_clause_output && clause_has_space));
-                bool type2 = (should_update && (local_target * sign) < 0 && local_clause_output);
+                bool type1a = (TYPE1A_FB && should_update && t1 && local_clause_output && clause_has_space);
+                bool type1b = (TYPE1B_FB && should_update && t1 && !(local_clause_output && clause_has_space));
+                bool type2 = (TYPE2_FB && should_update && (local_target * sign) < 0 && local_clause_output);
 
                 if (type1a) {
 #if WEIGHTED
