@@ -19,7 +19,6 @@
     #define ENCODE_LOC 1
     #define COALESCED 1
     #define CLAUSE_BANKS 1
-    #define BIAS 0
     #define WEIGHTED 1
     #define MAX_WEIGHT 3.4e38f
     #define S_NEG_POLARITY S
@@ -613,10 +612,10 @@ extern "C" {
     }
 
     __global__ void clause_update(curandState* rng, unsigned int* global_ta_states, float* clause_weights,
-                                  float* bias_weights, const float* class_sums, const int* selected_patch_ids,
-                                  const int* num_includes, const unsigned int* clause_drop_mask,
-                                  const unsigned int* literal_mask, const unsigned int* X_batch, const int* targets,
-                                  const double* update_probs, const int e) {
+                                  const float* class_sums, const int* selected_patch_ids, const int* num_includes,
+                                  const unsigned int* clause_drop_mask, const unsigned int* literal_mask,
+                                  const unsigned int* X_batch, const int* targets, const double* update_probs,
+                                  const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
@@ -657,9 +656,6 @@ extern "C" {
 #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
 #endif
-#if BIAS
-                    bias_weights[class_id] += sign * 1.0f;
-#endif
                     type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
                 }
 
@@ -674,9 +670,6 @@ extern "C" {
                     if (sign == 1 && *local_weight < 0) *local_weight = 1;
                     if (sign == -1 && *local_weight >= 0) *local_weight = -1;
     #endif
-#endif
-#if BIAS
-                    bias_weights[class_id] -= sign * 1.0f;
 #endif
 #if NEGATIVE_CLAUSES == 0
                     if (*local_weight < 1) *local_weight = 1;

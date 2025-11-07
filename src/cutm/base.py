@@ -23,7 +23,6 @@ class BaseTMOptArgs(TypedDict, total=False):
     negative_polarity: bool
     encode_loc: bool
     coalesced: bool
-    bias: bool
     weighted: bool
     max_weight: float
     s_neg_polarity: float
@@ -94,7 +93,6 @@ class BaseTM:
             "negative_polarity": opt_args.get("negative_polarity", True),
             "encode_loc": opt_args.get("encode_loc", True),
             "coalesced": opt_args.get("coalesced", True),
-            "bias": opt_args.get("bias", False),
             "weighted": opt_args.get("weighted", True),
             "max_weight": opt_args.get("max_weight", float(np.finfo(np.float32).max)),
             "s_neg_polarity": opt_args.get("s_neg_polarity", s),
@@ -125,7 +123,6 @@ class BaseTM:
         self.negative_clauses = self.opt_args["negative_polarity"]
         self.encode_loc = self.opt_args["encode_loc"]
         self.coalesced = self.opt_args["coalesced"]
-        self.bias = self.opt_args["bias"]
         self.weighted = self.opt_args["weighted"]
         self.max_weight = self.opt_args["max_weight"]
         self.s_neg_polarity = self.opt_args["s_neg_polarity"]
@@ -212,7 +209,6 @@ class BaseTM:
         #define ENCODE_LOC {1 if self.encode_loc else 0}
         #define COALESCED {1 if self.coalesced else 0}
         #define CLAUSE_BANKS {self.number_of_clause_banks}
-        #define BIAS {1 if self.bias else 0}
         #define WEIGHTED {1 if self.weighted else 0}
         #define MAX_WEIGHT {self.max_weight}
         #define S_NEG_POLARITY {self.s_neg_polarity}
@@ -250,7 +246,7 @@ class BaseTM:
         self.kernel_class_sum_to_update_prob.prepare("PPPPiP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiPP")
@@ -265,7 +261,6 @@ class BaseTM:
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
         self.patch_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_patches * 4)
-        self.bias_weights_gpu = mem_alloc(self.number_of_outputs * 4)
         self.literal_mask_gpu = mem_alloc(self.number_of_literal_chunks * 4)
 
         # RNG
@@ -278,10 +273,9 @@ class BaseTM:
         )
 
         self._reset_clauses()
-        self._reset_weights(True)
+        self._reset_weights()
         memset_d32(self.patch_weights_gpu, 0, self.number_of_clauses * self.number_of_patches)
         memset_d32(self.literal_mask_gpu, 0xFFFFFFFF, self.number_of_literal_chunks)
-        # memset_d32(self.literal_mask_gpu, 0, self.number_of_literal_chunks)
 
     def _init_clauses(self):
         if self.initial_state == -1:
@@ -324,15 +318,9 @@ class BaseTM:
 
     def _reset_clauses(self):
         self._init_clauses()
-        # memset_d32(
-        #     self.ta_state_gpu, (self.number_of_ta_states - 1) // 2, self.number_of_clauses * self.number_of_literals
-        # )
 
-    def _reset_weights(self, reset_bias: bool = True):
+    def _reset_weights(self):
         self._init_weights()
-        if reset_bias:
-            memset_d32(self.bias_weights_gpu, 0, self.number_of_outputs)
-        pass
 
     def encode(
         self,
@@ -595,10 +583,7 @@ class BaseTM:
         ctx.synchronize()
 
         # Reset class sums.
-        # memset_d32(class_sum_gpu, 0, self.number_of_outputs)
-        memcpy_dtod(
-            gpu_buffers["class_sum_gpu"], self.bias_weights_gpu, self.number_of_outputs * 4
-        )  # bias is basically zero......related to a failed experiment
+        memset_d32(gpu_buffers["class_sum_gpu"], 0, self.number_of_outputs)
 
         # Select a patch for each clause, and also calculate the class sum.
         self.kernel_select_active.prepared_call(
@@ -631,7 +616,6 @@ class BaseTM:
             self.rng_gpu.state,
             self.ta_state_gpu,
             self.clause_weights_gpu,
-            self.bias_weights_gpu,
             gpu_buffers["class_sum_gpu"],
             gpu_buffers["selected_patch_ids_gpu"],
             gpu_buffers["num_includes_gpu"],
@@ -738,12 +722,12 @@ class BaseTM:
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
         # Initialize class sums with bias weights....which is basically zero
-        # class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
-        bias_weights = np.empty((1, self.number_of_outputs), dtype=np.float32)
-        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
+        class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
+        # bias_weights = np.empty((1, self.number_of_outputs), dtype=np.float32)
+        # memcpy_dtoh(bias_weights, self.bias_weights_gpu)
 
         # Array to store class sums for each sample.
-        class_sums = np.tile(bias_weights, (N, 1)).astype(np.float32)
+        # class_sums = np.tile(bias_weights, (N, 1)).astype(np.float32)
 
         for i in range(0, N, max_safe_N):
             X_safe = encoded_X[i : i + max_safe_N]
@@ -810,13 +794,7 @@ class BaseTM:
                 (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_patches)
             )
 
-    def get_bias_weights(self):
-        bias_weights = np.empty(self.number_of_outputs, dtype=np.float32)
-        memcpy_dtoh(bias_weights, self.bias_weights_gpu)
-        return bias_weights
-
     ######## TRANSFORM #######
-
     def transform(self, X, is_X_encoded: bool = False, block_size: int | None = None, grid_size: int | None = None):
         encoded_X = X if is_X_encoded else self.encode(X)
         if block_size is None:
