@@ -648,35 +648,40 @@ extern "C" {
                 bool clause_has_space = (num_includes[clause] <= MAX_INCLUDED_LITERALS);
                 bool t1 = (local_target * sign) > 0;
 
-                bool type1a = (TYPE1A_FB && should_update && t1 && local_clause_output && clause_has_space);
-                bool type1b = (TYPE1B_FB && should_update && t1 && !(local_clause_output && clause_has_space));
-                bool type2 = (TYPE2_FB && should_update && (local_target * sign) < 0 && local_clause_output);
-
+#if TYPE1A_FB
+                bool type1a = (should_update && t1 && local_clause_output && clause_has_space);
                 if (type1a) {
-#if WEIGHTED
+    #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
-#endif
+    #endif
                     type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
                 }
+#endif
 
+#if TYPE1B_FB
+                bool type1b = (should_update && t1 && !(local_clause_output && clause_has_space));
                 if (type1b) {
                     type1b_fb(&localRNG, ta_state, sign, literal_mask);
                 }
+#endif
 
+#if TYPE2_FB
+                bool type2 = (should_update && (local_target * sign) < 0 && local_clause_output);
                 if (type2) {
-#if WEIGHTED
+    #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
-    #if ALLOW_POLARITY_CHANGE == 0
+        #if ALLOW_POLARITY_CHANGE == 0
                     if (sign == 1 && *local_weight < 0) *local_weight = 1;
                     if (sign == -1 && *local_weight >= 0) *local_weight = -1;
+        #endif
     #endif
-#endif
-#if NEGATIVE_CLAUSES == 0
+    #if NEGATIVE_CLAUSES == 0
                     if (*local_weight < 1) *local_weight = 1;
                     if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
-#endif
+    #endif
                     type2_fb(ta_state, patch, literal_mask);
                 }
+#endif
             }
         }
         rng[index] = localRNG;
