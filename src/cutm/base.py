@@ -543,17 +543,6 @@ class BaseTM:
 
         return targets
 
-    # def _create_literal_mask(self, skip_literal):
-    #     skip_literal = np.array(skip_literal, dtype=np.uint32)
-    #     assert skip_literal.shape[0] == self.number_of_literals, "skip_literal must be of length number_of_literals."
-    #     literal_mask = np.full((self.number_of_literal_chunks,), 0xFFFFFFFF, dtype=np.uint32)
-    #     if np.any(skip_literal):
-    #         for litid in np.where(skip_literal > 0)[0]:
-    #             chunk_nr = litid // 32
-    #             chunk_pos = litid % 32
-    #             literal_mask[chunk_nr] &= ~(np.uint32(1) << chunk_pos)
-    #     return literal_mask
-
     def freeze_literals(self, literal_inds: list[int]):
         """
         Freeze the given literals, so that they are not used in evaluation or update steps.
@@ -782,13 +771,7 @@ class BaseTM:
         # Pack clauses
         packed_clauses_gpu, includes_gpu = self._pack_clauses_gpu(block_size, grid_size)
 
-        # Initialize class sums with bias weights....which is basically zero
         class_sums = np.zeros((N, self.number_of_outputs), dtype=np.float32)
-        # bias_weights = np.empty((1, self.number_of_outputs), dtype=np.float32)
-        # memcpy_dtoh(bias_weights, self.bias_weights_gpu)
-
-        # Array to store class sums for each sample.
-        # class_sums = np.tile(bias_weights, (N, 1)).astype(np.float32)
 
         for i in range(0, N, max_safe_N):
             X_safe = encoded_X[i : i + max_safe_N]

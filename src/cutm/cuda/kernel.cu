@@ -677,7 +677,6 @@ extern "C" {
     #endif
     #if NEGATIVE_CLAUSES == 0
                     if (*local_weight < 1) *local_weight = 1;
-                    if (bias_weights[class_id] < 0) bias_weights[class_id] = 0;
     #endif
                     type2_fb(ta_state, patch, literal_mask);
                 }
