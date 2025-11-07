@@ -1,5 +1,4 @@
 from time import time
-from .binarizer import Binarizer as Binarizer
 
 
 class Timer:
@@ -20,4 +19,3 @@ class Timer:
         if self.end_time is None:
             raise RuntimeError("elapsed() must be called after context is ended.")
         return self.end_time - self.start_time
-

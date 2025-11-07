@@ -5,10 +5,10 @@ import pandas as pd
 from cutm import MultiOutputTM
 from tqdm import tqdm
 from PIL import Image
-from tm_utils import Timer
+from ytm.utils import Timer
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
-from tm_utils.binarizer import ThermometerBinarizer
+from ytm.utils.binarizer import ThermometerBinarizer
 
 label_names = [
     "Attractive",

@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 from keras.datasets import mnist
 
-from tm_utils import Timer
+from ytm.utils import Timer
 from cutm import MultiClassTM
 
 

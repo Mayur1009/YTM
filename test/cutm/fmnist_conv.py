@@ -1,7 +1,7 @@
 import numpy as np
 from keras.datasets import fashion_mnist
 
-from tm_utils import Timer, Binarizer
+from ytm.utils import Timer, Binarizer
 from cutm import MultiClassTM
 
 
