@@ -146,42 +146,6 @@ extern "C" {
         }
     }
 
-    /************Autoencoder Input and target encoding*************/
-    __global__ void accumulate_examples(curandState* rng, const unsigned int* encoded_X,
-                                        const unsigned int* active_outputs, const int* inds_per_output,
-                                        const int* not_inds_per_output, const int inds_max_len,
-                                        const unsigned int* inds_lens, const unsigned int* not_inds_lens,
-                                        const unsigned int accu, const unsigned int N, unsigned int* accumulated_X,
-                                        int* targets) {
-        ull index = blockIdx.x * blockDim.x + threadIdx.x;
-        ull stride = blockDim.x * gridDim.x;
-        curandState localRNG = rng[index];
-
-        for (ull acc_i = index; acc_i < N; acc_i += stride) {
-            int o = acc_i % CLASSES;  // output index
-
-            unsigned int* acc_X = &accumulated_X[acc_i * PATCHES * NUM_LITERAL_CHUNKS];
-            int y = curand(&localRNG) & 1;  // Decide if Y should be 1 or 0
-            targets[acc_i * CLASSES + o] = (y == 1) ? 1 : -1;
-
-            // Accumulation
-            const int* index_arr = (y == 1) ? inds_per_output : not_inds_per_output;
-            const unsigned int* lens_arr = (y == 1) ? inds_lens : not_inds_lens;
-            unsigned int len = lens_arr[o];
-
-            for (int a = 0; a < accu; a++) {
-                // Randomly select an index from the appropriate indices array
-                unsigned int ind = curand(&localRNG) % len;
-                unsigned int chosen_ind = index_arr[o * inds_max_len + ind];
-                // OR acc_X with encoded_X[chosen_ind]
-                const unsigned int* enc_X = &encoded_X[chosen_ind * PATCHES * NUM_LITERAL_CHUNKS];
-                ull total_chunks = PATCHES * NUM_LITERAL_CHUNKS;
-                for (ull p = 0; p < total_chunks; p++) acc_X[p] |= enc_X[p];
-            }
-        }
-        rng[index] = localRNG;
-    }
-
     /***********CLAUSE PACKING***********/
     __global__ void pack_clauses(const unsigned int* global_ta_states, unsigned int* packed_clauses,
                                  int* num_includes) {
@@ -239,42 +203,6 @@ extern "C" {
 
         return 1;
     }
-
-    /***********CLAUSE EVALUATION---SLOWER***********/
-    // __global__ void clause_eval(curandState *rng, const unsigned int *packed_ta_states, const float *clause_weights,
-    //                             int *patch_weights, const unsigned int *X_batch, int *selected_patch_ids,
-    //                             float *class_sums, const int e) {
-    //     ull index = blockIdx.x * blockDim.x + threadIdx.x;
-    //     ull stride = blockDim.x * gridDim.x;
-    //
-    //     curandState localRNG = rng[index];
-    //
-    //     for (ull clause = index; clause < CLAUSES; clause += stride) {
-    //         int active_patches[PATCHES];
-    //         int active_count = 0;
-    //
-    //         for (ull patch_id = 0; patch_id < PATCHES; ++patch_id) {
-    //             int patch_matched = clause_match(
-    //                 &packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-    //                 &X_batch[(ull)e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS]);
-    //             if (patch_matched) {
-    //                 active_patches[active_count] = patch_id;
-    //                 active_count++;
-    //             }
-    //         }
-    //         if (active_count > 0) {
-    //             int random_index = curand(&localRNG) % active_count;
-    //             selected_patch_ids[clause] = active_patches[random_index];
-    //             patch_weights[clause * PATCHES + active_patches[random_index]] = 1;
-    //             for (int class_id = 0; class_id < CLASSES; ++class_id) {
-    //                 atomicAdd(&class_sums[0 * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
-    //             }
-    //         } else {
-    //             selected_patch_ids[clause] = -1;
-    //         }
-    //     }
-    //     rng[index] = localRNG;
-    // }
 
     /***********FAST EVALUATION KERNELS***********/
     __global__ void fast_eval(const unsigned int* packed_ta_states, const int* num_includes,
@@ -425,18 +353,6 @@ extern "C" {
     /***********CLAUSE UPDATE KERNELS***********/
     __device__ inline float clip_cs(float cs) { return (cs > THRESH) ? THRESH : ((cs < -THRESH) ? -THRESH : cs); }
 
-    // __device__ inline void type1a_fb_scalar(curandState *rng, unsigned int *ta_state, const unsigned int *patch,
-    // const unsigned int *literal_mask) {
-    //     for (int li = 0; li < LITERALS; ++li) {
-    //         unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-    //         if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
-    //             ta_state[li] += 1;
-    //         } else if (patch_bit == 0 && ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
-    //             ta_state[li] -= 1;
-    //         }
-    //     }
-    // }
-
     __device__ inline void type1a_fb(curandState* rng, unsigned int* ta_state, const unsigned int* patch,
                                      const int sign, const unsigned int* literal_mask) {
         float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
@@ -482,16 +398,6 @@ extern "C" {
         }
     }
 
-    // __device__ inline void type1b_fb_scalar(curandState *rng, unsigned int *ta_state, const int sign, const unsigned
-    // int *literal_mask) {
-    //     float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
-    //     for (int li = 0; li < LITERALS; ++li) {
-    //         if (ta_state[li] > 0 && curand_uniform(rng) <= s_inv) {
-    //             ta_state[li] -= 1;
-    //         }
-    //     }
-    // }
-
     __device__ inline void type1b_fb(curandState* rng, unsigned int* ta_state, const int sign,
                                      const unsigned int* literal_mask) {
         float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
@@ -519,16 +425,6 @@ extern "C" {
             }
         }
     }
-
-    // __device__ inline void type2_fb_scalar(unsigned int *ta_state, const unsigned int *patch, const unsigned int
-    // *literal_mask) {
-    //     for (int li = 0; li < LITERALS; ++li) {
-    //         unsigned int patch_bit = (patch[li / INT_SIZE] >> (li % INT_SIZE)) & 1u;
-    //         if (patch_bit == 0 && ta_state[li] < INCLUDE_TA_STATE) {
-    //             ta_state[li] += 1;
-    //         }
-    //     }
-    // }
 
     __device__ inline void type2_fb(unsigned int* ta_state, const unsigned int* patch,
                                     const unsigned int* literal_mask) {

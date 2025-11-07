@@ -6,7 +6,7 @@ import pycuda.autoinit  # noqa: F401
 import pycuda.curandom as curandom
 from pycuda.compiler import SourceModule
 from pycuda.driver import Context as ctx  # pyright: ignore[reportAttributeAccessIssue]
-from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memcpy_dtod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
+from pycuda.driver import mem_alloc, memcpy_dtoh, memcpy_htod, memset_d32  # pyright: ignore[reportAttributeAccessIssue]
 from pycuda.gpuarray import to_gpu
 from tqdm import tqdm
 
@@ -72,7 +72,7 @@ class BaseTM:
     s : float
         The specificity parameter. Should be >= 1.0.
     dim : tuple[int, int, int]
-        Input dimensions. In cases where the input is image like, this is (height, width, channels) or (height, weidth, 1). But, in general, this should be (number_of_features, 1, 1). MUST BE A TUPLE WITH 3 VALUES. 
+        Input dimensions. In cases where the input is image like, this is (height, width, channels) or (height, weidth, 1). But, in general, this should be (number_of_features, 1, 1). MUST BE A TUPLE WITH 3 VALUES.
     n_classes : int
         Number of output classes.
     q : float
@@ -122,6 +122,7 @@ class BaseTM:
     grid_size : int | None, optional, default=None
         CUDA kernel parameter
     """
+
     def __init__(
         self,
         number_of_clauses_per_class: int,
@@ -502,21 +503,6 @@ class BaseTM:
                 else:
                     targets[inds, i] = 1
 
-            # IDEA 1
-            # Based on the number of selected true labels per sample, we also select the same amount of false labels.
-            # So, if a sample has 3 true labels, we select 3 false labels.
-            # for i in range(N):
-            #     selected_trues = np.where(targets[i, :] > 0)[0]
-            #     if len(selected_trues) == 0:
-            #         continue
-            #
-            #     false_classes = np.where(Y[i, :] <= 0)[0]
-            #     sel_false = self.rng.choice(
-            #         false_classes, size=min(len(selected_trues), len(false_classes)), replace=False
-            #     )
-            #     targets[i, sel_false] = -1
-
-            # IDEA 2
             # False label selection based on q
             p = self.q / max(1, self.number_of_outputs - 1)
             for i in range(N):
@@ -527,19 +513,6 @@ class BaseTM:
                 if len(false_classes) > 0:
                     not_skip = self.rng.random(size=len(false_classes)) <= p
                     targets[i, false_classes[not_skip]] = -1
-
-            # IDEA 3
-            # Or, maybe we should also randomly select min_cnt false labels for each class as well.
-            # not_per_class_counts = N - per_class_counts
-            # min_not_cnt = np.min(not_per_class_counts)
-            # min_not_cnt = int(self.q * min_cnt)
-            # for i in range(self.number_of_outputs):
-            #     inds = np.where(Y[:, i] <= 0)[0]
-            #     if len(inds) > min_not_cnt:
-            #         sel = self.rng.choice(inds, size=min_not_cnt, replace=False)
-            #         targets[sel, i] = -1
-            #     else:
-            #         targets[inds, i] = -1
 
         return targets
 
@@ -680,6 +653,27 @@ class BaseTM:
 
     #### FIT AND SCORE ####
     def _fit(self, encoded_X, encoded_Y, **opt_args: Unpack[FitOptArgs]):
+        """Main fit function.
+
+        Parameters
+        ----------
+        encoded_X : np.ndarray
+            Encoded input data of shape (N, number_of_patches, number_of_literal_chunks), of dtype np.uint32. It should already be bit packed and processed using the `encode` method.
+        encoded_Y : np.ndarray
+            Encoded target data of shape (N, number_of_outputs), of dtype np.int32. It should contain 1 for positive class, and 0 for negative class.
+        clause_drop_p : float
+            Probability of dropping a clause during each training sample.
+        shuffle : bool
+            Whether to shuffle the training data.
+        label_sampling : bool | int
+            Experimental. Do not use. Randomly drop class labels.
+        g_pos : float | list[float]
+            Experimental. DO NOT USE.
+        g_neg : float | list[float]
+            Experimental. DO NOT USE.
+        log : bool
+            Some logs for me. DO NOT USE.
+        """
         N = encoded_X.shape[0]
         args = self._validate_fit_args(**opt_args)
 
