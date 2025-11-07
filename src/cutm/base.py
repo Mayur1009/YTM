@@ -61,10 +61,71 @@ def _float_or_list_to_array(x: float | list[float], size: int):
 
 
 class BaseTM:
+    """Implementing tsetlin machine
+
+    Attributes
+    ----------
+    number_of_clauses_per_class : int
+        Number of clauses per class. If using coalesced clauses(default), then the clauses are shared among all classes, and total_num_clauses = number_of_clauses_per_clas. Else,(non-coalesced), total_num_clauses = number_of_clauses_per_class * num_classes.
+    T : int | float
+        The voting threshold.
+    s : float
+        The specificity parameter. Should be >= 1.0.
+    dim : tuple[int, int, int]
+        Input dimensions. In cases where the input is image like, this is (height, width, channels) or (height, weidth, 1). But, in general, this should be (number_of_features, 1, 1). MUST BE A TUPLE WITH 3 VALUES. 
+    n_classes : int
+        Number of output classes.
+    q : float
+        Hyperparameter Q
+    patch_dim : tuple[int, int], optional, default=(dim[0], dim[1])
+        Only use when using convolution.
+    number_of_ta_states : int, optional, default=256
+        Number of states per Tsetlin Automaton.
+    max_included_literals : int | None, optional, default=None
+        Maximum number of literals that can be included in a clause. If None, then no limit.
+    append_negated : bool, optional, default=True
+        Whether to append negated features to the input.
+    init_neg_weights : bool, optional, default=True
+        Option to turn off initialization of negative clause weights.
+    negative_polarity : bool, optional, default=True
+        Whether to use negative polarity clauses.
+    encode_loc : bool, optional, default=True
+        When using convolution, whether to encode the patch location as literals.
+    coalesced : bool, optional, default=True
+        Whether to use coalesced clauses.
+    weighted : bool, optional, default=True
+        Whether to use weighted or unweighted clauses.
+    max_weight : float, optional, default=np.finfo(np.float32).max
+        Maximum absolute value for clause weights. Defaults to maximum float32 value.
+    s_neg_polarity : float, optional, default=s
+        Specificity parameter for negative polarity clauses. Defaults to s.
+    h : float | list[float], optional, default=0.5
+        Experimental. DO NOT USE.
+    allow_polarity_change : bool, optional, default=True
+        Whether to allow polarity change during training.
+    initial_weight : float, optional, default=1.0
+        Absolute value of initial clause weights.
+    initial_state : int | Literal["random"] | Literal["middle"], optional, default="middle"
+        Initial state of Tsetlin Automata. If "middle", then all TAs are initialized to the middle state. If "random", then all TAs are initialized randomly. Else, should be an integer between 0 and number_of_ta_states - 1.
+    include_state : int | Literal["middle"], optional, default="middle"
+        State threshold for including literals. If "middle", then the threshold is set to the middle state + 1. Else, should be an integer between 0 and number_of_ta_states - 1.
+    type1a_fb : bool, optional, default=True
+        Option to disable Type 1a feedback.
+    type1b_fb : bool, optional, default=True
+        Option to disable Type 1b feedback.
+    type2_fb : bool, optional, default=True
+        Option to disable Type 2 feedback.
+    seed : int | None, optional, default=None
+        Random seed. Does not gaurantee reproducibility, because of GPU parallelism. But the initialization of clauses and weights should be the same for the same seed.
+    block_size : int, optional, default=128
+        CUDA kernel parameter
+    grid_size : int | None, optional, default=None
+        CUDA kernel parameter
+    """
     def __init__(
         self,
         number_of_clauses_per_class: int,
-        T: int,
+        T: int | float,
         s: float,
         dim: tuple[int, int, int],
         n_classes: int,
