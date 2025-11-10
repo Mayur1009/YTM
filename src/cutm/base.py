@@ -316,9 +316,6 @@ class BaseTM:
         self.kernel_transform_patchwise = mod_new_kernel.get_function("transform_patchwise")
         self.kernel_transform_patchwise.prepare("PPPiPP")
 
-        self.kernel_accumulate_examples = mod_new_kernel.get_function("accumulate_examples")
-        self.kernel_accumulate_examples.prepare("PPPPPiPPiiPP")
-
         # Allocate GPU memory
         self.ta_state_gpu = mem_alloc(self.number_of_clauses * self.number_of_literals * 4)
         self.clause_weights_gpu = mem_alloc(self.number_of_clauses * self.number_of_outputs * 4)
