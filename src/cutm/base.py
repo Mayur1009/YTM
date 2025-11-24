@@ -299,16 +299,16 @@ class BaseTM:
         self.kernel_fast_eval.prepare("PPPPPPi")
 
         self.kernel_select_active = mod_new_kernel.get_function("select_active")
-        self.kernel_select_active.prepare("PPPPPP")
+        self.kernel_select_active.prepare("PPPPPPPP")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiPP")
 
         self.kernel_class_sum_to_update_prob = mod_new_kernel.get_function("class_sum_to_update_prob")
-        self.kernel_class_sum_to_update_prob.prepare("PPPPiP")
+        self.kernel_class_sum_to_update_prob.prepare("PPPPPPiPPP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiPP")
@@ -564,7 +564,11 @@ class BaseTM:
             "g_neg_gpu": mem_alloc(args["g_neg"].nbytes),
             "packed_clauses_gpu": mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4),
             "class_sum_gpu": mem_alloc(self.number_of_outputs * 4),
+            "positive_evidence_gpu": mem_alloc(self.number_of_outputs * 4),
+            "negative_evidence_gpu": mem_alloc(self.number_of_outputs * 4),
             "update_probs_gpu": mem_alloc(self.number_of_outputs * 8),  # double
+            "pprob_gpu": mem_alloc(self.number_of_outputs * 8),  # double
+            "nprob_gpu": mem_alloc(self.number_of_outputs * 8),  # double
             "clause_outputs_gpu": mem_alloc(self.number_of_clauses * self.number_of_patches * 4),
             "selected_patch_ids_gpu": mem_alloc(self.number_of_clauses * 4),
             "num_includes_gpu": mem_alloc(self.number_of_clauses * 4),
@@ -604,6 +608,8 @@ class BaseTM:
 
         # Reset class sums.
         memset_d32(gpu_buffers["class_sum_gpu"], 0, self.number_of_outputs)
+        memset_d32(gpu_buffers["positive_evidence_gpu"], 0, self.number_of_outputs)
+        memset_d32(gpu_buffers["negative_evidence_gpu"], 0, self.number_of_outputs)
 
         # Select a patch for each clause, and also calculate the class sum.
         self.kernel_select_active.prepared_call(
@@ -614,6 +620,8 @@ class BaseTM:
             self.patch_weights_gpu,
             gpu_buffers["selected_patch_ids_gpu"],
             gpu_buffers["class_sum_gpu"],
+            gpu_buffers["positive_evidence_gpu"],
+            gpu_buffers["negative_evidence_gpu"]
         )
         ctx.synchronize()
 
@@ -622,11 +630,15 @@ class BaseTM:
         self.kernel_class_sum_to_update_prob.prepared_call(
             *kconfs["config_outputs"],
             gpu_buffers["class_sum_gpu"],
+            gpu_buffers["positive_evidence_gpu"],
+            gpu_buffers["negative_evidence_gpu"],
             gpu_buffers["targets_gpu"],
             gpu_buffers["g_pos_gpu"],
             gpu_buffers["g_neg_gpu"],
             np.int32(e),
             gpu_buffers["update_probs_gpu"],
+            gpu_buffers["pprob_gpu"],
+            gpu_buffers["nprob_gpu"],
         )
         ctx.synchronize()
 
@@ -636,7 +648,6 @@ class BaseTM:
             self.rng_gpu.state,
             self.ta_state_gpu,
             self.clause_weights_gpu,
-            gpu_buffers["class_sum_gpu"],
             gpu_buffers["selected_patch_ids_gpu"],
             gpu_buffers["num_includes_gpu"],
             gpu_buffers["clause_drop_mask_gpu"],
@@ -644,6 +655,8 @@ class BaseTM:
             gpu_buffers["encoded_X_gpu"],
             gpu_buffers["targets_gpu"],
             gpu_buffers["update_probs_gpu"],
+            gpu_buffers["pprob_gpu"],
+            gpu_buffers["nprob_gpu"],
             np.int32(e),
         )
         ctx.synchronize()

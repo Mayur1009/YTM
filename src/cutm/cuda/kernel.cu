@@ -50,6 +50,12 @@ __device__ double H[CLASSES] = {0.5};
     #define FILTER 0xFFFFFFFF
 #endif
 
+#if COALESCED == 0
+    #define FOR_EACH_CLASS(clause) ull class_id = (ull)clause / CLAUSES_PER_BANK;
+#else
+    #define FOR_EACH_CLASS(_) for (ull class_id = 0; class_id < CLASSES; ++class_id)
+#endif
+
 typedef unsigned long long ull;
 
 extern "C" {
@@ -236,7 +242,8 @@ extern "C" {
 
     /***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
     __global__ void select_active(curandState* rng, const float* clause_weights, const unsigned int* clause_outputs,
-                                  int* patch_weights, int* selected_patch_ids, float* class_sums) {
+                                  int* patch_weights, int* selected_patch_ids, float* class_sums,
+                                  float* positive_evidence, float* negative_evidence) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
 
@@ -258,11 +265,23 @@ extern "C" {
                 patch_weights[clause * PATCHES + selected_id]++;
 #if COALESCED == 0
                 int class_id = (ull)clause / CLAUSES_PER_BANK;
+                {
 #else
-                for (int class_id = 0; class_id < CLASSES; ++class_id)
+                for (int class_id = 0; class_id < CLASSES; ++class_id) {
 #endif
-                atomicAdd(&class_sums[class_id],
-                          clause_outputs[clause * PATCHES + selected_id] * clause_weights[clause * CLASSES + class_id]);
+                    // FOR_EACH_CLASS(clause) { // class_id is defined in this macro
+                    if (clause_weights[clause * CLASSES + class_id] >= 0)
+                        // Positive polarity clauses
+                        atomicAdd(&positive_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
+                                                                    clause_weights[clause * CLASSES + class_id]);
+                    else
+                        // Negative polarity clauses
+                        atomicAdd(&negative_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
+                                                                    clause_weights[clause * CLASSES + class_id]);
+
+                    atomicAdd(&class_sums[class_id], clause_outputs[clause * PATCHES + selected_id] *
+                                                         clause_weights[clause * CLASSES + class_id]);
+                }
             }
         }
         rng[index] = localRNG;
@@ -487,12 +506,27 @@ extern "C" {
         return prob;
     }
 
-    __global__ void class_sum_to_update_prob(const float* class_sums, const int* targets, const double* g_pos,
-                                             const double* g_neg, const int e, double* u_prob) {
+    __device__ double pprob_fun(int target, double v) {
+        if (target == 1)
+            return (THRESH - v) / (THRESH);
+        else
+            return (0 - v) / (-THRESH);
+    }
+
+    __device__ double nprob_fun(int target, double v) {
+        if (target == 1)
+            return (0 - v) / (THRESH);
+        else
+            return (-THRESH - v) / (-THRESH);
+    }
+
+    __global__ void class_sum_to_update_prob(const float* class_sums, const float* positive_evidence,
+                                             const float* negative_evidence, const int* targets, const double* g_pos,
+                                             const double* g_neg, const int e, double* u_prob, double* pprob,
+                                             double* nprob) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull class_id = index; class_id < CLASSES; class_id += stride) {
-            float clipped_cs = clip_cs(class_sums[class_id]);
             int local_target = targets[e * CLASSES + class_id];
             if (local_target == 0) {
                 u_prob[class_id] = 0.0;
@@ -503,15 +537,24 @@ extern "C" {
             double h = (local_target == 1) ? H[class_id] : (1.0 - H[class_id]);
             if (h == 1.0) h = 0.999999;
             if (h == 0.0) h = 0.000001;
-            u_prob[class_id] = uprob_fun((double)clipped_cs, y, h, g);
+            u_prob[class_id] = uprob_fun((double)clip_cs(class_sums[class_id]), y, h, g);
+            // pprob[class_id] = uprob_fun((double)clip_cs(positive_evidence[class_id]), y, h, g);
+            // nprob[class_id] = uprob_fun((double)clip_cs(negative_evidence[class_id]), y, h, g);
+            pprob[class_id] = pprob_fun(local_target, (double)clip_cs(positive_evidence[class_id]));
+            nprob[class_id] = nprob_fun(local_target, (double)clip_cs(negative_evidence[class_id]));
+
+            // printf("Class %llu, Target %d, Class Sum %.2f, Pos Ev %.2f, Neg Ev %.2f, Update Prob %.4f, PProb %.4f, NProb %.4f\n",
+            //        class_id, local_target, class_sums[class_id], positive_evidence[class_id],
+            //        negative_evidence[class_id], u_prob[class_id], pprob[class_id], nprob[class_id]);
+
         }
     }
 
     __global__ void clause_update(curandState* rng, unsigned int* global_ta_states, float* clause_weights,
-                                  const float* class_sums, const int* selected_patch_ids, const int* num_includes,
+                                  const int* selected_patch_ids, const int* num_includes,
                                   const unsigned int* clause_drop_mask, const unsigned int* literal_mask,
                                   const unsigned int* X_batch, const int* targets, const double* update_probs,
-                                  const int e) {
+                                  const double* pprob, const double* nprob, const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
@@ -532,13 +575,18 @@ extern "C" {
 #else
             for (ull class_id = 0; class_id < CLASSES; ++class_id) {
 #endif
+                // FOR_EACH_CLASS(clause) { // class_id is defined in this macro
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
                 float* local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
-                double update_prob = update_probs[class_id];
+                // double update_prob = update_probs[class_id];
+                double update_prob = (sign == 1) ? pprob[class_id] : nprob[class_id];
+
+                // printf("Clause %llu, Class %llu, Target %d, Weight %.2f, Sign %d, Update Prob %.4f\n", clause,
+                //        class_id, local_target, *local_weight, sign, update_prob);
 
                 bool should_update = (curand_uniform(&localRNG) <= update_prob);
                 bool clause_has_space = (num_includes[clause] <= MAX_INCLUDED_LITERALS);

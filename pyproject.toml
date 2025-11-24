@@ -7,7 +7,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">= 3.11"
-version = "0.5+dev31"
+version = "0.5+splitloss1"
 
 [project.optional-dependencies]
 examples = [
