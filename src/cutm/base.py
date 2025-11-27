@@ -623,7 +623,7 @@ class BaseTM:
             self.patch_weights_gpu,
             gpu_buffers["selected_patch_ids_gpu"],
             gpu_buffers["positive_evidence_gpu"],
-            gpu_buffers["negative_evidence_gpu"]
+            gpu_buffers["negative_evidence_gpu"],
         )
         ctx.synchronize()
 
@@ -820,16 +820,35 @@ class BaseTM:
         ta_states = self.get_ta_state()
         return (ta_states > ((self.number_of_ta_states - 1) // 2)).astype(np.uint32)
 
-    def get_weights(self):
+    def get_weights(self) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        """Return clause weights.
+
+        Returns
+        -------
+        np.ndarray[tuple[int, int], np.dtype[np.float32]]
+            If using coalesced clauses(default),
+                retusn array of shape (number_of_clauses, number_of_outputs),
+                where each clause has a weight for each output class.
+            If not using coalesced clauses,
+                returns array of shape (number_of_outputs, number_of_clauses_per_class),
+                where each output class has its own set of clauses, and each clause only has a single weight.
+
+        """
         clause_weights = np.empty(self.number_of_clauses * self.number_of_outputs, dtype=np.float32)
         memcpy_dtoh(clause_weights, self.clause_weights_gpu)
         if self.coalesced:
             return clause_weights.reshape((self.number_of_clauses, self.number_of_outputs))
         else:
-            # NOTE: This will mostly be zeros. Maybe this should be returned as a smaller array?
-            return clause_weights.reshape(
+            clause_weights = clause_weights.reshape(
                 (self.number_of_clause_banks, self.number_of_clauses_per_class, self.number_of_outputs)
             )
+            clause_weights_reduced = np.zeros(
+                (self.number_of_clause_banks, self.number_of_clauses_per_class), dtype=np.float32
+            )
+            for i in range(self.number_of_clause_banks):
+                clause_weights_reduced[i, :] = clause_weights[i, :, i]
+
+            return clause_weights_reduced
 
     def get_patch_weights(self):
         patch_weights = np.empty(self.number_of_clauses * self.number_of_patches, dtype=np.int32)
