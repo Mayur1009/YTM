@@ -510,11 +510,6 @@ extern "C" {
                 nprob[class_id] = 0.0;
                 continue;
             }
-            double y = (double)THRESH * (double)local_target;
-            double g = (local_target == 1) ? g_pos[class_id] : g_neg[class_id];
-            double h = (local_target == 1) ? H[class_id] : (1.0 - H[class_id]);
-            if (h == 1.0) h = 0.999999;
-            if (h == 0.0) h = 0.000001;
 
 #if SPLIT_CLASS_SUM == 1
             double pos_ev = (double)CLIP(positive_evidence[class_id], 0, THRESH);
@@ -539,6 +534,11 @@ extern "C" {
             }
 #else
             // Normal case.
+            double y = (double)THRESH * (double)local_target;
+            double g = (local_target == 1) ? g_pos[class_id] : g_neg[class_id];
+            double h = (local_target == 1) ? H[class_id] : (1.0 - H[class_id]);
+            if (h == 1.0) h = 0.999999;
+            if (h == 0.0) h = 0.000001;
             double class_sum = (double)CLIP(positive_evidence[class_id] + negative_evidence[class_id], -THRESH, THRESH);
             pprob[class_id] = uprob_fun(class_sum, y, h, g);
             nprob[class_id] = pprob[class_id];
