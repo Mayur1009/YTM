@@ -34,6 +34,7 @@ class BaseTMOptArgs(TypedDict, total=False):
     type1a_fb: bool
     type1b_fb: bool
     type2_fb: bool
+    split_class_sum: bool
     seed: int | None
     block_size: int
     grid_size: int | None
@@ -115,6 +116,8 @@ class BaseTM:
         Option to disable Type 1b feedback.
     type2_fb : bool, optional, default=True
         Option to disable Type 2 feedback.
+    split_class_sum: bool, optional, default=False
+        Experimental. DO NOT USE.
     seed : int | None, optional, default=None
         Random seed. Does not gaurantee reproducibility, because of GPU parallelism. But the initialization of clauses and weights should be the same for the same seed.
     block_size : int, optional, default=128
@@ -166,6 +169,7 @@ class BaseTM:
             "type1a_fb": opt_args.get("type1a_fb", True),
             "type1b_fb": opt_args.get("type1b_fb", True),
             "type2_fb": opt_args.get("type2_fb", True),
+            "split_class_sum": opt_args.get("split_class_sum", False),
             "seed": opt_args.get("seed", None),
             "block_size": opt_args.get("block_size", 128),
             "grid_size": opt_args.get("grid_size", None),
@@ -194,6 +198,7 @@ class BaseTM:
         self.type1a_fb = self.opt_args["type1a_fb"]
         self.type1b_fb = self.opt_args["type1b_fb"]
         self.type2_fb = self.opt_args["type2_fb"]
+        self.split_class_sum = self.opt_args["split_class_sum"]
         self.seed = self.opt_args["seed"]
         self.block_size = self.opt_args["block_size"]
         self.grid_size = self.opt_args["grid_size"]
@@ -279,6 +284,7 @@ class BaseTM:
         #define TYPE1A_FB {1 if self.type1a_fb else 0}
         #define TYPE1B_FB {1 if self.type1b_fb else 0}
         #define TYPE2_FB {1 if self.type2_fb else 0}
+        #define SPLIT_CLASS_SUM {1 if self.split_class_sum else 0}
         __device__ double H[{self.number_of_outputs}] = {{{", ".join([str(h) for h in self.h])}}};
         """
         current_dir = pathlib.Path(__file__).parent
@@ -299,16 +305,16 @@ class BaseTM:
         self.kernel_fast_eval.prepare("PPPPPPi")
 
         self.kernel_select_active = mod_new_kernel.get_function("select_active")
-        self.kernel_select_active.prepare("PPPPPPPP")
+        self.kernel_select_active.prepare("PPPPPPP")
 
         self.kernel_calc_class_sums_infer_batch = mod_new_kernel.get_function("calc_class_sums_infer_batch")
         self.kernel_calc_class_sums_infer_batch.prepare("PPPPiPP")
 
-        self.kernel_class_sum_to_update_prob = mod_new_kernel.get_function("class_sum_to_update_prob")
-        self.kernel_class_sum_to_update_prob.prepare("PPPPPPiPPP")
+        self.kernel_evidence_to_update_prob = mod_new_kernel.get_function("evidence_to_update_prob")
+        self.kernel_evidence_to_update_prob.prepare("PPPPPiPP")
 
         self.kernel_clause_update = mod_new_kernel.get_function("clause_update")
-        self.kernel_clause_update.prepare("PPPPPPPPPPPPi")
+        self.kernel_clause_update.prepare("PPPPPPPPPPPi")
 
         self.kernel_transform = mod_new_kernel.get_function("transform")
         self.kernel_transform.prepare("PPPiPP")
@@ -563,10 +569,8 @@ class BaseTM:
             "g_pos_gpu": mem_alloc(args["g_pos"].nbytes),
             "g_neg_gpu": mem_alloc(args["g_neg"].nbytes),
             "packed_clauses_gpu": mem_alloc(self.number_of_clauses * self.number_of_literal_chunks * 4),
-            "class_sum_gpu": mem_alloc(self.number_of_outputs * 4),
             "positive_evidence_gpu": mem_alloc(self.number_of_outputs * 4),
             "negative_evidence_gpu": mem_alloc(self.number_of_outputs * 4),
-            "update_probs_gpu": mem_alloc(self.number_of_outputs * 8),  # double
             "pprob_gpu": mem_alloc(self.number_of_outputs * 8),  # double
             "nprob_gpu": mem_alloc(self.number_of_outputs * 8),  # double
             "clause_outputs_gpu": mem_alloc(self.number_of_clauses * self.number_of_patches * 4),
@@ -607,7 +611,6 @@ class BaseTM:
         ctx.synchronize()
 
         # Reset class sums.
-        memset_d32(gpu_buffers["class_sum_gpu"], 0, self.number_of_outputs)
         memset_d32(gpu_buffers["positive_evidence_gpu"], 0, self.number_of_outputs)
         memset_d32(gpu_buffers["negative_evidence_gpu"], 0, self.number_of_outputs)
 
@@ -619,7 +622,6 @@ class BaseTM:
             gpu_buffers["clause_outputs_gpu"],
             self.patch_weights_gpu,
             gpu_buffers["selected_patch_ids_gpu"],
-            gpu_buffers["class_sum_gpu"],
             gpu_buffers["positive_evidence_gpu"],
             gpu_buffers["negative_evidence_gpu"]
         )
@@ -627,16 +629,14 @@ class BaseTM:
 
         # Calculate the class sums to update probabilities.
         # This also implements a curved uprob functions.
-        self.kernel_class_sum_to_update_prob.prepared_call(
+        self.kernel_evidence_to_update_prob.prepared_call(
             *kconfs["config_outputs"],
-            gpu_buffers["class_sum_gpu"],
             gpu_buffers["positive_evidence_gpu"],
             gpu_buffers["negative_evidence_gpu"],
             gpu_buffers["targets_gpu"],
             gpu_buffers["g_pos_gpu"],
             gpu_buffers["g_neg_gpu"],
             np.int32(e),
-            gpu_buffers["update_probs_gpu"],
             gpu_buffers["pprob_gpu"],
             gpu_buffers["nprob_gpu"],
         )
@@ -654,7 +654,6 @@ class BaseTM:
             self.literal_mask_gpu,
             gpu_buffers["encoded_X_gpu"],
             gpu_buffers["targets_gpu"],
-            gpu_buffers["update_probs_gpu"],
             gpu_buffers["pprob_gpu"],
             gpu_buffers["nprob_gpu"],
             np.int32(e),

@@ -27,6 +27,7 @@
     #define TYPE1A_FB 1
     #define TYPE1B_FB 1
     #define TYPE2_FB 1
+    #define SPLIT_CLASS_SUM 0
 __device__ double H[CLASSES] = {0.5};
 #endif
 
@@ -51,10 +52,12 @@ __device__ double H[CLASSES] = {0.5};
 #endif
 
 #if COALESCED == 0
-    #define FOR_EACH_CLASS(clause) ull class_id = (ull)clause / CLAUSES_PER_BANK;
+    #define LOOP_CLASS_ID(clause) ull class_id = (ull)clause / CLAUSES_PER_BANK;
 #else
-    #define FOR_EACH_CLASS(_) for (ull class_id = 0; class_id < CLASSES; ++class_id)
+    #define LOOP_CLASS_ID(_) for (ull class_id = 0; class_id < CLASSES; ++class_id)
 #endif
+
+#define CLIP(val, min, max) ((val < min) ? min : ((val > max) ? max : val))
 
 typedef unsigned long long ull;
 
@@ -242,8 +245,8 @@ extern "C" {
 
     /***********SELECT ACTIVE CLAUSES AND CALCULATE CLASS SUMS***********/
     __global__ void select_active(curandState* rng, const float* clause_weights, const unsigned int* clause_outputs,
-                                  int* patch_weights, int* selected_patch_ids, float* class_sums,
-                                  float* positive_evidence, float* negative_evidence) {
+                                  int* patch_weights, int* selected_patch_ids, float* positive_evidence,
+                                  float* negative_evidence) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
 
@@ -263,13 +266,7 @@ extern "C" {
             selected_patch_ids[clause] = selected_id;
             if (selected_id != -1) {
                 patch_weights[clause * PATCHES + selected_id]++;
-#if COALESCED == 0
-                int class_id = (ull)clause / CLAUSES_PER_BANK;
-                {
-#else
-                for (int class_id = 0; class_id < CLASSES; ++class_id) {
-#endif
-                    // FOR_EACH_CLASS(clause) { // class_id is defined in this macro
+                LOOP_CLASS_ID(clause) {  // class_id is defined in this macro
                     if (clause_weights[clause * CLASSES + class_id] >= 0)
                         // Positive polarity clauses
                         atomicAdd(&positive_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
@@ -278,9 +275,6 @@ extern "C" {
                         // Negative polarity clauses
                         atomicAdd(&negative_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
                                                                     clause_weights[clause * CLASSES + class_id]);
-
-                    atomicAdd(&class_sums[class_id], clause_outputs[clause * PATCHES + selected_id] *
-                                                         clause_weights[clause * CLASSES + class_id]);
                 }
             }
         }
@@ -370,8 +364,6 @@ extern "C" {
     }
 
     /***********CLAUSE UPDATE KERNELS***********/
-    __device__ inline float clip_cs(float cs) { return (cs > THRESH) ? THRESH : ((cs < -THRESH) ? -THRESH : cs); }
-
     __device__ inline void type1a_fb(curandState* rng, unsigned int* ta_state, const unsigned int* patch,
                                      const int sign, const unsigned int* literal_mask) {
         float s_inv = (sign == 1) ? S_INV : S_NEG_POLARITY_INV;
@@ -506,30 +498,16 @@ extern "C" {
         return prob;
     }
 
-    __device__ double pprob_fun(int target, double v) {
-        if (target == 1)
-            return (THRESH - v) / (THRESH);
-        else
-            return (0 - v) / (-THRESH);
-    }
-
-    __device__ double nprob_fun(int target, double v) {
-        if (target == 1)
-            return (0 - v) / (THRESH);
-        else
-            return (-THRESH - v) / (-THRESH);
-    }
-
-    __global__ void class_sum_to_update_prob(const float* class_sums, const float* positive_evidence,
-                                             const float* negative_evidence, const int* targets, const double* g_pos,
-                                             const double* g_neg, const int e, double* u_prob, double* pprob,
-                                             double* nprob) {
+    __global__ void evidence_to_update_prob(const float* positive_evidence, const float* negative_evidence,
+                                            const int* targets, const double* g_pos, const double* g_neg, const int e,
+                                            double* pprob, double* nprob) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull class_id = index; class_id < CLASSES; class_id += stride) {
             int local_target = targets[e * CLASSES + class_id];
             if (local_target == 0) {
-                u_prob[class_id] = 0.0;
+                pprob[class_id] = 0.0;
+                nprob[class_id] = 0.0;
                 continue;
             }
             double y = (double)THRESH * (double)local_target;
@@ -537,24 +515,42 @@ extern "C" {
             double h = (local_target == 1) ? H[class_id] : (1.0 - H[class_id]);
             if (h == 1.0) h = 0.999999;
             if (h == 0.0) h = 0.000001;
-            u_prob[class_id] = uprob_fun((double)clip_cs(class_sums[class_id]), y, h, g);
-            // pprob[class_id] = uprob_fun((double)clip_cs(positive_evidence[class_id]), y, h, g);
-            // nprob[class_id] = uprob_fun((double)clip_cs(negative_evidence[class_id]), y, h, g);
-            pprob[class_id] = pprob_fun(local_target, (double)clip_cs(positive_evidence[class_id]));
-            nprob[class_id] = nprob_fun(local_target, (double)clip_cs(negative_evidence[class_id]));
 
-            // printf("Class %llu, Target %d, Class Sum %.2f, Pos Ev %.2f, Neg Ev %.2f, Update Prob %.4f, PProb %.4f, NProb %.4f\n",
-            //        class_id, local_target, class_sums[class_id], positive_evidence[class_id],
-            //        negative_evidence[class_id], u_prob[class_id], pprob[class_id], nprob[class_id]);
-
+#if SPLIT_CLASS_SUM == 1
+            double pos_ev = (double)CLIP(positive_evidence[class_id], 0, THRESH);
+            double neg_ev = (double)CLIP(negative_evidence[class_id], -THRESH, 0);
+            // Special case when using split class sums. Not integrated with g and h yet.
+            if (local_target == 1) {
+                // We want to learn the positive evidence for this class, and supress the negative evidence.
+                // Which, mean that the positive evidence should reach THRESH, and negative evidence should reach 0.
+                // So, pprob will be (THRESH - pos_ev) / THRESH, This will produce values from 1 to 0 as pos_ev goes
+                // from 0 to THRESH. And, nprob will be (0 - neg_ev) / THRESH, This will produce values from 1 to 0 as
+                // neg_ev goes from -THRESH to 0.
+                pprob[class_id] = (THRESH - pos_ev) / THRESH;
+                nprob[class_id] = (0.0 - neg_ev) / THRESH;
+            } else if (local_target == -1) {
+                // We want to learn the negative evidence for this class, and supress the positive evidence.
+                // Which, mean that the negative evidence should reach -THRESH, and positive evidence should reach 0.
+                // So, nprob will be (-THRESH - neg_ev) / -THRESH, This will produce values from 1 to 0 as neg_ev goes
+                // from 0 to -THRESH. And, pprob will be (0 - pos_ev) / -THRESH, This will produce values from 1 to 0 as
+                // pos_ev goes from THRESH to 0.
+                pprob[class_id] = (0.0 - pos_ev) / -THRESH;
+                nprob[class_id] = (-THRESH - neg_ev) / -THRESH;
+            }
+#else
+            // Normal case.
+            double class_sum = (double)CLIP(positive_evidence[class_id] + negative_evidence[class_id], -THRESH, THRESH);
+            pprob[class_id] = uprob_fun(class_sum, y, h, g);
+            nprob[class_id] = pprob[class_id];
+#endif
         }
     }
 
     __global__ void clause_update(curandState* rng, unsigned int* global_ta_states, float* clause_weights,
                                   const int* selected_patch_ids, const int* num_includes,
                                   const unsigned int* clause_drop_mask, const unsigned int* literal_mask,
-                                  const unsigned int* X_batch, const int* targets, const double* update_probs,
-                                  const double* pprob, const double* nprob, const int e) {
+                                  const unsigned int* X_batch, const int* targets, const double* pprob,
+                                  const double* nprob, const int e) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         curandState localRNG = rng[index];
@@ -569,49 +565,41 @@ extern "C" {
             const unsigned int* patch =
                 selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
-#if COALESCED == 0
-            ull class_id = (ull)clause / CLAUSES_PER_BANK;
-            {
-#else
-            for (ull class_id = 0; class_id < CLASSES; ++class_id) {
-#endif
-                // FOR_EACH_CLASS(clause) { // class_id is defined in this macro
+            LOOP_CLASS_ID(clause) {  // class_id is defined in this macro
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
                 float* local_weight = &clause_weights[clause * CLASSES + class_id];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
-                // double update_prob = update_probs[class_id];
                 double update_prob = (sign == 1) ? pprob[class_id] : nprob[class_id];
-
-                // printf("Clause %llu, Class %llu, Target %d, Weight %.2f, Sign %d, Update Prob %.4f\n", clause,
-                //        class_id, local_target, *local_weight, sign, update_prob);
-
                 bool should_update = (curand_uniform(&localRNG) <= update_prob);
                 bool clause_has_space = (num_includes[clause] <= MAX_INCLUDED_LITERALS);
                 bool t1 = (local_target * sign) > 0;
 
 #if TYPE1A_FB
-                bool type1a = (should_update && t1 && local_clause_output && clause_has_space);
-                if (type1a) {
+                // Type 1a feedback - TP - if the clause is active and has the correct polarity for the target class, and has
+                // space
+                if (should_update && t1 && local_clause_output && clause_has_space) {
+                    type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
     #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) += sign * 1.0f;
     #endif
-                    type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
                 }
 #endif
 
 #if TYPE1B_FB
-                bool type1b = (should_update && t1 && !(local_clause_output && clause_has_space));
-                if (type1b) {
+                // Type 1b feedback - FN - If clause is inactive, but should have been active (has correct polarity for target), OR
+                // if the clause is not overflowing
+                if (should_update && t1 && !(local_clause_output && clause_has_space)) {
                     type1b_fb(&localRNG, ta_state, sign, literal_mask);
                 }
 #endif
 
 #if TYPE2_FB
-                bool type2 = (should_update && (local_target * sign) < 0 && local_clause_output);
-                if (type2) {
+                // Type 2 feedback - FP - if the clause is active, but has the wrong polarity for the target class
+                if (should_update && (local_target * sign) < 0 && local_clause_output) {
+                    type2_fb(ta_state, patch, literal_mask);
     #if WEIGHTED
                     if (fabs(*local_weight) < MAX_WEIGHT) (*local_weight) -= sign * 1.0f;
         #if ALLOW_POLARITY_CHANGE == 0
@@ -622,7 +610,6 @@ extern "C" {
     #if NEGATIVE_CLAUSES == 0
                     if (*local_weight < 1) *local_weight = 1;
     #endif
-                    type2_fb(ta_state, patch, literal_mask);
                 }
 #endif
             }
