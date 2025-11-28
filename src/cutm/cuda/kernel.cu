@@ -33,7 +33,7 @@ __device__ double H[CLASSES] = {0.5};
 
 #include <curand_kernel.h>
 
-#define CLAUSES_PER_BANK (CLAUSES / CLAUSE_BANKS)
+#define CLAUSES_PER_CLASS (CLAUSES / CLAUSE_BANKS)
 #if ((LITERALS / 2) & 1)        // Ensure that LITERALS/2 is even, because the vectorized code does not work
                                 // otherwise.......dont know why....some memory aligment issue
     #define VECTORIZED_LIMIT 0  // odd
@@ -52,7 +52,7 @@ __device__ double H[CLASSES] = {0.5};
 #endif
 
 #if COALESCED == 0
-    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / CLAUSES_PER_BANK;
+    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / CLAUSES_PER_CLASS;
 #else
     #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
@@ -266,16 +266,15 @@ extern "C" {
             selected_patch_ids[clause] = selected_id;
             if (selected_id != -1) {
                 patch_weights[clause * PATCHES + selected_id]++;
-                ull class_id;
+                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
-                    if (clause_weights[clause * CLASSES + class_id] >= 0)
+                    float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+                    if (w >= 0)
                         // Positive polarity clauses
-                        atomicAdd(&positive_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
-                                                                    clause_weights[clause * CLASSES + class_id]);
+                        atomicAdd(&positive_evidence[class_id], w);
                     else
                         // Negative polarity clauses
-                        atomicAdd(&negative_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
-                                                                    clause_weights[clause * CLASSES + class_id]);
+                        atomicAdd(&negative_evidence[class_id], w);
                 }
             }
         }
@@ -303,8 +302,10 @@ extern "C" {
                 }
             }
             if (clause_output) {
-                for (int class_id = 0; class_id < CLASSES; ++class_id) {
-                    atomicAdd(&class_sums_batch[e * CLASSES + class_id], clause_weights[clause * CLASSES + class_id]);
+                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+                LOOP_CLASS_ID(class_id, clause) {
+                    atomicAdd(&class_sums_batch[e * CLASSES + class_id],
+                              clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause]);
                 }
             }
         }
@@ -566,12 +567,12 @@ extern "C" {
             const unsigned int* patch =
                 selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
-            ull class_id;
+            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
-                float* local_weight = &clause_weights[clause * CLASSES + class_id];
+                float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);
 
                 double update_prob = (sign == 1) ? pprob[class_id] : nprob[class_id];
@@ -580,8 +581,8 @@ extern "C" {
                 bool t1 = (local_target * sign) > 0;
 
 #if TYPE1A_FB
-                // Type 1a feedback - TP - if the clause is active and has the correct polarity for the target class, and has
-                // space
+                // Type 1a feedback - TP - if the clause is active and has the correct polarity for the target class,
+                // and has space
                 if (should_update && t1 && local_clause_output && clause_has_space) {
                     type1a_fb(&localRNG, ta_state, patch, sign, literal_mask);
     #if WEIGHTED
@@ -591,8 +592,8 @@ extern "C" {
 #endif
 
 #if TYPE1B_FB
-                // Type 1b feedback - FN - If clause is inactive, but should have been active (has correct polarity for target), OR
-                // if the clause is not overflowing
+                // Type 1b feedback - FN - If clause is inactive, but should have been active (has correct polarity for
+                // target), OR if the clause is not overflowing
                 if (should_update && t1 && !(local_clause_output && clause_has_space)) {
                     type1b_fb(&localRNG, ta_state, sign, literal_mask);
                 }
