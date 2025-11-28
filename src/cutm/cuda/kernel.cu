@@ -52,9 +52,9 @@ __device__ double H[CLASSES] = {0.5};
 #endif
 
 #if COALESCED == 0
-    #define LOOP_CLASS_ID(clause) ull class_id = (ull)clause / CLAUSES_PER_BANK;
+    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / CLAUSES_PER_BANK;
 #else
-    #define LOOP_CLASS_ID(_) for (ull class_id = 0; class_id < CLASSES; ++class_id)
+    #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
 #define CLIP(val, min, max) ((val < min) ? min : ((val > max) ? max : val))
@@ -266,7 +266,8 @@ extern "C" {
             selected_patch_ids[clause] = selected_id;
             if (selected_id != -1) {
                 patch_weights[clause * PATCHES + selected_id]++;
-                LOOP_CLASS_ID(clause) {  // class_id is defined in this macro
+                ull class_id;
+                LOOP_CLASS_ID(class_id, clause) {
                     if (clause_weights[clause * CLASSES + class_id] >= 0)
                         // Positive polarity clauses
                         atomicAdd(&positive_evidence[class_id], clause_outputs[clause * PATCHES + selected_id] *
@@ -565,7 +566,8 @@ extern "C" {
             const unsigned int* patch =
                 selected_patch_ids[clause] > -1 ? &X[selected_patch_ids[clause] * NUM_LITERAL_CHUNKS] : nullptr;
 
-            LOOP_CLASS_ID(clause) {  // class_id is defined in this macro
+            ull class_id;
+            LOOP_CLASS_ID(class_id, clause) {
                 int local_target = targets[e * CLASSES + class_id];
                 if (local_target == 0) continue;
 
