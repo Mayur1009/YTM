@@ -2,14 +2,16 @@
 authors = [{name = "Mayur", email = "mayurks@uia.no"}]
 dependencies = [
     "numpy",
-    "pycuda",
     "tqdm",
 ]
 name = "YTM"
-requires-python = ">= 3.11"
-version = "0.5+dev33"
+requires-python = ">=3.11"
+version = "0.5+dev34"
 
 [project.optional-dependencies]
+cuda = [
+  "pycuda",
+]
 examples = [
     "matplotlib",
     "tensorflow",
@@ -25,7 +27,7 @@ requires = ["hatchling"]
 sources =["src"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ytm", "src/cutm", "src/pytm", "src/tm_utils"]
+packages = ["src/ytm", "src/cutm"]
 
 [tool.setuptools.package-data]
 "*" = ["cuda/*.cu"]
