@@ -17,7 +17,7 @@ class Backend(ABC):
         return getattr(self, "rng_dev", None)
 
     @abstractmethod
-    def allocate(self, size: int) -> Any:
+    def allocate(self, size: int, nbytes: int) -> Any:
         raise NotImplementedError
 
     @abstractmethod
@@ -36,37 +36,37 @@ class Backend(ABC):
     def encode_batch(self, X: Any, encoded_X: Any, N: int, n_patches: int) -> None:
         raise NotImplementedError
 
-    @abstractmethod
-    def pack_clauses(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def eval_clauses(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def select_active_patch(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def inference_eval(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def evidence_to_update_prob(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def update_clauses(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def transform(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def transform_patchwise(self, *args, **kwargs) -> None:
-        raise NotImplementedError
+    # @abstractmethod
+    # def pack_clauses(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def eval_clauses(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def select_active_patch(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def inference_eval(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def evidence_to_update_prob(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def update_clauses(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def transform(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
+    #
+    # @abstractmethod
+    # def transform_patchwise(self, *args, **kwargs) -> None:
+    #     raise NotImplementedError
 
 
 

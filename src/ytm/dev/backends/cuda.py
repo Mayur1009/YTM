@@ -101,8 +101,8 @@ class CUDABackend(Backend):
     def _get_rng(self):
         return self.rng_dev
 
-    def allocate(self, size: int) -> DeviceAllocation:
-        return mem_alloc(size)
+    def allocate(self, size: int, nbytes: int) -> DeviceAllocation:
+        return mem_alloc(bytes)
 
     def to_device(self, dev, host: np.ndarray) -> None:
         memcpy_htod(dev, host)

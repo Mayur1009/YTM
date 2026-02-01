@@ -1,37 +1,33 @@
 // Ignore this block, it is used to only for neovim clangd lsp.
 #ifdef IS_NEOVIM_CLANGD_ENV
-    #define CLAUSES 100ULL
+    #define CLAUSES_PER_CLASS 100ULL
     #define THRESH 500
     #define S 10.0
-    #define Q 1
     #define DIM0 28ULL
     #define DIM1 28ULL
     #define DIM2 1ULL
+    #define CLASSES 10
+    #define Q 1
     #define PATCH_DIM0 10
     #define PATCH_DIM1 10
-    #define PATCHES 361ULL
-    #define LITERALS 272ULL
-    #define MAX_INCLUDED_LITERALS 272ULL
-    #define APPEND_NEGATED 1
-    #define NEGATIVE_CLAUSES 1
-    #define CLASSES 10
-    #define MAX_TA_STATE 255
-    #define ENCODE_LOC 1
-    #define COALESCED 1
-    #define CLAUSE_BANKS 1
     #define WEIGHTED 1
-    #define MAX_WEIGHT 3.4e38f
-    #define S_NEG_POLARITY S
+    #define COALESCED 1
+    #define ENCODE_LOC 1
+    #define MAX_INCLUDED_LITERALS 272ULL
+    #define NEGATED_LITERALS 1
+    #define NEGATIVE_POLARITY 1
     #define ALLOW_POLARITY_CHANGE 1
+    #define MAX_WEIGHT 3.4e38f
+    #define MAX_TA_STATE 255
     #define INCLUDE_TA_STATE 128
     #define TYPE1A_FB 1
     #define TYPE1B_FB 1
     #define TYPE2_FB 1
-    #define SPLIT_CLASS_SUM 0
-double H[CLASSES] = {0.5};
+    #define TOTAL_CLAUSES 100ULL
+    #define PATCHES 361ULL
+    #define LITERALS 272ULL
 #endif
 
-#define CLAUSES_PER_CLASS (CLAUSES / CLAUSE_BANKS)
 #if ((LITERALS / 2) & 1)        // Ensure that LITERALS/2 is even, because the vectorized code does not work
                                 // otherwise.......dont know why....some memory aligment issue
     #define VECTORIZED_LIMIT 0  // odd
@@ -39,7 +35,6 @@ double H[CLASSES] = {0.5};
     #define VECTORIZED_LIMIT (LITERALS & ~3)  // even
 #endif
 #define S_INV (1.0f / S)
-#define S_NEG_POLARITY_INV (1.0f / S_NEG_POLARITY)
 #define Q_PROB (1.0f * Q / max(1, CLASSES - 1))
 #define INT_SIZE 32
 #define NUM_LITERAL_CHUNKS (((LITERALS - 1) / INT_SIZE) + 1)
@@ -76,7 +71,7 @@ void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
             // Initialization.
             // By default, all values in encoded_X are set to 0 (in python code).
             // So, only need to initialize all negated literals to 1.
-#if APPEND_NEGATED
+#if NEGATED_LITERALS
             for (int literal = LITERALS / 2; literal < LITERALS; ++literal) {
                 int chunk_nr = literal / INT_SIZE;
                 int chunk_pos = literal % INT_SIZE;
@@ -89,7 +84,7 @@ void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
                 int chunk_nr = lit / INT_SIZE;
                 int chunk_pos = lit % INT_SIZE;
                 patch_output[chunk_nr] |= (1u << chunk_pos);
-#if APPEND_NEGATED
+#if NEGATED_LITERALS
                 int neg_chunk_nr = (lit + (LITERALS / 2)) / INT_SIZE;
                 int neg_chunk_pos = (lit + (LITERALS / 2)) % INT_SIZE;
                 patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
@@ -100,7 +95,7 @@ void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
                 int chunk_nr = (DIM1 - PATCH_DIM1 + lit) / INT_SIZE;
                 int chunk_pos = (DIM1 - PATCH_DIM1 + lit) % INT_SIZE;
                 patch_output[chunk_nr] |= (1u << chunk_pos);
-#if APPEND_NEGATED
+#if NEGATED_LITERALS
                 int neg_chunk_nr = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) / INT_SIZE;
                 int neg_chunk_pos = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) % INT_SIZE;
                 patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
@@ -127,15 +122,7 @@ void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
                             int chunk_nr = patch_pos / INT_SIZE;
                             int chunk_pos = patch_pos % INT_SIZE;
                             patch_output[chunk_nr] |= (1u << chunk_pos);
-#if APPEND_NEGATED
-                            int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
-                            int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
-                            patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
-#endif
-                        } else if (X[dense_idx] == 0) {
-                            // Dont care value. 0 in both positive and negative literals.
-                            // positive literal is already 0, only need to set negative literal to 0
-#if APPEND_NEGATED
+#if NEGATED_LITERALS
                             int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
                             int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
                             patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);

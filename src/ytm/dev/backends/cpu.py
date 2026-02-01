@@ -6,18 +6,19 @@ import numpy as np
 from ..utils import read_file
 from .base import Backend
 
-from ctypes import POINTER, c_uint32, c_int, c_float
+from ctypes import POINTER, c_uint32, c_int, c_float, c_int32
 
+int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
 int_p = POINTER(c_int)
 float_p = POINTER(c_float)
 
 
 class CPUBackend(Backend):
-    def __init__(self, header: str = "", seed: int | None = None, compile_flags: list[str] = []):
+    def __init__(self, header: str = "", seed: int | None = None, compile_flags: list[str] | None = None):
         self.header = header
         self.seed = seed
-        self.compile_flags = compile_flags
+        self.compile_flags = compile_flags if compile_flags is not None else []
         self._compile_and_load()
         self._set_rng(self.seed)
 
@@ -44,19 +45,19 @@ class CPUBackend(Backend):
     def _get_rng(self):
         return self.rng_dev
 
-    def allocate(self, size: int) -> np.ndarray:
+    def allocate(self, size: int, nbytes: int) -> np.ndarray:
         return np.zeros(size, dtype=np.uint32)
 
     def to_device(self, dev, host: np.ndarray) -> None:
-        pass
+        np.copyto(dev, host)
 
     def to_host(self, host: np.ndarray, dev) -> None:
-        pass
+        np.copyto(host, dev)
 
     def memset(self, dev: np.ndarray, value: int, size: int) -> None:
         dev.fill(value)
 
     def encode_batch(self, X: np.ndarray, encoded_X: np.ndarray, N: int, n_patches: int) -> None:
-        X_ct = X.ctypes.data_as(uint32_p)
+        X_ct = X.ctypes.data_as(int32_p)
         encoded_X_ct = encoded_X.ctypes.data_as(uint32_p)
         self._lib.encode_batch(X_ct, encoded_X_ct, c_int(N))
