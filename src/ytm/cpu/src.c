@@ -49,7 +49,7 @@ static float rand_uniform(uint64_t* rng_state) {
 
 /***********INPUT ENCODING***********/
 EXPORT void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull e_patch = 0; e_patch < (ull)PATCHES * N; ++e_patch) {
         ull e = e_patch / PATCHES;
         ull patch_id = e_patch % PATCHES;
@@ -130,7 +130,7 @@ EXPORT void encode_batch(const int* X, unsigned int* encoded_X, const int N) {
 
 /***********CLAUSE PACKING***********/
 EXPORT void pack_clauses(const unsigned int* global_ta_states, unsigned int* packed_clauses, int* num_includes) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull clause = 0; clause < CLAUSES; ++clause) {
         const unsigned int* ta_state = &global_ta_states[clause * LITERALS];
         unsigned int* packed_clause = &packed_clauses[clause * NUM_LITERAL_CHUNKS];
@@ -186,7 +186,7 @@ static inline int clause_match(const unsigned int* ta_state, const unsigned int*
 EXPORT void fast_eval(const unsigned int* packed_ta_states, const int* num_includes,
                       const unsigned int* clause_drop_mask, const unsigned int* literal_mask,
                       const unsigned int* X_batch, unsigned int* clause_outputs, const int e) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull clause_patch = 0; clause_patch < (ull)CLAUSES * (ull)PATCHES; ++clause_patch) {
         unsigned int* clause_output = &clause_outputs[clause_patch];
 
@@ -213,28 +213,46 @@ EXPORT void fast_eval(const unsigned int* packed_ta_states, const int* num_inclu
 EXPORT void select_active(uint64_t* rng_states, const float* clause_weights, const unsigned int* clause_outputs,
                           int* patch_weights, int* selected_patch_ids, float* positive_evidence,
                           float* negative_evidence) {
-#pragma omp parallel for schedule(static)
-    for (ull clause = 0; clause < CLAUSES; ++clause) {
-        int count = 0;
-        int selected_id = -1;
-        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_outputs[clause * PATCHES + patch_id]) {
-                count++;
-                if (rand_uniform(&rng_states[omp_get_thread_num()]) < 1.0f / count) {
-                    selected_id = patch_id;
+    memset(positive_evidence, 0, CLASSES * sizeof(float));
+    memset(negative_evidence, 0, CLASSES * sizeof(float));
+
+#pragma omp parallel
+    {
+        float local_pos[CLASSES] = {0};
+        float local_neg[CLASSES] = {0};
+
+#pragma omp for schedule(guided)
+        for (ull clause = 0; clause < CLAUSES; ++clause) {
+            int count = 0;
+            int selected_id = -1;
+            for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+                if (clause_outputs[clause * PATCHES + patch_id]) {
+                    count++;
+                    if (rand_uniform(&rng_states[omp_get_thread_num()]) < 1.0f / count) {
+                        selected_id = patch_id;
+                    }
+                }
+            }
+            selected_patch_ids[clause] = selected_id;
+            if (selected_id != -1) {
+#pragma omp atomic
+                patch_weights[clause * PATCHES + selected_id]++;
+                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+                LOOP_CLASS_ID(class_id, clause) {
+                    float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+                    if (w >= 0)
+                        local_pos[class_id] += w;
+                    else
+                        local_neg[class_id] += w;
                 }
             }
         }
-        selected_patch_ids[clause] = selected_id;
-        if (selected_id != -1) {
-            patch_weights[clause * PATCHES + selected_id]++;
-            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
-                if (w >= 0)
-                    positive_evidence[class_id] += w;
-                else
-                    negative_evidence[class_id] += w;
+
+#pragma omp critical
+        {
+            for (int c = 0; c < CLASSES; ++c) {
+                positive_evidence[c] += local_pos[c];
+                negative_evidence[c] += local_neg[c];
             }
         }
     }
@@ -244,24 +262,41 @@ EXPORT void select_active(uint64_t* rng_states, const float* clause_weights, con
 EXPORT void calc_class_sums_infer_batch(const unsigned int* packed_ta_states, const float* clause_weights,
                                         const int* num_includes, const unsigned int* X_batch, const int N,
                                         float* class_sums_batch, const unsigned int* literal_mask) {
-#pragma omp parallel for schedule(static)
-    for (ull e_clause = 0; e_clause < (ull)N * (ull)CLAUSES; ++e_clause) {
-        ull e = e_clause / CLAUSES;
-        ull clause = e_clause % CLAUSES;
-        if (num_includes[clause] == 0) continue;
-        int clause_output = 0;
-        for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
-            if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
-                             &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS],
-                             literal_mask)) {
-                clause_output = 1;
-                break;
+    memset(class_sums_batch, 0, N * CLASSES * sizeof(float));
+
+#pragma omp parallel
+    {
+        float local_sums[N * CLASSES];
+        memset(local_sums, 0, N * CLASSES * sizeof(float));
+
+#pragma omp for schedule(guided)
+        for (ull e_clause = 0; e_clause < (ull)N * (ull)CLAUSES; ++e_clause) {
+            ull e = e_clause / CLAUSES;
+            ull clause = e_clause % CLAUSES;
+            if (num_includes[clause] == 0) continue;
+            int clause_output = 0;
+            for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
+                if (clause_match(&packed_ta_states[clause * NUM_LITERAL_CHUNKS],
+                                 &X_batch[e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * NUM_LITERAL_CHUNKS],
+                                 literal_mask)) {
+                    clause_output = 1;
+                    break;
+                }
+            }
+            if (clause_output) {
+                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+                LOOP_CLASS_ID(class_id, clause) {
+                    local_sums[e * CLASSES + class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+                }
             }
         }
-        if (clause_output) {
-            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                class_sums_batch[e * CLASSES + class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+
+#pragma omp critical
+        {
+            for (int e = 0; e < N; ++e) {
+                for (int c = 0; c < CLASSES; ++c) {
+                    class_sums_batch[e * CLASSES + c] += local_sums[e * CLASSES + c];
+                }
             }
         }
     }
@@ -270,7 +305,7 @@ EXPORT void calc_class_sums_infer_batch(const unsigned int* packed_ta_states, co
 /***********TRANSFORM KERNELS***********/
 EXPORT void transform(const unsigned int* packed_ta_states, const int* num_includes, const unsigned int* X_batch,
                       const int N, unsigned int* clause_outputs, const unsigned int* literal_mask) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull e_clause = 0; e_clause < (ull)N * (ull)CLAUSES; ++e_clause) {
         ull e = e_clause / CLAUSES;
         ull clause = e_clause % CLAUSES;
@@ -294,7 +329,7 @@ EXPORT void transform(const unsigned int* packed_ta_states, const int* num_inclu
 EXPORT void transform_patchwise(const unsigned int* packed_ta_states, const int* num_includes,
                                 const unsigned int* X_batch, const int N, unsigned int* clause_outputs,
                                 const unsigned int* literal_mask) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull e_clause_patch = 0; e_clause_patch < (ull)N * (ull)CLAUSES * (ull)PATCHES; ++e_clause_patch) {
         unsigned int* clause_output = &clause_outputs[e_clause_patch];
 
@@ -448,7 +483,7 @@ static inline double uprob_fun(double v, double y, double h, double g) {
 EXPORT void evidence_to_update_prob(const float* positive_evidence, const float* negative_evidence, const int* targets,
                                     const double* g_pos, const double* g_neg, const int e, double* pprob,
                                     double* nprob) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull class_id = 0; class_id < CLASSES; ++class_id) {
         int local_target = targets[e * CLASSES + class_id];
         if (local_target == 0) {
@@ -484,7 +519,7 @@ EXPORT void clause_update(uint64_t* rng_states, unsigned int* global_ta_states, 
                           const int* selected_patch_ids, const int* num_includes, const unsigned int* clause_drop_mask,
                           const unsigned int* literal_mask, const unsigned int* X_batch, const int* targets,
                           const double* pprob, const double* nprob, const int e, int num_threads) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(guided)
     for (ull clause = 0; clause < CLAUSES; ++clause) {
         int thread_id = omp_get_thread_num();
 
