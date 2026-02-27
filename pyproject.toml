@@ -6,7 +6,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">=3.11"
-version = "0.5+dev34"
+version = "0.5+dev35"
 
 [project.optional-dependencies]
 cuda = [

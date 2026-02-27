@@ -9,8 +9,7 @@ cpu = ["test"]
 cuda = ["cuda", "test"]
 
 [dependencies]
-python = ">=3.12.12"
-tensorflow = "*"
+python = ">=3.11,<3.14"
 matplotlib = ">=3.10.8"
 scikit-learn = ">=1.8.0"
 jupyterlab = ">=4.5.1"
@@ -24,7 +23,7 @@ ytm = { path = ".", editable = true}
 [feature.cuda]
 platforms = ["linux-64"]
 system-requirements = { cuda = "12" }
-dependencies = {cuda = ">=12.9.1", pycuda = ">=2025.1.2"}
+dependencies = {cuda = "*", pycuda = ">=2025.1.2"}
 
 [feature.test.pypi-dependencies]
 pytest = "*"
