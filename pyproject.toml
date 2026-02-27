@@ -23,8 +23,9 @@ examples = [
 build-backend = "hatchling.build"
 requires = ["hatchling"]
 
-[tool.pytest]
-addopts = ["--import-mode=importlib"]
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["tests"]
 
 [tool.hatch.build]
 sources =["src"]
