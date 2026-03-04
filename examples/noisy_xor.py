@@ -4,13 +4,13 @@ from ytm.tm import MultiClassTM
 
 def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):
     rng = np.random.default_rng(seed)
-    X = rng.integers(0, 2, size=(num_samples, 2)).astype(np.uint32)
-    Y = np.logical_xor(X[:, 0], X[:, 1]).astype(np.uint32)
+    X = rng.integers(0, 2, size=(num_samples, 2)).astype(np.int8)
+    Y = np.logical_xor(X[:, 0], X[:, 1]).astype(np.uint8)
 
     if noise > 0:
         num_noisy = int(noise * num_samples)
         noisy_indices = rng.choice(num_samples, size=num_noisy, replace=False)
-        Y[noisy_indices] = np.logical_not(Y[noisy_indices]).astype(np.uint32)
+        Y[noisy_indices] = np.logical_not(Y[noisy_indices]).astype(np.uint8)
 
     return X, Y
 

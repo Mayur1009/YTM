@@ -38,8 +38,8 @@ if __name__ == "__main__":
 
     b = Binarizer(ch)
     b.fit(X_train)
-    X_train = b.transform(X_train).reshape((X_train.shape[0], -1)).astype(np.uint32)
-    X_test = b.transform(X_test).reshape((X_test.shape[0], -1)).astype(np.uint32)
+    X_train = b.transform(X_train).reshape((X_train.shape[0], -1)).astype(np.int8)
+    X_test = b.transform(X_test).reshape((X_test.shape[0], -1)).astype(np.int8)
 
 
     tm = MultiClassTM(

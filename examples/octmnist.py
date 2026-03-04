@@ -12,9 +12,9 @@ def load_dataset(ch=8):
     val = OCTMNIST(split="val", download=True)
     test = OCTMNIST(split="test", download=True)
     binarizer = ThermometerBinarizer(ch = ch)
-    xtrain = binarizer.binarize_gray(train.imgs)
-    xval = binarizer.binarize_gray(val.imgs)
-    xtest = binarizer.binarize_gray(test.imgs)
+    xtrain = binarizer.binarize_gray(train.imgs).astype(np.int8)
+    xval = binarizer.binarize_gray(val.imgs).astype(np.int8)
+    xtest = binarizer.binarize_gray(test.imgs).astype(np.int8)
     return (
         (xtrain, train.labels.squeeze()),
         (xval, val.labels.squeeze()),
