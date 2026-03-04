@@ -1,10 +1,7 @@
-from lzma import LZMAFile
-import pickle
 import numpy as np
-from sklearn.datasets import fetch_openml
-
 from ytm.utils import Timer
-from ytm.cpu import MultiClassTM
+from ytm.tm import MultiClassTM
+from keras.datasets import mnist
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
@@ -12,10 +9,8 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
     encoded_X_test = tm.encode(X_test)
     for epoch in range(epochs):
         train_fit_timer = Timer()
-        iota = np.arange(encoded_X_train.shape[0])
-        np.random.shuffle(iota)
         with train_fit_timer:
-            tm.fit(encoded_X_train[iota, ...], Y_train[iota], is_X_encoded=True)
+            tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
 
         test_timer = Timer()
         with test_timer:
@@ -33,37 +28,24 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
 
 
 if __name__ == "__main__":
-    mnist = fetch_openml("mnist_784", version=1, as_frame=False)
-    X = np.array(mnist.data).astype(np.uint8)
-    Y = np.array(mnist.target).astype(np.uint32)
+    (X_train, Y_train_org), (X_test, Y_test_org) = mnist.load_data()
 
-    X_train, X_test = X[:60000], X[60000:]
-    Y_train, Y_test = Y[:60000], Y[60000:]
+    X_train = np.where(X_train.reshape((X_train.shape[0], 28 * 28)) > 75, 1, 0)
+    X_test = np.where(X_test.reshape((X_test.shape[0], 28 * 28)) > 75, 1, 0)
+    X_train = np.asarray(X_train, dtype=np.int8)
+    X_test = np.asarray(X_test, dtype=np.int8)
 
-    X_train = np.where(X_train > 75, 1, 0).astype(np.uint32)
-    X_test = np.where(X_test > 75, 1, 0).astype(np.uint32)
-
+    Y_train, Y_test = Y_train_org, Y_test_org
     tm = MultiClassTM(
-        number_of_clauses_per_class=500,
+        n_clauses=500,
         T=1000,
         s=10,
         dim=(28, 28, 1),
         n_classes=10,
         patch_dim=(10, 10),
         seed=10,
-        num_threads=16,
+        device="cpu",
+        n_threads=8,
     )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
-
-    # with LZMAFile("mnist_conv.tm", "wb") as f:
-    #     pickle.dump(tm, f)
-    #
-    # print("Model saved to mnist_conv.tm")
-    #
-    # # Load the model back
-    # with LZMAFile("mnist_conv.tm", "rb") as f:
-    #     tm2 = pickle.load(f)
-    #
-    # print("Model loaded from mnist_conv.tm")
-    # train(tm2, X_train, Y_train, X_test, Y_test, epochs=5)

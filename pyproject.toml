@@ -5,7 +5,7 @@ dependencies = [
     "tqdm",
 ]
 name = "YTM"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 version = "0.5+dev35"
 
 [project.optional-dependencies]
@@ -27,14 +27,14 @@ requires = ["hatchling"]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
 
-[tool.hatch.build]
-sources =["src"]
+# [tool.hatch.build]
+# sources =["src"]
+#
+# [tool.hatch.build.targets.wheel]
+# packages = ["src/ytm", "src/cutm"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/ytm", "src/cutm"]
-
-[tool.setuptools.package-data]
-"*" = ["cuda/*.cu"]
+# [tool.setuptools.package-data]
+# "*" = ["cuda/*.cu"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -47,4 +47,31 @@ exclude = [
 
 [tool.ruff]
 line-length = 120
+
+## PIXI configuration
+[tool.pixi.environments]
+cuda = ["default", "cuda", "examples"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.pypi-dependencies]
+ytm = { path = ".", editable = true, extras = ["examples"] }
+
+[tool.pixi.dependencies]
+
+[tool.pixi.feature.cuda]
+platforms = ["linux-64"]
+
+[tool.pixi.feature.cuda.system-requirements]
+cuda = "12"
+
+[tool.pixi.feature.cuda.dependencies]
+cuda = "*"
+pycuda = "*"
+
+[tool.pixi.feature.examples.dependencies]
+# tensorflow = ">=2.19.1"
+# tensorflow = "*"
 

@@ -1,5 +1,5 @@
 import numpy as np
-from ytm.cpu import BinaryTM
+from ytm.tm import MultiClassTM
 
 
 def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):
@@ -15,7 +15,7 @@ def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):
     return X, Y
 
 
-def train(tm: BinaryTM, X_train, Y_train, X_test, Y_test, epochs=1):
+def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
     encoded_X_train = tm.encode(X_train)
     encoded_X_test = tm.encode(X_test)
     for epoch in range(epochs):
@@ -35,28 +35,19 @@ if __name__ == "__main__":
     X_train, Y_train = generate_NoisyXOR(num_samples=500, noise=0.1, seed=10)
     X_test, Y_test = generate_NoisyXOR(num_samples=100, noise=0, seed=11)
 
-    tm = BinaryTM(
-        number_of_clauses_per_class=4,
+    tm = MultiClassTM(
+        n_clauses=4,
         T=15,
         s=2,
         dim=(2, 1, 1),
-        number_of_ta_states=16,
+        n_classes=10,
         coalesced=False,
         allow_polarity_change=False,
+        n_states=32,
         seed=10,
-        num_threads=16,
+        device="cpu",
+        n_threads=4,
     )
-
-    weights = tm.get_weights()
-    print("Weights:", weights)
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=100)
 
-    weights = tm.get_weights()
-    print("Weights:", weights)
-
-    clauses = tm.get_literals()
-    print("Clauses:", clauses)
-
-    states = tm.get_ta_state()
-    print("TA States:", states)
