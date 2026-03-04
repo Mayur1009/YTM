@@ -300,6 +300,40 @@ class CPUDevice(BaseDevice):
 
         return class_sums
 
+    def get_weights(self) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        return self.clause_weights
+
+    def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return self.ta_states.reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def transform_patchwise(
+        self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
+    ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
+        N = encoded_X.shape[0]
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+
+        packed_clauses = np.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
+        n_includes = np.empty((self.total_clauses,), dtype=np.uint32)
+        clause_drop_mask = np.zeros((self.total_clauses,), dtype=np.uint32)
+        clause_outputs = np.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        self.pack_clauses(packed_clauses, n_includes)
+
+        for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):
+            self.lib_eval_clauses(
+                packed_clauses.ctypes.data_as(uint32_p),
+                n_includes.ctypes.data_as(uint32_p),
+                clause_drop_mask.ctypes.data_as(uint32_p),
+                encoded_X.ctypes.data_as(uint32_p),
+                c_int(i),
+                clause_outputs.ctypes.data_as(uint32_p),
+            )
+
+            co_patchwise[i] = clause_outputs.reshape((self.total_clauses, self.n_patches))
+
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return co_patchwise.astype(bool).reshape((N, n_clause_banks, self.args.n_clauses, self.n_patches))
+
     def get_state_dict(self):
         return {
             "ta_states": self.ta_states,

@@ -108,3 +108,23 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         pass
+
+    @abc.abstractmethod
+    def get_weights(self) -> np.ndarray:
+        pass
+
+    @abc.abstractmethod
+    def get_ta_states(self) -> np.ndarray:
+        pass
+
+    @abc.abstractmethod
+    def transform_patchwise(self, encoded_X: np.ndarray) -> np.ndarray:
+        pass
+
+    @abc.abstractmethod
+    def get_state_dict(self) -> dict:
+        pass
+
+    @abc.abstractmethod
+    def load_state_dict(self, state_dict: dict) -> None:
+        pass

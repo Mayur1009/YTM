@@ -317,6 +317,43 @@ class CUDADevice(BaseDevice):
 
         return class_sums
 
+    def get_weights(self) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        return self.clause_weights.get()
+
+    def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return self.ta_states.get().reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def transform_patchwise(
+        self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
+    ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
+        N = encoded_X.shape[0]
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+
+        X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
+        packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
+        n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
+        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.uint32))
+        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        self.pack_clauses(packed_clauses, n_includes)
+
+        for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):
+            self.kernel_eval_clauses.prepared_call(
+                *self.kernel_eval_clauses_launch_config,
+                packed_clauses.gpudata,
+                n_includes.gpudata,
+                clause_drop_mask.gpudata,
+                X_gpu.gpudata,
+                np.int32(i),
+                clause_outputs.gpudata,
+            )
+            self.ctx.synchronize()
+
+            co_patchwise[i] = clause_outputs.get().reshape((self.total_clauses, self.n_patches))
+
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return co_patchwise.astype(bool).reshape((N, n_clause_banks, self.args.n_clauses, self.n_patches))
+
     def get_state_dict(self):
         return {
             "ta_states": self.ta_states.get(),

@@ -130,6 +130,25 @@ class BaseTM:
 
         return targets
 
+    def get_weights(self)->np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        return self.dev.get_weights()
+
+    def get_ta_states(self)->np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+        return self.dev.get_ta_states()
+
+    def transform(self, X: np.ndarray, is_X_encoded: bool = False)->np.ndarray[tuple[int, int, int], np.dtype[np.bool]]:
+        encoded_X = self.encode(X) if not is_X_encoded else X
+
+        clause_output_patchwise = self.dev.transform_patchwise(encoded_X)
+        clause_outputs = np.any(clause_output_patchwise, axis=-1).astype(np.uint8)
+        return clause_outputs
+
+    def transform_patchwise(self, X: np.ndarray, is_X_encoded: bool = False)-> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
+        encoded_X = self.encode(X) if not is_X_encoded else X
+
+        clause_output_patchwise = self.dev.transform_patchwise(encoded_X)
+        return clause_output_patchwise
+
     def to(self, device: Literal["cpu", "cuda"]):
         if device == self.args.device:
             return

@@ -1,4 +1,3 @@
-#include <cstdint>
 #ifdef IS_NEOVIM_CLANGD_ENV
     #define TOTAL_CLAUSES 1000
     #define THRESH 100
