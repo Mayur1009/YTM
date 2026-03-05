@@ -6,7 +6,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">=3.11,<3.14"
-version = "0.5+dev35"
+version = "0.5+dev40"
 
 [project.optional-dependencies]
 cuda = [
@@ -51,6 +51,7 @@ line-length = 120
 
 ## PIXI configuration
 [tool.pixi.environments]
+default = ["default", "examples"]
 cuda = ["default", "cuda", "examples"]
 
 [tool.pixi.workspace]
@@ -70,7 +71,9 @@ cuda = "12"
 
 [tool.pixi.feature.cuda.dependencies]
 cuda = "*"
-pycuda = "*"
+
+[tool.pixi.feature.cuda.pypi-dependencies]
+ytm = { path = ".", editable = true, extras = ["examples", "cuda"] }
 
 [tool.pixi.feature.examples.dependencies]
 # tensorflow = ">=2.19.1"
