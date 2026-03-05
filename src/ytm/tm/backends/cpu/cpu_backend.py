@@ -24,10 +24,7 @@ class CPUDevice(BaseDevice):
         self._init_clauses()
         self._init_weights()
 
-        cur_dir = os.path.dirname(os.path.abspath(__file__))
-        so_file = self._compile_code(
-            os.path.join(cur_dir, "src.c"),
-            header=f"""
+        self.header = f"""
             #define USE_OMP {1 if self.args.n_threads > 1 else 0}
             #define TOTAL_CLAUSES {int(self.total_clauses)}
             #define THRESH {int(self.args.T)}
@@ -53,8 +50,10 @@ class CPUDevice(BaseDevice):
             #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
             #define PATCHES {int(self.n_patches)}
             #define LITERALS {int(self.n_literals)}
-            """,
-        )
+            """
+
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        so_file = self._compile_code(os.path.join(cur_dir, "src.c"), self.header)
         dll = CDLL(so_file)
         self.lib_encode = dll.encode
         self.lib_decode = dll.decode
@@ -271,6 +270,53 @@ class CPUDevice(BaseDevice):
             self.ta_states.ctypes.data_as(uint32_p),
             self.clause_weights.ctypes.data_as(float_p),
         )
+
+    def fit_epoch(self, encoded_X, targets, clause_drop_p):
+        N = encoded_X.shape[0]
+        if clause_drop_p > 0.0:
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.uint32)
+        else:
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.uint32)
+
+        dev_buffers: FitBuffers = self.prepare_fit_buffers(encoded_X, targets, clause_drop_mask)
+
+        pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
+        for e in pbar:
+            # If all the targets are zero, then there is nothing to learn, so skip.
+            if np.all(targets[e, :] == 0):
+                continue
+
+            self.pack_clauses(dev_buffers.packed_clauses, dev_buffers.n_includes)
+            self.eval_clauses(
+                dev_buffers.packed_clauses,
+                dev_buffers.n_includes,
+                dev_buffers.clause_drop_mask,
+                dev_buffers.clause_outputs,
+                dev_buffers.encoded_X,
+                e,
+            )
+            self.select_patch_and_count_votes(
+                dev_buffers.clause_outputs,
+                dev_buffers.selected_patch_ids,
+                dev_buffers.pos_votes,
+                dev_buffers.neg_votes,
+            )
+            self.calc_update_prob(
+                dev_buffers.pos_votes,
+                dev_buffers.neg_votes,
+                dev_buffers.targets,
+                dev_buffers.update_probs,
+                e,
+            )
+            self.update_clauses(
+                dev_buffers.n_includes,
+                dev_buffers.selected_patch_ids,
+                dev_buffers.clause_drop_mask,
+                dev_buffers.update_probs,
+                dev_buffers.encoded_X,
+                dev_buffers.targets,
+                e,
+            )
 
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         N = encoded_X.shape[0]

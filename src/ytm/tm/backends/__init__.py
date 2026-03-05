@@ -55,24 +55,23 @@ class BaseDevice(abc.ABC):
     def dev_init(self):
         pass
 
-    @abc.abstractmethod
+    def fit_epoch(self, encoded_X: np.ndarray, targets: np.ndarray, clause_drop_p: float) -> None:
+        raise NotImplementedError("fit_epoch() not implemented for this device")
+
     def prepare_fit_buffers(
         self, encoded_X: np.ndarray, targets: np.ndarray, clause_drop_mask: np.ndarray
     ) -> FitBuffers:
-        pass
+        raise NotImplementedError("prepare_fit_buffers() not implemented for this device")
 
-    @abc.abstractmethod
     def encode(self, X: np.ndarray) -> np.ndarray:
-        pass
+        raise NotImplementedError("encode() not implemented for this device")
 
     def decode(self, encoded_X: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("Decode method not implemented for this device")
+        raise NotImplementedError("decode() not implemented for this device")
 
-    @abc.abstractmethod
     def pack_clauses(self, packed_clauses, n_includes):
-        pass
+        raise NotImplementedError("pack_clauses() not implemented for this device")
 
-    @abc.abstractmethod
     def eval_clauses(
         self,
         packed_clauses,
@@ -82,17 +81,14 @@ class BaseDevice(abc.ABC):
         encoded_X,
         e: int,
     ):
-        pass
+        raise NotImplementedError("eval_clauses() not implemented for this device")
 
-    @abc.abstractmethod
     def select_patch_and_count_votes(self, clause_outputs, selected_patch_ids, pos_votes, neg_votes):
-        pass
+        raise NotImplementedError("select_patch_and_count_votes() not implemented for this device")
 
-    @abc.abstractmethod
     def calc_update_prob(self, pos_votes, neg_votes, targets, update_probs, e: int):
-        pass
+        raise NotImplementedError("calc_update_prob() not implemented for this device")
 
-    @abc.abstractmethod
     def update_clauses(
         self,
         n_includes,
@@ -103,28 +99,22 @@ class BaseDevice(abc.ABC):
         targets,
         e: int,
     ):
-        pass
+        raise NotImplementedError("update_clauses() not implemented for this device")
 
-    @abc.abstractmethod
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1) -> np.ndarray:
-        pass
+        raise NotImplementedError("infer() not implemented for this device")
 
-    @abc.abstractmethod
     def get_weights(self) -> np.ndarray:
-        pass
+        raise NotImplementedError("get_weights() not implemented for this device")
 
-    @abc.abstractmethod
     def get_ta_states(self) -> np.ndarray:
-        pass
+        raise NotImplementedError("get_ta_states() not implemented for this device")
 
-    @abc.abstractmethod
     def transform_patchwise(self, encoded_X: np.ndarray) -> np.ndarray:
-        pass
+        raise NotImplementedError("transform_patchwise() not implemented for this device")
 
-    @abc.abstractmethod
     def get_state_dict(self) -> dict:
-        pass
+        raise NotImplementedError("get_state_dict() not implemented for this device")
 
-    @abc.abstractmethod
     def load_state_dict(self, state_dict: dict) -> None:
-        pass
+        raise NotImplementedError("load_state_dict() not implemented for this device")
