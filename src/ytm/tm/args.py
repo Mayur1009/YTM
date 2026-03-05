@@ -2,6 +2,7 @@ import numpy as np
 from typing import Literal
 from dataclasses import dataclass
 
+
 @dataclass()
 class TMArgs:
     n_clauses: int
@@ -9,7 +10,7 @@ class TMArgs:
     s: float
     dim: tuple[int, int, int]
     n_classes: int
-    patch_dim: tuple[int, int] | None = None
+    patch_dim: tuple[int, int] = (0, 0)
     q: float = 1.0
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
@@ -24,7 +25,7 @@ class TMArgs:
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
     skip_t2_fb: bool = False
-    seed: int = np.random.randint(0, 1 << 30)
+    seed: int = -1
 
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
@@ -33,13 +34,15 @@ class TMArgs:
     block_size: int = 128
 
     def __post_init__(self):
-        if self.patch_dim is None:
-            self.patch_dim = (self.dim[0], self.dim[1])
+        self.patch_dim = (
+            self.dim[0] if self.patch_dim[0] <= 0 or self.patch_dim[0] > self.dim[0] else self.patch_dim[0],
+            self.dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self.dim[1] else self.patch_dim[1],
+        )
 
         if self.include_state == -1:
             self.include_state = self.n_states // 2
 
         if self.seed == 0:
             self.seed = 1
-
-
+        elif self.seed < 0:
+            self.seed = np.random.randint(0, 1 << 30)
