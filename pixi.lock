@@ -5981,8 +5981,8 @@ packages:
   timestamp: 1727964811275
 - pypi: ./
   name: ytm
-  version: 0.6.0
-  sha256: 3cc99e802db35a14d1bc348d6d62b539e0a5c30714a8586d6ab0d96b780071b5
+  version: 0.6.0+dev1
+  sha256: 0b22a1b4606b4c72485bb5ac5d02c91278545f16201646495ccf54fbfdc976f3
   requires_dist:
   - numpy
   - tqdm

@@ -1,0 +1,367 @@
+import os
+
+import numpy as np
+import pycuda.gpuarray as ga
+from pycuda.compiler import SourceModule
+from pycuda.curandom import XORWOWRandomNumberGenerator
+from pycuda.driver import Context, device_attribute, memset_d32  # pyright: ignore # ty: ignore
+from tqdm import tqdm
+
+from .. import BaseDevice, FitBuffers
+
+
+def read_file(path):
+    with open(path, "r") as f:
+        return f.read()
+
+
+class CUDADevice(BaseDevice):
+    def dev_init(self):
+        import pycuda.autoprimaryctx  # noqa: F401
+
+        self.ctx: Context = pycuda.autoprimaryctx.context
+
+        self.rng = XORWOWRandomNumberGenerator(
+            lambda count: ga.to_gpu(np.array([(self.args.seed + i) for i in range(1, count + 1)], dtype=np.int32))
+        )
+        self.np_rng = np.random.default_rng(self.args.seed)
+
+        device = self.ctx.get_device()
+        attrs = device.get_attributes()
+        self.cuda_props = {
+            "max_threads_per_block": attrs[device_attribute.MAX_THREADS_PER_BLOCK],
+            "max_block_dim_x": attrs[device_attribute.MAX_BLOCK_DIM_X],
+            "max_grid_dim_x": attrs[device_attribute.MAX_GRID_DIM_X],
+            "warp_size": attrs[device_attribute.WARP_SIZE],
+            "multiprocessor_count": attrs[device_attribute.MULTIPROCESSOR_COUNT],
+            "max_shared_memory_per_block": attrs[device_attribute.MAX_SHARED_MEMORY_PER_BLOCK],
+        }
+
+        self._init_clauses()
+        self._init_weights()
+        self._init_kernels()
+
+    def _init_clauses(self):
+        self.ta_states = ga.to_gpu(
+            np.full(
+                shape=(self.total_clauses, self.n_literals),
+                fill_value=self.args.include_state - 1,
+                dtype=np.uint32,
+            )
+        )
+
+    def _init_weights(self):
+        n_neg_polarity = self.args.n_clauses // 2
+        clause_weights = np.zeros((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
+        for i in range(self.args.n_classes):
+            wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
+            wt[n_neg_polarity:] *= -1.0
+            clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
+
+        self.clause_weights = ga.to_gpu(clause_weights)
+        self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+
+    def _init_kernels(self):
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+
+        mod_kernels = self._load_kernel(
+            os.path.join(cur_dir, "kernels.cu"),
+            f"""
+            #define TOTAL_CLAUSES {int(self.total_clauses)}
+            #define THRESH {int(self.args.T)}
+            #define S {float(self.args.s)}
+            #define DIM0 {int(self.args.dim[0])}
+            #define DIM1 {int(self.args.dim[1])}
+            #define DIM2 {int(self.args.dim[2])}
+            #define CLASSES {int(self.args.n_classes)}
+            #define PATCH_DIM0 {int(self.args.patch_dim[0])}
+            #define PATCH_DIM1 {int(self.args.patch_dim[1])}
+            #define WEIGHTED {1 if self.args.weighted else 0}
+            #define MAX_WEIGHT {float(self.args.max_weight)}f
+            #define COALESCED {1 if self.args.coalesced else 0}
+            #define NEGATED_LITERALS {1 if self.args.negated_literals else 0}
+            #define POSITION_LITERALS {1 if self.args.position_literals else 0}
+            #define NEGATIVE_CLAUSES {1 if self.args.negative_clauses else 0}
+            #define ALLOW_POLARITY_CHANGE {1 if self.args.allow_polarity_change else 0}
+            #define MAX_INCLUDED_LITERALS {int(self.args.max_included_literals)}
+            #define MAX_TA_STATE {int(self.args.n_states - 1)}
+            #define INCLUDE_STATE {int(self.args.include_state)}
+            #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
+            #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
+            #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
+            #define PATCHES {int(self.n_patches)}
+            #define LITERALS {int(self.n_literals)}
+            """,
+        )
+
+        self.kernel_encode = mod_kernels.get_function("encode")
+        self.kernel_decode = mod_kernels.get_function("decode")
+        self.kernel_pack_clauses = mod_kernels.get_function("pack_clauses")
+        self.kernel_eval_clauses = mod_kernels.get_function("eval_clauses")
+        self.kernel_select_patch = mod_kernels.get_function("select_patch_and_count_votes")
+        self.kernel_evidence_to_prob = mod_kernels.get_function("evidence_to_update_prob")
+        self.kernel_clause_update = mod_kernels.get_function("update_clauses")
+        self.kernel_clause_inference = mod_kernels.get_function("clause_inference")
+
+        self.kernel_encode.prepare("PiP")
+        self.kernel_decode.prepare("PiP")
+        self.kernel_pack_clauses.prepare("PPP")
+        self.kernel_eval_clauses.prepare("PPPPiP")
+        self.kernel_select_patch.prepare("PPPPPPP")
+        self.kernel_evidence_to_prob.prepare("PPPiP")
+        self.kernel_clause_update.prepare("PPPPPPPiPP")
+        self.kernel_clause_inference.prepare("PPPPiP")
+
+        self.kernel_pack_clauses_launch_config = self._kernel_config(self.total_clauses)
+        self.kernel_eval_clauses_launch_config = self._kernel_config(self.total_clauses * self.n_patches)
+        self.kernel_select_patch_launch_config = self._kernel_config(self.total_clauses)
+        self.kernel_evidence_to_prob_launch_config = self._kernel_config(self.args.n_classes)
+        self.kernel_clause_update_launch_config = self._kernel_config(self.total_clauses)
+
+    def _load_kernel(self, kernel_file, header):
+        kernel_code = read_file(kernel_file)
+        return SourceModule(
+            header + "\n" + kernel_code,
+            options=["-O3", "--use_fast_math"],
+            no_extern_c=True,
+        )
+
+    def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        # Ensure hardware compliance
+        bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
+
+        if self.args.grid_size is None:
+            # Calculate grid size
+            gs = (n + bs - 1) // bs
+
+            # Limit grid size to reasonable bounds
+            max_blocks = min(65535, self.cuda_props["multiprocessor_count"] * 4)
+            gs = min(gs, max_blocks)
+        else:
+            gs = self.args.grid_size
+
+        return (gs, 1, 1), (bs, 1, 1)
+
+    def encode(self, X: np.ndarray[tuple[int, int], np.dtype[np.int8]]):
+        N = X.shape[0]
+        X_gpu = ga.to_gpu(X.astype(np.int8))
+        encoded_X_gpu = ga.to_gpu(np.zeros((N, self.n_patches, self.n_literal_chunks), dtype=np.uint32))
+
+        self.kernel_encode.prepared_call(
+            *self._kernel_config(N),
+            X_gpu.gpudata,
+            np.int32(N),
+            encoded_X_gpu.gpudata,
+        )
+        self.ctx.synchronize()
+
+        return encoded_X_gpu.get()
+
+    def decode(self, encoded_X: np.ndarray):
+        N = encoded_X.shape[0]
+        encoded_X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
+        X_gpu = ga.to_gpu(
+            np.zeros(
+                (N, self.args.dim[0] * self.args.dim[1] * self.args.dim[2]),
+                dtype=np.int8,
+            )
+        )
+
+        self.kernel_decode.prepared_call(
+            *self._kernel_config(N * self.n_patches),
+            encoded_X_gpu.gpudata,
+            np.int32(N),
+            X_gpu.gpudata,
+        )
+        self.ctx.synchronize()
+
+        return X_gpu.get()
+
+    def prepare_fit_buffers(
+        self, encoded_X: np.ndarray, targets: np.ndarray, clause_drop_mask: np.ndarray
+    ) -> FitBuffers:
+        return FitBuffers(
+            encoded_X=ga.to_gpu(encoded_X.astype(np.uint32)),
+            targets=ga.to_gpu(targets.astype(np.int8)),
+            packed_clauses=ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
+            n_includes=ga.empty((self.total_clauses,), dtype=np.uint32),
+            clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32),
+            selected_patch_ids=ga.empty((self.total_clauses,), dtype=np.int32),
+            pos_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
+            neg_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
+            update_probs=ga.empty((self.args.n_classes,), dtype=np.float32),
+            clause_drop_mask=ga.to_gpu(clause_drop_mask.astype(np.uint32)),
+        )
+
+    def pack_clauses(self, packed_clauses: ga.GPUArray, n_includes: ga.GPUArray):
+        memset_d32(packed_clauses.gpudata, 0, self.total_clauses * self.n_literal_chunks)
+        self.kernel_pack_clauses.prepared_call(
+            *self._kernel_config(self.total_clauses),
+            self.ta_states.gpudata,
+            packed_clauses.gpudata,
+            n_includes.gpudata,
+        )
+        self.ctx.synchronize()
+
+    def eval_clauses(
+        self,
+        packed_clauses: ga.GPUArray,
+        n_includes: ga.GPUArray,
+        clause_drop_mask: ga.GPUArray,
+        clause_outputs: ga.GPUArray,
+        encoded_X: ga.GPUArray,
+        e: int,
+    ):
+        self.kernel_eval_clauses.prepared_call(
+            *self.kernel_eval_clauses_launch_config,
+            packed_clauses.gpudata,
+            n_includes.gpudata,
+            clause_drop_mask.gpudata,
+            encoded_X.gpudata,
+            np.int32(e),
+            clause_outputs.gpudata,
+        )
+        self.ctx.synchronize()
+
+    def select_patch_and_count_votes(
+        self,
+        clause_outputs: ga.GPUArray,
+        selected_patch_ids: ga.GPUArray,
+        pos_votes: ga.GPUArray,
+        neg_votes: ga.GPUArray,
+    ):
+        memset_d32(pos_votes.gpudata, 0, self.args.n_classes)
+        memset_d32(neg_votes.gpudata, 0, self.args.n_classes)
+        self.kernel_select_patch.prepared_call(
+            *self.kernel_select_patch_launch_config,
+            self.rng.state,
+            self.clause_weights.gpudata,
+            clause_outputs.gpudata,
+            self.patch_weights.gpudata,
+            selected_patch_ids.gpudata,
+            pos_votes.gpudata,
+            neg_votes.gpudata,
+        )
+        self.ctx.synchronize()
+
+    def calc_update_prob(
+        self,
+        pos_votes: ga.GPUArray,
+        neg_votes: ga.GPUArray,
+        targets: ga.GPUArray,
+        update_probs: ga.GPUArray,
+        e: int,
+    ):
+        self.kernel_evidence_to_prob.prepared_call(
+            *self.kernel_evidence_to_prob_launch_config,
+            pos_votes.gpudata,
+            neg_votes.gpudata,
+            targets.gpudata,
+            np.int32(e),
+            update_probs.gpudata,
+        )
+        self.ctx.synchronize()
+
+    def update_clauses(
+        self,
+        n_includes: ga.GPUArray,
+        selected_patch_ids: ga.GPUArray,
+        clause_drop_mask: ga.GPUArray,
+        update_probs: ga.GPUArray,
+        encoded_X: ga.GPUArray,
+        targets: ga.GPUArray,
+        e: int,
+    ):
+        self.kernel_clause_update.prepared_call(
+            *self.kernel_clause_update_launch_config,
+            self.rng.state,
+            selected_patch_ids.gpudata,
+            n_includes.gpudata,
+            clause_drop_mask.gpudata,
+            encoded_X.gpudata,
+            targets.gpudata,
+            update_probs.gpudata,
+            np.int32(e),
+            self.ta_states.gpudata,
+            self.clause_weights.gpudata,
+        )
+        self.ctx.synchronize()
+
+    def infer(self, encoded_X: np.ndarray, batch_size: int = -1):
+        N = encoded_X.shape[0]
+        if batch_size == -1:
+            batch_size = N
+
+        packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
+        n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
+
+        self.pack_clauses(packed_clauses, n_includes)
+
+        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
+        for i in tqdm(range(0, N, batch_size), desc="Inference", leave=False, dynamic_ncols=True):
+            X_batch = ga.to_gpu(encoded_X[i : i + batch_size])
+            cs_batch = ga.to_gpu(np.zeros((X_batch.shape[0], self.args.n_classes), dtype=np.float32))
+
+            self.kernel_clause_inference.prepared_call(
+                *self._kernel_config(X_batch.shape[0] * self.total_clauses),
+                packed_clauses.gpudata,
+                self.clause_weights.gpudata,
+                n_includes.gpudata,
+                X_batch.gpudata,
+                np.int32(X_batch.shape[0]),
+                cs_batch.gpudata,
+            )
+            self.ctx.synchronize()
+
+            class_sums[i : i + batch_size] = cs_batch.get()
+
+        return class_sums
+
+    def get_weights(self) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+        return self.clause_weights.get()
+
+    def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return self.ta_states.get().reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def transform_patchwise(
+        self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
+    ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
+        N = encoded_X.shape[0]
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+
+        X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
+        packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
+        n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
+        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.uint32))
+        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        self.pack_clauses(packed_clauses, n_includes)
+
+        for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):
+            self.kernel_eval_clauses.prepared_call(
+                *self.kernel_eval_clauses_launch_config,
+                packed_clauses.gpudata,
+                n_includes.gpudata,
+                clause_drop_mask.gpudata,
+                X_gpu.gpudata,
+                np.int32(i),
+                clause_outputs.gpudata,
+            )
+            self.ctx.synchronize()
+
+            co_patchwise[i] = clause_outputs.get().reshape((self.total_clauses, self.n_patches))
+
+        n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
+        return co_patchwise.astype(bool).reshape((N, n_clause_banks, self.args.n_clauses, self.n_patches))
+
+    def get_state_dict(self):
+        return {
+            "ta_states": self.ta_states.get(),
+            "clause_weights": self.clause_weights.get(),
+            "patch_weights": self.patch_weights.get(),
+        }
+
+    def load_state_dict(self, state: dict):
+        self.ta_states = ga.to_gpu(state["ta_states"])
+        self.clause_weights = ga.to_gpu(state["clause_weights"])
+        self.patch_weights = ga.to_gpu(state["patch_weights"])
