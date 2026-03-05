@@ -6,7 +6,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">=3.11,<3.14"
-version = "0.5+dev40"
+version = "0.6.0"
 
 [project.optional-dependencies]
 cuda = [
@@ -27,15 +27,6 @@ requires = ["hatchling"]
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["tests"]
-
-# [tool.hatch.build]
-# sources =["src"]
-#
-# [tool.hatch.build.targets.wheel]
-# packages = ["src/ytm", "src/cutm"]
-
-# [tool.setuptools.package-data]
-# "*" = ["cuda/*.cu"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -71,11 +62,9 @@ cuda = "12"
 
 [tool.pixi.feature.cuda.dependencies]
 cuda = "*"
+openmp = "*"
 
 [tool.pixi.feature.cuda.pypi-dependencies]
 ytm = { path = ".", editable = true, extras = ["examples", "cuda"] }
 
 [tool.pixi.feature.examples.dependencies]
-# tensorflow = ">=2.19.1"
-# tensorflow = "*"
-
