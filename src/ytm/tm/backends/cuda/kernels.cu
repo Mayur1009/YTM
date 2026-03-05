@@ -63,7 +63,7 @@ extern "C" {
     }
 
     __device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float* weight, const uint* patch,
-                                     const int sign) {
+                                            const int sign) {
 #if TYPE1A_FB
         float s_inv = S_INV;
     #if WEIGHTED
@@ -361,6 +361,7 @@ extern "C" {
         curandState localRNG = rng[index];
 
         for (ull clause = index; clause < TOTAL_CLAUSES; clause += stride) {
+#if PATCHES > 1
             int count = 0;
             int selected_id = -1;
             for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
@@ -371,6 +372,9 @@ extern "C" {
                     }
                 }
             }
+#else
+            int selected_id = clause_outputs[clause] ? 0 : -1;
+#endif
             selected_patch_ids[clause] = selected_id;
             if (selected_id != -1) {
                 patch_weights[clause * PATCHES + selected_id]++;

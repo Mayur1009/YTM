@@ -49,6 +49,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #if USE_OMP
@@ -387,6 +388,7 @@ void select_patch_and_count_votes(uint* restrict rng, const float* restrict clau
 
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+#if PATCHES > 1
         int count = 0;
         int selected_id = -1;
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
@@ -397,6 +399,9 @@ void select_patch_and_count_votes(uint* restrict rng, const float* restrict clau
                 }
             }
         }
+#else
+        int selected_id = clause_outputs[clause] ? 0 : -1;
+#endif
         selected_patch_ids[clause] = selected_id;
         if (selected_id != -1) {
             patch_weights[clause * PATCHES + selected_id]++;
