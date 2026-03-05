@@ -42,10 +42,8 @@ if __name__ == "__main__":
         s=10,
         dim=(28, 28, 1),
         n_classes=10,
-        patch_dim=(10, 10),
         seed=10,
         device="cpu",
-        n_threads=8,
     )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=10)
