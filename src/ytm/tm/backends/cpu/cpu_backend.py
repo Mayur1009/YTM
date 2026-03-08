@@ -90,10 +90,9 @@ class CPUDevice(BaseDevice):
             lib_set_num_threads(self.args.n_threads)
 
     def _init_clauses(self):
-        include_state = self.args.include_state if self.args.include_state is not None else 128
         self.ta_states = np.full(
             (self.total_clauses, self.n_literals),
-            include_state - 1,
+            self.args.include_state - 1,
             dtype=np.uint32,
         )
 
