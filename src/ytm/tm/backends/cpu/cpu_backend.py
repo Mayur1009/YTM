@@ -67,14 +67,14 @@ class CPUDevice(BaseDevice):
         self.lib_encode.argtypes = [int8_p, c_int, uint32_p]
         self.lib_decode.argtypes = [uint32_p, c_int, int8_p]
         self.lib_pack_clauses.argtypes = [uint32_p, uint32_p, uint32_p]
-        self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, uint32_p, uint32_p, c_int, uint32_p]
+        self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, int8_p, uint32_p, c_int, uint32_p]
         self.lib_select_patch.argtypes = [uint32_p, float_p, uint32_p, int32_p, int32_p, float_p, float_p]
         self.lib_calc_update_prob.argtypes = [float_p, float_p, int8_p, c_int, float_p]
         self.lib_update_clauses.argtypes = [
             uint32_p,
             int32_p,
             uint32_p,
-            uint32_p,
+            int8_p,
             uint32_p,
             int8_p,
             float_p,
@@ -189,7 +189,7 @@ class CPUDevice(BaseDevice):
             pos_votes=np.empty((self.args.n_classes,), dtype=np.float32),
             neg_votes=np.empty((self.args.n_classes,), dtype=np.float32),
             update_probs=np.empty((self.args.n_classes,), dtype=np.float32),
-            clause_drop_mask=clause_drop_mask.astype(np.uint32),
+            clause_drop_mask=clause_drop_mask.astype(np.int8),
         )
 
     def pack_clauses(self, packed_clauses: np.ndarray, n_includes: np.ndarray):
@@ -212,7 +212,7 @@ class CPUDevice(BaseDevice):
         self.lib_eval_clauses(
             packed_clauses.ctypes.data_as(uint32_p),
             n_includes.ctypes.data_as(uint32_p),
-            clause_drop_mask.ctypes.data_as(uint32_p),
+            clause_drop_mask.ctypes.data_as(int8_p),
             encoded_X.ctypes.data_as(uint32_p),
             c_int(e),
             clause_outputs.ctypes.data_as(uint32_p),
@@ -262,7 +262,7 @@ class CPUDevice(BaseDevice):
             self.p_rng,
             selected_patch_ids.ctypes.data_as(int32_p),
             n_includes.ctypes.data_as(uint32_p),
-            clause_drop_mask.ctypes.data_as(uint32_p),
+            clause_drop_mask.ctypes.data_as(int8_p),
             encoded_X.ctypes.data_as(uint32_p),
             targets.ctypes.data_as(int8_p),
             update_probs.ctypes.data_as(float_p),
@@ -274,9 +274,9 @@ class CPUDevice(BaseDevice):
     def fit_epoch(self, encoded_X, targets, clause_drop_p):
         N = encoded_X.shape[0]
         if clause_drop_p > 0.0:
-            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.uint32)
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
-            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.uint32)
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
         dev_buffers: FitBuffers = self.prepare_fit_buffers(encoded_X, targets, clause_drop_mask)
 
@@ -361,7 +361,7 @@ class CPUDevice(BaseDevice):
 
         packed_clauses = np.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
         n_includes = np.empty((self.total_clauses,), dtype=np.uint32)
-        clause_drop_mask = np.zeros((self.total_clauses,), dtype=np.uint32)
+        clause_drop_mask = np.zeros((self.total_clauses,), dtype=np.int8)
         clause_outputs = np.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
         self.pack_clauses(packed_clauses, n_includes)
 
@@ -369,7 +369,7 @@ class CPUDevice(BaseDevice):
             self.lib_eval_clauses(
                 packed_clauses.ctypes.data_as(uint32_p),
                 n_includes.ctypes.data_as(uint32_p),
-                clause_drop_mask.ctypes.data_as(uint32_p),
+                clause_drop_mask.ctypes.data_as(int8_p),
                 encoded_X.ctypes.data_as(uint32_p),
                 c_int(i),
                 clause_outputs.ctypes.data_as(uint32_p),

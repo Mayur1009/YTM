@@ -295,7 +295,7 @@ extern "C" {
         }
     }
 
-    __global__ void eval_clauses(const uint* packed_clauses, const uint* num_includes, const uint* clause_drop_mask,
+    __global__ void eval_clauses(const uint* packed_clauses, const uint* num_includes, const int8_t* clause_drop_mask,
                                  const uint* encoded_X, const int e, uint* clause_outputs) {
         /*
          * Evaluate each clause on the input `e`.
@@ -424,7 +424,7 @@ extern "C" {
     }
 
     __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, const uint* num_includes,
-                                   const uint* clause_drop_mask, const uint* encoded_X, const int8_t* targets,
+                                   const int8_t* clause_drop_mask, const uint* encoded_X, const int8_t* targets,
                                    const float* prob, const int e, uint* global_ta_states, float* clause_weights) {
         /*
          * Update clauses.

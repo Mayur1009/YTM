@@ -325,7 +325,7 @@ void pack_clauses(const uint* restrict global_ta_states, uint* restrict packed_c
 }
 
 void eval_clauses(const uint* restrict packed_clauses, const uint* restrict num_includes,
-                  const uint* restrict clause_drop_mask, const uint* restrict encoded_X, const int e,
+                  const int8_t* restrict clause_drop_mask, const uint* restrict encoded_X, const int e,
                   uint* restrict clause_outputs) {
     /*
      * Evaluate each clause on the input `e`.
@@ -451,7 +451,7 @@ void evidence_to_update_prob(const float* restrict pos_votes, const float* restr
 }
 
 void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, const uint* restrict num_includes,
-                    const uint* restrict clause_drop_mask, const uint* restrict encoded_X,
+                    const int8_t* restrict clause_drop_mask, const uint* restrict encoded_X,
                     const int8_t* restrict targets, const float* restrict prob, const int e,
                     uint* restrict global_ta_states, float* restrict clause_weights) {
     /*

@@ -190,7 +190,7 @@ class CUDADevice(BaseDevice):
             pos_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
             neg_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
             update_probs=ga.empty((self.args.n_classes,), dtype=np.float32),
-            clause_drop_mask=ga.to_gpu(clause_drop_mask.astype(np.uint32)),
+            clause_drop_mask=ga.to_gpu(clause_drop_mask.astype(np.int8)),
         )
 
     def pack_clauses(self, packed_clauses: ga.GPUArray, n_includes: ga.GPUArray):
@@ -290,15 +290,11 @@ class CUDADevice(BaseDevice):
     def fit_epoch(self, encoded_X, targets, clause_drop_p):
         N = encoded_X.shape[0]
         if clause_drop_p > 0.0:
-            clause_drop_mask = (
-                self.np_rng.random(self.total_clauses) <= clause_drop_p
-            ).astype(np.uint32)
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
-            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.uint32)
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
-        dev_buffers: FitBuffers = self.prepare_fit_buffers(
-            encoded_X, targets, clause_drop_mask
-        )
+        dev_buffers: FitBuffers = self.prepare_fit_buffers(encoded_X, targets, clause_drop_mask)
 
         pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
         for e in pbar:
@@ -384,7 +380,7 @@ class CUDADevice(BaseDevice):
         X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
         packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
         n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
-        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.uint32))
+        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.int8))
         clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
         self.pack_clauses(packed_clauses, n_includes)
 
