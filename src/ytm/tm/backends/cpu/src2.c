@@ -1,0 +1,732 @@
+#ifdef IS_NEOVIM_CLANGD_ENV
+    #define USE_OMP 1
+    #define TOTAL_CLAUSES 1000
+    #define THRESH 100
+    #define S 10.0
+    #define CLASSES 10
+    #define HEIGHT 28
+    #define WIDTH 28
+    #define DEPTH 1
+    #define PATCH_HEIGHT 10
+    #define PATCH_WIDTH 10
+    #define NEGATED_LITERALS 1
+    #define POSITION_LITERALS 1
+    #define COALESCED 1
+    #define WEIGHTED 1
+    #define MAX_WEIGHT 10.0f
+    #define NEGATIVE_CLAUSES 1
+    #define ALLOW_POLARITY_CHANGE 1
+    #define MAX_INCLUDED_LITERALS 10
+    #define INCLUDE_STATE 128
+    #define MAX_TA_STATE 255
+    #define TYPE1A_FB 1
+    #define TYPE1B_FB 1
+    #define TYPE2_FB 1
+#endif
+
+#define INT_SIZE 32
+#define S_INV (1.0f / S)
+
+#define N_POSITION_FEATS (HEIGHT - PATCH_HEIGHT + WIDTH - PATCH_WIDTH)
+#define N_FEATURE_FEATS (PATCH_HEIGHT * PATCH_WIDTH * DEPTH)
+#if NEGATED_LITERALS
+    #define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
+#else
+    #define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
+#endif
+#define NUM_LITERAL_CHUNKS ((LITERALS + INT_SIZE - 1) / INT_SIZE)
+
+#define N_PATCHES_Y (HEIGHT - PATCH_HEIGHT + 1)
+#define N_PATCHES_X (WIDTH - PATCH_WIDTH + 1)
+#define PATCHES (N_PATCHES_Y * N_PATCHES_X)
+
+#if ((LITERALS % INT_SIZE) != 0)
+    #define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
+#else
+    #define FILTER 0xFFFFFFFF
+#endif
+
+#if COALESCED == 0
+    #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
+#else
+    #define CLAUSES_PER_CLASS TOTAL_CLAUSES
+    #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
+#endif
+
+#define CLIP(val, min, max) ((val < min) ? min : ((val > max) ? max : val))
+
+#include <limits.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#if USE_OMP
+    #include <omp.h>
+    #define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
+    #define OMP_ATOMIC _Pragma("omp atomic")
+    #define GET_THREAD_ID omp_get_thread_num()
+void set_num_threads(int num_threads) { omp_set_num_threads(num_threads); }
+#else
+    #define OMP_PARALLEL_FOR
+    #define OMP_ATOMIC
+    #define GET_THREAD_ID 0
+#endif
+
+typedef unsigned long long ull;
+typedef unsigned int uint;
+
+#define UINT_MAX_INV (1.0f / UINT_MAX)
+
+static inline float xorshift32(uint* state) {
+    uint x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return (float)x * UINT_MAX_INV;
+}
+
+static inline float uprob_fun(float v, float y) {
+    float prob = (y - v) / (2 * y);
+    return prob;
+}
+
+// Get the expected value of a literal for a given patch position
+// Returns 0 or 1
+static inline int8_t get_literal_value_for_patch(const int8_t* X, int patch_row, int patch_col, int lit) {
+#if NEGATED_LITERALS
+    if (lit >= LITERALS / 2) {
+        // Negated literal - return inverse of positive literal
+        return get_literal_value_for_patch(X, patch_row, patch_col, lit - LITERALS / 2) == 0 ? 1 : 0;
+    }
+#endif
+
+    if (lit < HEIGHT - PATCH_HEIGHT) {
+        // Y position literal: lit < patch_row → 1, else 0
+        return (lit < patch_row) ? 1 : 0;
+    } else if (lit < N_POSITION_FEATS) {
+        // X position literal: (lit - Y_offset) < patch_col → 1, else 0
+        int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+        return (x_lit < patch_col) ? 1 : 0;
+    } else {
+        // Feature literal
+        int fid = lit - N_POSITION_FEATS;
+        int rel_y = fid / (PATCH_WIDTH * DEPTH);
+        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+        int z = fid % DEPTH;
+        int abs_y = patch_row + rel_y;
+        int abs_x = patch_col + rel_x;
+        return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+    }
+}
+
+// Type 1a feedback - reinforce matching literals (optimized version)
+// Increments TA states for literals with value=1, probabilistically decrements for value=0
+static inline void type1a_fb_noenc(uint* restrict rng, uint* restrict ta_state, float* restrict weight, const int8_t* X,
+                                   int patch_row, int patch_col, const int sign) {
+#if TYPE1A_FB
+    #if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT) (*weight) += sign * 1.0f;
+    #endif
+
+    // Position Y literals: [0, patch_row) have value 1, [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
+    for (int lit = 0; lit < patch_row; ++lit) {
+        if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
+    }
+    for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+        if (ta_state[lit] > 0 && xorshift32(rng) <= S_INV) ta_state[lit] -= 1;
+    }
+
+    // Position X literals: [0, patch_col) have value 1, [patch_col, WIDTH-PATCH_WIDTH) have value 0
+    for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
+        if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
+    }
+    for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
+        if (ta_state[lit] > 0 && xorshift32(rng) <= S_INV) ta_state[lit] -= 1;
+    }
+
+    // Feature literals: check pixel value
+    for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+        int rel_y = fid / (PATCH_WIDTH * DEPTH);
+        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+        int z = fid % DEPTH;
+        int abs_y = patch_row + rel_y;
+        int abs_x = patch_col + rel_x;
+        int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+
+        int lit_pos = N_POSITION_FEATS + fid;
+        if (pixel == 1) {
+            if (ta_state[lit_pos] < MAX_TA_STATE) ta_state[lit_pos] += 1;
+        } else {
+            if (ta_state[lit_pos] > 0 && xorshift32(rng) <= S_INV) ta_state[lit_pos] -= 1;
+        }
+
+    #if NEGATED_LITERALS
+        int lit_neg = lit_pos + LITERALS / 2;
+        if (pixel == 0) {
+            if (ta_state[lit_neg] < MAX_TA_STATE) ta_state[lit_neg] += 1;
+        } else {
+            if (ta_state[lit_neg] > 0 && xorshift32(rng) <= S_INV) ta_state[lit_neg] -= 1;
+        }
+    #endif
+    }
+
+    #if NEGATED_LITERALS
+    // Negated position Y: [0, patch_row) have value 0, [patch_row, HEIGHT-PATCH_HEIGHT) have value 1
+    for (int lit = 0; lit < patch_row; ++lit) {
+        if (ta_state[lit + LITERALS / 2] > 0 && xorshift32(rng) <= S_INV) ta_state[lit + LITERALS / 2] -= 1;
+    }
+    for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+        if (ta_state[lit + LITERALS / 2] < MAX_TA_STATE) ta_state[lit + LITERALS / 2] += 1;
+    }
+
+    // Negated position X: [0, patch_col) have value 0, [patch_col, WIDTH-PATCH_WIDTH) have value 1
+    for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
+        if (ta_state[lit + LITERALS / 2] > 0 && xorshift32(rng) <= S_INV) ta_state[lit + LITERALS / 2] -= 1;
+    }
+    for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
+        if (ta_state[lit + LITERALS / 2] < MAX_TA_STATE) ta_state[lit + LITERALS / 2] += 1;
+    }
+    #endif
+
+#endif
+}
+
+// Type 1b feedback - probabilistically decrement all literals (no pre-encoding version)
+static inline void type1b_fb_noenc(uint* restrict rng, uint* restrict ta_state, const int sign) {
+#if TYPE1B_FB
+    for (int li = 0; li < LITERALS; ++li) {
+        if (ta_state[li] > 0 && xorshift32(rng) <= S_INV) {
+            ta_state[li] -= 1;
+        }
+    }
+#endif
+}
+
+// Type 2 feedback - include absent literals (optimized version)
+// Increments TA states for literals with value=0 (to include them and break the clause)
+static inline void type2_fb_noenc(uint* restrict ta_state, float* restrict weight, const int8_t* X, int patch_row,
+                                  int patch_col, const int sign) {
+#if TYPE2_FB
+    #if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT) (*weight) -= sign * 1.0f;
+        #if ALLOW_POLARITY_CHANGE == 0
+    if (sign == 1 && *weight < 0) *weight = 1;
+    if (sign == -1 && *weight >= 0) *weight = -1;
+        #endif
+    #endif
+    #if NEGATIVE_CLAUSES == 0
+    if (*weight < 1) *weight = 1;
+    #endif
+
+    // Position Y literals: [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
+    for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+        if (ta_state[lit] < INCLUDE_STATE) ta_state[lit] += 1;
+    }
+
+    // Position X literals: [patch_col, WIDTH-PATCH_WIDTH) have value 0
+    for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
+        if (ta_state[lit] < INCLUDE_STATE) ta_state[lit] += 1;
+    }
+
+    // Feature literals: increment where pixel=0
+    for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+        int rel_y = fid / (PATCH_WIDTH * DEPTH);
+        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+        int z = fid % DEPTH;
+        int abs_y = patch_row + rel_y;
+        int abs_x = patch_col + rel_x;
+        int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+
+        int lit_pos = N_POSITION_FEATS + fid;
+        if (pixel == 0 && ta_state[lit_pos] < INCLUDE_STATE) {
+            ta_state[lit_pos] += 1;
+        }
+
+    #if NEGATED_LITERALS
+        int lit_neg = lit_pos + LITERALS / 2;
+        if (pixel == 1 && ta_state[lit_neg] < INCLUDE_STATE) {
+            ta_state[lit_neg] += 1;
+        }
+    #endif
+    }
+
+    #if NEGATED_LITERALS
+    // Negated position Y: [0, patch_row) have value 0
+    for (int lit = 0; lit < patch_row; ++lit) {
+        if (ta_state[lit + LITERALS / 2] < INCLUDE_STATE) ta_state[lit + LITERALS / 2] += 1;
+    }
+
+    // Negated position X: [0, patch_col) have value 0
+    for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
+        if (ta_state[lit + LITERALS / 2] < INCLUDE_STATE) ta_state[lit + LITERALS / 2] += 1;
+    }
+    #endif
+
+#endif
+}
+
+void eval_clauses(uint* restrict rng, const int8_t* restrict X, const uint* restrict global_ta_states,
+                  const int8_t* restrict clause_drop_mask, int* restrict selected_patch_ids) {
+    /*
+     * Evaluate clauses against a single sample without pre-encoding.
+     * Uses reservoir sampling to select one matching patch per clause.
+     * Optimized: pre-computes included literals and valid patch ranges.
+     *
+     * Inputs:
+     * rng => RNG state array (one per thread)
+     * X => (HEIGHT * WIDTH * DEPTH) - single sample
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS)
+     * clause_drop_mask => (TOTAL_CLAUSES)
+     *
+     * Outputs:
+     * selected_patch_ids => (TOTAL_CLAUSES) - selected patch per clause, -1 if no match
+     */
+
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        // Skip dropped clauses
+        if (clause_drop_mask[clause] == 1) {
+            selected_patch_ids[clause] = -1;
+            continue;
+        }
+
+        const uint* ta_state = &global_ta_states[clause * LITERALS];
+
+        // Pre-compute included feature literals and valid patch position ranges
+        int included_feats_pos[N_FEATURE_FEATS];
+        int included_feats_neg[N_FEATURE_FEATS];
+        int n_feats_pos = 0, n_feats_neg = 0;
+
+        int min_row = 0, max_row = N_PATCHES_Y;
+        int min_col = 0, max_col = N_PATCHES_X;
+
+        bool has_includes = false;
+
+        // Scan position Y literals
+        for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                if (lit + 1 > min_row) min_row = lit + 1;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                if (lit + 1 < max_row) max_row = lit + 1;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Scan position X literals
+        for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
+            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                if (x_lit + 1 > min_col) min_col = x_lit + 1;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                if (x_lit + 1 < max_col) max_col = x_lit + 1;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Scan feature literals
+        for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+            int lit_pos = N_POSITION_FEATS + fid;
+            if (ta_state[lit_pos] >= INCLUDE_STATE) {
+                included_feats_pos[n_feats_pos++] = fid;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            int lit_neg = lit_pos + LITERALS / 2;
+            if (ta_state[lit_neg] >= INCLUDE_STATE) {
+                included_feats_neg[n_feats_neg++] = fid;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Empty clauses match everything - randomly select a patch
+        if (!has_includes) {
+            selected_patch_ids[clause] = (int)(xorshift32(&rng[GET_THREAD_ID]) * PATCHES);
+            continue;
+        }
+
+        // Check if valid range is empty (no patches can match)
+        if (min_row >= max_row || min_col >= max_col) {
+            selected_patch_ids[clause] = -1;
+            continue;
+        }
+
+        // Reservoir sampling over all matching patches in valid range
+        int selected_patch = -1;
+        int active_patch_count = 0;
+
+        for (int patch_row = min_row; patch_row < max_row; patch_row++) {
+            for (int patch_col = min_col; patch_col < max_col; patch_col++) {
+                bool matches = true;
+
+                // Check positive feature literals
+                for (int i = 0; matches && i < n_feats_pos; ++i) {
+                    int fid = included_feats_pos[i];
+                    int rel_y = fid / (PATCH_WIDTH * DEPTH);
+                    int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+                    int z = fid % DEPTH;
+
+                    int abs_y = patch_row + rel_y;
+                    int abs_x = patch_col + rel_x;
+
+                    int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+                    if (pixel != 1) matches = false;
+                }
+
+#if NEGATED_LITERALS
+                // Check negated feature literals
+                for (int i = 0; matches && i < n_feats_neg; ++i) {
+                    int fid = included_feats_neg[i];
+                    int rel_y = fid / (PATCH_WIDTH * DEPTH);
+                    int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+                    int z = fid % DEPTH;
+
+                    int abs_y = patch_row + rel_y;
+                    int abs_x = patch_col + rel_x;
+
+                    int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+                    if (pixel != 0) matches = false;
+                }
+#endif
+
+                // Reservoir sampling
+                if (matches) {
+                    active_patch_count++;
+                    if (xorshift32(&rng[GET_THREAD_ID]) < 1.0f / active_patch_count) {
+                        selected_patch = patch_row * N_PATCHES_X + patch_col;
+                    }
+                }
+            }
+        }
+
+        selected_patch_ids[clause] = selected_patch;
+    }
+}
+
+void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, uint* restrict global_ta_states,
+                    float* restrict clause_weights, const int8_t* restrict clause_drop_mask, const int8_t* restrict X,
+                    const int8_t* restrict targets, const float* restrict prob) {
+    /*
+     * Update clauses based on feedback (no pre-encoding version).
+     *
+     * Inputs:
+     * rng => RNG state array
+     * selected_patch_ids => (TOTAL_CLAUSES) - selected patch per clause
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS) - modified in place
+     * clause_weights => (CLASSES * CLAUSES_PER_CLASS) - modified in place
+     * clause_drop_mask => (TOTAL_CLAUSES)
+     * X => (HEIGHT * WIDTH * DEPTH) - single sample
+     * targets => (CLASSES) - target for this sample
+     * prob => (CLASSES) - update probability per class
+     */
+
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        // Skip dropped clauses
+        if (clause_drop_mask[clause] == 1) continue;
+
+        uint* ta_state = &global_ta_states[clause * LITERALS];
+        int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
+
+        // Get patch coordinates if clause was active
+        int patch_row = -1, patch_col = -1;
+        if (local_clause_output) {
+            patch_row = selected_patch_ids[clause] / N_PATCHES_X;
+            patch_col = selected_patch_ids[clause] % N_PATCHES_X;
+        }
+
+        // Count included literals for this clause
+        uint num_includes = 0;
+        for (int li = 0; li < LITERALS; ++li) {
+            if (ta_state[li] >= INCLUDE_STATE) num_includes++;
+        }
+
+        ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+        LOOP_CLASS_ID(class_id, clause) {
+            int local_target = targets[class_id];
+            if (local_target == 0) continue;
+
+            float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+            int sign = (*local_weight >= 0) - (*local_weight < 0);
+
+            float update_prob = prob[class_id];
+            bool should_update = (xorshift32(&rng[GET_THREAD_ID]) <= update_prob);
+            bool clause_has_space = (num_includes <= (uint)MAX_INCLUDED_LITERALS);
+            bool t1 = (local_target * sign) > 0;
+
+            // Type 1a feedback - TP - clause is active with correct polarity and has space
+            if (should_update && t1 && local_clause_output && clause_has_space) {
+                type1a_fb_noenc(&rng[GET_THREAD_ID], ta_state, local_weight, X, patch_row, patch_col, sign);
+            }
+
+            // Type 1b feedback - FN - clause is inactive or overflowing, but should have been active
+            if (should_update && t1 && !(local_clause_output && clause_has_space)) {
+                type1b_fb_noenc(&rng[GET_THREAD_ID], ta_state, sign);
+            }
+
+            // Type 2 feedback - FP - clause is active but has wrong polarity
+            if (should_update && (local_target * sign) < 0 && local_clause_output) {
+                type2_fb_noenc(ta_state, local_weight, X, patch_row, patch_col, sign);
+            }
+        }
+    }
+}
+
+void fit_sample(uint* restrict rng, uint* global_ta_states, float* restrict clause_weights, int* restrict patch_weights,
+                const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const int8_t* restrict targets) {
+    /*
+     * Fit a single sample (no pre-encoding version).
+     *
+     * Inputs:
+     * rng => RNG state array
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS) - modified in place
+     * clause_weights => (CLASSES * CLAUSES_PER_CLASS) - modified in place
+     * patch_weights => (TOTAL_CLAUSES * PATCHES) - modified in place
+     * clause_drop_mask => (TOTAL_CLAUSES)
+     * X => (HEIGHT * WIDTH * DEPTH) - single sample
+     * targets => (CLASSES) - target for this sample
+     */
+
+    // Step 1: Evaluate clauses and select patches
+    int selected_patch_ids[TOTAL_CLAUSES];
+    eval_clauses(rng, X, global_ta_states, clause_drop_mask, selected_patch_ids);
+
+    // Step 2: Count votes
+    float votes[CLASSES];
+    memset(votes, 0, sizeof(votes));
+
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        if (selected_patch_ids[clause] != -1) {
+            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            LOOP_CLASS_ID(class_id, clause) {
+                votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+            }
+            patch_weights[clause * PATCHES + selected_patch_ids[clause]]++;
+        }
+    }
+
+    // Step 3: Calculate update probabilities
+    float prob[CLASSES];
+    for (ull class_id = 0; class_id < CLASSES; class_id++) {
+        int local_target = targets[class_id];
+        if (local_target == 0) {
+            prob[class_id] = 0.0f;
+            continue;
+        }
+
+        float y = (float)THRESH * (float)local_target;
+        float class_sum = (float)CLIP(votes[class_id], -THRESH, THRESH);
+        prob[class_id] = uprob_fun(class_sum, y);
+    }
+
+    // Step 4: Update clauses
+    update_clauses(rng, selected_patch_ids, global_ta_states, clause_weights, clause_drop_mask, X, targets, prob);
+}
+
+void infer_sample(uint* restrict rng, const int8_t* restrict X, const uint* restrict global_ta_states,
+                  const float* restrict clause_weights, float* restrict class_sums) {
+    /*
+     * Inference for a single sample without pre-encoding.
+     * Early-exits on first matching patch per clause.
+     * Optimized: pre-computes included literals and valid patch ranges.
+     *
+     * Inputs:
+     * rng => RNG state array (for empty clause random selection)
+     * X => (HEIGHT * WIDTH * DEPTH) - single sample
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS)
+     * clause_weights => (CLASSES * CLAUSES_PER_CLASS)
+     *
+     * Outputs:
+     * class_sums => (CLASSES) - accumulated votes per class
+     */
+
+    memset(class_sums, 0, sizeof(float) * CLASSES);
+
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        const uint* ta_state = &global_ta_states[clause * LITERALS];
+
+        // Pre-compute included feature literals and valid patch position ranges
+        int included_feats_pos[N_FEATURE_FEATS];  // Positive feature literal indices (fid)
+        int included_feats_neg[N_FEATURE_FEATS];  // Negated feature literal indices (fid)
+        int n_feats_pos = 0, n_feats_neg = 0;
+
+        // Valid patch row range: [min_row, max_row)
+        // Positive Y literal k included => patch_row > k => min_row = k + 1
+        // Negated Y literal k included => patch_row <= k => max_row = k + 1
+        int min_row = 0, max_row = N_PATCHES_Y;
+        int min_col = 0, max_col = N_PATCHES_X;
+
+        bool has_includes = false;
+
+        // Scan position Y literals [0, HEIGHT - PATCH_HEIGHT)
+        for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                // Positive Y literal: patch_row must be > lit
+                if (lit + 1 > min_row) min_row = lit + 1;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                // Negated Y literal: patch_row must be <= lit
+                if (lit + 1 < max_row) max_row = lit + 1;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Scan position X literals [HEIGHT - PATCH_HEIGHT, N_POSITION_FEATS)
+        for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
+            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                // Positive X literal: patch_col must be > x_lit
+                if (x_lit + 1 > min_col) min_col = x_lit + 1;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                // Negated X literal: patch_col must be <= x_lit
+                if (x_lit + 1 < max_col) max_col = x_lit + 1;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Scan feature literals and build included lists
+        for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+            int lit_pos = N_POSITION_FEATS + fid;
+            if (ta_state[lit_pos] >= INCLUDE_STATE) {
+                included_feats_pos[n_feats_pos++] = fid;
+                has_includes = true;
+            }
+#if NEGATED_LITERALS
+            int lit_neg = lit_pos + LITERALS / 2;
+            if (ta_state[lit_neg] >= INCLUDE_STATE) {
+                included_feats_neg[n_feats_neg++] = fid;
+                has_includes = true;
+            }
+#endif
+        }
+
+        // Empty clauses are skipped during inference (consistent with src.c)
+        if (!has_includes) {
+            continue;
+        }
+
+        // Check if valid range is empty (no patches can match)
+        if (min_row >= max_row || min_col >= max_col) {
+            continue;
+        }
+
+        // Check if clause matches any patch (early exit on first match)
+        bool clause_matched = false;
+
+        for (int patch_row = min_row; patch_row < max_row && !clause_matched; patch_row++) {
+            for (int patch_col = min_col; patch_col < max_col && !clause_matched; patch_col++) {
+                bool matches = true;
+
+                // Check positive feature literals (only the included ones)
+                for (int i = 0; matches && i < n_feats_pos; ++i) {
+                    int fid = included_feats_pos[i];
+                    int rel_y = fid / (PATCH_WIDTH * DEPTH);
+                    int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+                    int z = fid % DEPTH;
+
+                    int abs_y = patch_row + rel_y;
+                    int abs_x = patch_col + rel_x;
+
+                    int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+                    if (pixel != 1) matches = false;
+                }
+
+#if NEGATED_LITERALS
+                // Check negated feature literals (only the included ones)
+                for (int i = 0; matches && i < n_feats_neg; ++i) {
+                    int fid = included_feats_neg[i];
+                    int rel_y = fid / (PATCH_WIDTH * DEPTH);
+                    int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+                    int z = fid % DEPTH;
+
+                    int abs_y = patch_row + rel_y;
+                    int abs_x = patch_col + rel_x;
+
+                    int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+                    if (pixel != 0) matches = false;
+                }
+#endif
+
+                if (matches) clause_matched = true;
+            }
+        }
+
+        // Add votes if clause matched
+        if (clause_matched) {
+            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            LOOP_CLASS_ID(class_id, clause) {
+                OMP_ATOMIC
+                class_sums[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+            }
+        }
+    }
+}
+
+void infer_batch(uint* restrict rng, const int8_t* restrict X, const uint* restrict global_ta_states,
+                 const float* restrict clause_weights, float* restrict class_sums, int N) {
+    /*
+     * Batch inference for N samples without pre-encoding.
+     *
+     * Inputs:
+     * rng => RNG state array
+     * X => (N * HEIGHT * WIDTH * DEPTH) - all samples
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS)
+     * clause_weights => (CLASSES * CLAUSES_PER_CLASS)
+     * N => number of samples
+     *
+     * Outputs:
+     * class_sums => (N * CLASSES) - accumulated votes per class per sample
+     */
+
+    for (int e = 0; e < N; e++) {
+        const int8_t* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
+        float* cs_sample = &class_sums[e * CLASSES];
+
+        infer_sample(rng, X_sample, global_ta_states, clause_weights, cs_sample);
+    }
+}
+
+void fit_batch(uint* restrict rng, uint* global_ta_states, float* restrict clause_weights, int* restrict patch_weights,
+               const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const int8_t* restrict targets,
+               int N) {
+    /*
+     * Batch training for N samples (no pre-encoding version).
+     * Processes samples sequentially to preserve learning dynamics.
+     *
+     * Inputs:
+     * rng => RNG state array
+     * global_ta_states => (TOTAL_CLAUSES * LITERALS) - modified in place
+     * clause_weights => (CLASSES * CLAUSES_PER_CLASS) - modified in place
+     * patch_weights => (TOTAL_CLAUSES * PATCHES) - modified in place
+     * clause_drop_mask => (TOTAL_CLAUSES)
+     * X => (N * HEIGHT * WIDTH * DEPTH) - all samples
+     * targets => (N * CLASSES) - targets for all samples
+     * N => number of samples
+     */
+
+    for (int e = 0; e < N; e++) {
+        const int8_t* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
+        const int8_t* targets_sample = &targets[e * CLASSES];
+
+        fit_sample(rng, global_ta_states, clause_weights, patch_weights, clause_drop_mask, X_sample, targets_sample);
+    }
+}

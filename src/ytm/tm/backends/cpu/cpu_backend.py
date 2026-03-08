@@ -301,6 +301,101 @@ class CPUDevice(BaseDevice):
                 e,
             )
 
+    def fit_epoch2(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int = -1):
+        """
+        Memory-efficient training that computes patch matching on-the-fly.
+        Does not pre-encode patches - processes samples in batches.
+
+        Args:
+            X: Raw input data of shape (N, HEIGHT, WIDTH, DEPTH) as int8
+            targets: Target labels of shape (N, n_classes) as int8
+            clause_drop_p: Probability of dropping a clause
+            batch_size: Number of samples to process per batch. -1 means all at once.
+        """
+        # Lazy initialization of src2 library
+        if not hasattr(self, "lib2_fit_batch"):
+            self._init_src2()
+
+        N = X.shape[0]
+        if batch_size == -1:
+            batch_size = N
+
+        # Generate clause drop mask
+        if clause_drop_p > 0.0:
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
+        else:
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
+
+        # Process in batches
+        for i in tqdm(range(0, N, batch_size), desc="Fitting (no-enc)", leave=False, dynamic_ncols=True):
+            batch_end = min(i + batch_size, N)
+            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int8)
+            batch_targets = np.ascontiguousarray(targets[i:batch_end], dtype=np.int8)
+
+            self.lib2_fit_batch(
+                self.p_rng,
+                self.ta_states.ctypes.data_as(uint32_p),
+                self.clause_weights.ctypes.data_as(float_p),
+                self.patch_weights.ctypes.data_as(int32_p),
+                clause_drop_mask.ctypes.data_as(int8_p),
+                batch_X.ctypes.data_as(int8_p),
+                batch_targets.ctypes.data_as(int8_p),
+                c_int(batch_end - i),
+            )
+
+    def _init_src2(self):
+        """Initialize the src2 library for memory-efficient training."""
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        so_file = self._compile_code(os.path.join(cur_dir, "src2.c"), self.header)
+        dll2 = CDLL(so_file)
+
+        self.lib2_fit_sample = dll2.fit_sample
+        self.lib2_fit_sample.argtypes = [
+            uint32_p,  # rng
+            uint32_p,  # global_ta_states
+            float_p,  # clause_weights
+            int32_p,  # patch_weights
+            int8_p,  # clause_drop_mask
+            int8_p,  # X (single sample)
+            int8_p,  # targets
+        ]
+
+        self.lib2_infer_sample = dll2.infer_sample
+        self.lib2_infer_sample.argtypes = [
+            uint32_p,  # rng
+            int8_p,  # X (single sample)
+            uint32_p,  # global_ta_states
+            float_p,  # clause_weights
+            float_p,  # class_sums (output)
+        ]
+
+        self.lib2_infer_batch = dll2.infer_batch
+        self.lib2_infer_batch.argtypes = [
+            uint32_p,  # rng
+            int8_p,  # X (batch)
+            uint32_p,  # global_ta_states
+            float_p,  # clause_weights
+            float_p,  # class_sums (output)
+            c_int,  # N (batch size)
+        ]
+
+        self.lib2_fit_batch = dll2.fit_batch
+        self.lib2_fit_batch.argtypes = [
+            uint32_p,  # rng
+            uint32_p,  # global_ta_states
+            float_p,  # clause_weights
+            int32_p,  # patch_weights
+            int8_p,  # clause_drop_mask
+            int8_p,  # X (batch)
+            int8_p,  # targets (batch)
+            c_int,  # N (batch size)
+        ]
+
+        if self.args.n_threads > 1:
+            lib2_set_num_threads = dll2.set_num_threads
+            lib2_set_num_threads.argtypes = [c_int]
+            lib2_set_num_threads(self.args.n_threads)
+
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         N = encoded_X.shape[0]
         if batch_size == -1:
@@ -326,6 +421,43 @@ class CPUDevice(BaseDevice):
             )
 
             class_sums[i : i + batch.shape[0]] = cs_batch
+
+        return class_sums
+
+    def infer2(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+        """
+        Memory-efficient inference that computes patch matching on-the-fly.
+        Does not require pre-encoded data.
+
+        Args:
+            X: Raw input data of shape (N, HEIGHT, WIDTH, DEPTH) as int8
+            batch_size: Number of samples to process per batch. -1 means all at once.
+
+        Returns:
+            class_sums: Array of shape (N, n_classes) with vote sums per class
+        """
+        # Lazy initialization of src2 library
+        if not hasattr(self, "lib2_infer_batch"):
+            self._init_src2()
+
+        N = X.shape[0]
+        if batch_size == -1:
+            batch_size = N
+
+        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
+
+        for i in tqdm(range(0, N, batch_size), desc="Inference (no-enc)", leave=False, dynamic_ncols=True):
+            batch_end = min(i + batch_size, N)
+            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int8)
+
+            self.lib2_infer_batch(
+                self.p_rng,
+                batch_X.ctypes.data_as(int8_p),
+                self.ta_states.ctypes.data_as(uint32_p),
+                self.clause_weights.ctypes.data_as(float_p),
+                class_sums[i:batch_end].ctypes.data_as(float_p),
+                c_int(batch_end - i),
+            )
 
         return class_sums
 

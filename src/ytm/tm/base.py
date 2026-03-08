@@ -61,8 +61,32 @@ class BaseTM:
 
         self.dev.fit_epoch(encoded_X, targets, clause_drop_p)
 
+    def _fit2(
+        self,
+        X: np.ndarray[tuple[int, int], np.dtype[np.int8]],
+        one_hot_Y: np.ndarray[tuple[int, int], np.dtype[np.int8]],
+        shuffle: bool = True,
+        clause_drop_p: float = 0.0,
+        batch_size: int = -1,
+    ) -> None:
+        N = X.shape[0]
+        iota = np.arange(N)
+        if shuffle:
+            self.rng.shuffle(iota)
+        X = X[iota]
+        one_hot_Y = one_hot_Y[iota]
+
+        # Precompute targets for each sample. 1 means the sample belongs to the class. -1 means, selected not classes. 0 means ignore.
+        targets = self._target_sampling(one_hot_Y)
+
+        self.dev.fit_epoch2(X, targets, clause_drop_p, batch_size)
+
     def score(self, encoded_X: np.ndarray):
         class_sums = self.dev.infer(encoded_X)
+        return class_sums
+
+    def score2(self, X: np.ndarray, batch_size: int = -1):
+        class_sums = self.dev.infer2(X, batch_size)
         return class_sums
 
     def _target_sampling(

@@ -10,11 +10,13 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
     for epoch in range(epochs):
         train_fit_timer = Timer()
         with train_fit_timer:
-            tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
+            # tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
+            tm.fit2(X_train, Y_train)
 
         test_timer = Timer()
         with test_timer:
-            test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
+            # test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
+            test_pred, _ = tm.predict2(X_test)
 
         train_timer = Timer()
         with train_timer:
