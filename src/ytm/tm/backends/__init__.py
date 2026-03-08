@@ -66,9 +66,6 @@ class BaseDevice(abc.ABC):
     def encode(self, X: np.ndarray) -> np.ndarray:
         raise NotImplementedError("encode() not implemented for this device")
 
-    def decode(self, encoded_X: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("decode() not implemented for this device")
-
     def pack_clauses(self, packed_clauses, n_includes):
         raise NotImplementedError("pack_clauses() not implemented for this device")
 

@@ -137,6 +137,9 @@ extern "C" {
         return prob;
     }
 
+    __device__ static inline void set_bit(uint* arr, int bit) { arr[bit / INT_SIZE] |= (1u << (bit % INT_SIZE)); }
+    __device__ static inline void unset_bit(uint* arr, int bit) { arr[bit / INT_SIZE] &= ~(1u << (bit % INT_SIZE)); }
+
     __global__ void encode(const int8_t* X, const int N, uint* encoded_X) {
         /*
          * Inputs:
@@ -153,8 +156,9 @@ extern "C" {
             ull patch_id = e_patch % PATCHES;
 
             // Calculate the starting point of the patch in the original image
-            int patch_coordinate_y = patch_id / (HEIGHT - PATCH_HEIGHT + 1);
-            int patch_coordinate_x = patch_id % (HEIGHT - PATCH_HEIGHT + 1);
+            int patch_row = patch_id / N_PATCHES_X;
+            int patch_col = patch_id % N_PATCHES_X;
+            // Patch is at coord (patch_row, patch _col)
 
             ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
             uint* patch_output = &encoded_X[encX_offset];
@@ -164,114 +168,47 @@ extern "C" {
 #if NEGATED_LITERALS
             // So, only need to initialize all negated literals to 1.
             for (int literal = LITERALS / 2; literal < LITERALS; ++literal) {
-                int chunk_nr = literal / INT_SIZE;
-                int chunk_pos = literal % INT_SIZE;
-                patch_output[chunk_nr] |= (1u << chunk_pos);
+                set_bit(patch_output, literal);
             }
 #endif
 
-            // Encoding the location of the patch with thermometer encoding
-            for (int lit = 0; lit < patch_coordinate_y; ++lit) {
-                int chunk_nr = lit / INT_SIZE;
-                int chunk_pos = lit % INT_SIZE;
-                patch_output[chunk_nr] |= (1u << chunk_pos);
+            // Encoding the location and features of the patch
+            // First (HEIGHT - PATCH_HEIGHT) literals encode the row number.
+            for (int i = 0; i < patch_row; ++i) {
+                set_bit(patch_output, i);
 #if NEGATED_LITERALS
-                int neg_chunk_nr = (lit + (LITERALS / 2)) / INT_SIZE;
-                int neg_chunk_pos = (lit + (LITERALS / 2)) % INT_SIZE;
-                patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+                unset_bit(patch_output, i + (LITERALS / 2));
 #endif
             }
 
-            for (int lit = 0; lit < patch_coordinate_x; ++lit) {
-                int chunk_nr = (WIDTH - PATCH_WIDTH + lit) / INT_SIZE;
-                int chunk_pos = (WIDTH - PATCH_WIDTH + lit) % INT_SIZE;
-                patch_output[chunk_nr] |= (1u << chunk_pos);
+            // Next (WIDTH - PATCH_WIDTH) literals encode the column number.
+            for (int i = 0; i < patch_col; ++i) {
+                set_bit(patch_output, (HEIGHT - PATCH_HEIGHT) + i);
 #if NEGATED_LITERALS
-                int neg_chunk_nr = ((WIDTH - PATCH_WIDTH + lit) + (LITERALS / 2)) / INT_SIZE;
-                int neg_chunk_pos = ((WIDTH - PATCH_WIDTH + lit) + (LITERALS / 2)) % INT_SIZE;
-                patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+                unset_bit(patch_output, (HEIGHT - PATCH_HEIGHT) + i + (LITERALS / 2));
 #endif
             }
 
-            // Iterate over features in a patch, that are either 1 (present) or 0(absent)
-            // taken care of in the initialization.
-            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_WIDTH; ++p_y) {
-                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_HEIGHT; ++p_x) {
-                    for (int z = 0; z < DEPTH; ++z) {
-                        ull dense_idx = e * (ull)(HEIGHT * WIDTH * DEPTH) + p_y * (ull)(HEIGHT * DEPTH) + p_x * (ull)DEPTH + z;
+            // Next N_FEATURE_FEATS literals encode the features of the patch.
+            for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+                ull rel_y = fid / (ull)(PATCH_WIDTH * DEPTH);
+                ull rem = fid % (ull)(PATCH_WIDTH * DEPTH);
+                ull rel_x = rem / DEPTH;
+                ull z = rem % DEPTH;
 
-                        int rel_y = p_y - patch_coordinate_y;
-                        int rel_x = p_x - patch_coordinate_x;
-#if POSITION_LITERALS
-                        int patch_pos =
-                            (WIDTH - PATCH_WIDTH) + (HEIGHT - PATCH_HEIGHT) + rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
-#else
-                        int patch_pos = rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
-#endif
-                        if (X[dense_idx] == 1) {
-                            int chunk_nr = patch_pos / INT_SIZE;
-                            int chunk_pos = patch_pos % INT_SIZE;
-                            patch_output[chunk_nr] |= (1u << chunk_pos);
+                ull abs_y = patch_row + rel_y;
+                ull abs_x = patch_col + rel_x;
+
+                ull feat = X[e * (ull)(HEIGHT * WIDTH * DEPTH) + abs_y * (ull)(WIDTH * DEPTH) + abs_x * (ull)DEPTH + z];
+
+                int lid = N_POSITION_FEATS + fid;
+                if (feat == 1) {
+                    set_bit(patch_output, lid);
 #if NEGATED_LITERALS
-                            int neg_chunk_nr = (patch_pos + (LITERALS / 2)) / INT_SIZE;
-                            int neg_chunk_pos = (patch_pos + (LITERALS / 2)) % INT_SIZE;
-                            patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
+                    unset_bit(patch_output, lid + (LITERALS / 2));
 #endif
-                        } else if (X[dense_idx] == 0) {
-                            // No need to do anything, negated is already 1 and non-negated is already 0.
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    __global__ void decode(const uint* encoded_X, const int N, int8_t* X) {
-        /*
-         * Mainly for testing and debugging purposes, to verify that encoding and decoding are consistent. Completely
-         * ignores the negations, assumes the input to be encoded only using the encode function.
-         *
-         * Inputs: encoded_X =>
-         * (N * PATCHES * NUM_LITERAL_CHUNKS) N => Number of examples in the batch
-         *
-         * Outputs:
-         * X => (N * HEIGHT * WIDTH * DEPTH)
-         */
-        ull index = blockIdx.x * blockDim.x + threadIdx.x;
-        ull stride = blockDim.x * gridDim.x;
-        for (ull e_patch = index; e_patch < (ull)(PATCHES * N); e_patch += stride) {
-            ull e = e_patch / PATCHES;
-            ull patch_id = e_patch % PATCHES;
-
-            ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
-            const uint* patch_input = &encoded_X[encX_offset];
-
-            // Calculate the starting point of the patch in the original image
-            int patch_coordinate_y = patch_id / (HEIGHT - PATCH_HEIGHT + 1);
-            int patch_coordinate_x = patch_id % (HEIGHT - PATCH_HEIGHT + 1);
-
-            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_WIDTH; ++p_y) {
-                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_HEIGHT; ++p_x) {
-                    for (int z = 0; z < DEPTH; ++z) {
-                        ull dense_idx = e * (ull)(HEIGHT * WIDTH * DEPTH) + p_y * (ull)(HEIGHT * DEPTH) + p_x * (ull)DEPTH + z;
-
-                        int rel_y = p_y - patch_coordinate_y;
-                        int rel_x = p_x - patch_coordinate_x;
-#if POSITION_LITERALS
-                        int patch_pos =
-                            (WIDTH - PATCH_WIDTH) + (HEIGHT - PATCH_HEIGHT) + rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
-#else
-                        int patch_pos = rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
-#endif
-
-                        int chunk_nr = patch_pos / INT_SIZE;
-                        int chunk_pos = patch_pos % INT_SIZE;
-                        if ((patch_input[chunk_nr] & (1u << chunk_pos)) != 0) {
-                            X[dense_idx] = 1;
-                        } else {
-                            X[dense_idx] = 0;
-                        }
-                    }
+                } else if (feat == 0) {
+                    // No need to do anything, negated is already 1 and non-negated is already 0.
                 }
             }
         }

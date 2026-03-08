@@ -54,7 +54,6 @@ class CPUDevice(BaseDevice):
         so_file = self._compile_code(os.path.join(cur_dir, "src.c"), self.header)
         dll = CDLL(so_file)
         self.lib_encode = dll.encode
-        self.lib_decode = dll.decode
         self.lib_pack_clauses = dll.pack_clauses
         self.lib_eval_clauses = dll.eval_clauses
         self.lib_select_patch = dll.select_patch_and_count_votes
@@ -63,7 +62,6 @@ class CPUDevice(BaseDevice):
         self.lib_clause_inference = dll.clause_inference
 
         self.lib_encode.argtypes = [int8_p, c_int, uint32_p]
-        self.lib_decode.argtypes = [uint32_p, c_int, int8_p]
         self.lib_pack_clauses.argtypes = [uint32_p, uint32_p, uint32_p]
         self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, int8_p, uint32_p, c_int, uint32_p]
         self.lib_select_patch.argtypes = [uint32_p, float_p, uint32_p, int32_p, int32_p, float_p, float_p]
@@ -162,18 +160,6 @@ class CPUDevice(BaseDevice):
         )
 
         return encoded_X
-
-    def decode(self, encoded_X):
-        N = encoded_X.shape[0]
-        X = np.zeros((N, self.args.dim[0] * self.args.dim[1] * self.args.dim[2]), dtype=np.int8)
-
-        self.lib_decode(
-            encoded_X.ctypes.data_as(uint32_p),
-            N,
-            X.ctypes.data_as(int8_p),
-        )
-
-        return X
 
     def prepare_fit_buffers(self, encoded_X, targets, clause_drop_mask) -> FitBuffers:
         return FitBuffers(

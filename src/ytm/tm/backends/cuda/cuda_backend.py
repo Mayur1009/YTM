@@ -92,7 +92,6 @@ class CUDADevice(BaseDevice):
         mod_kernels = self._load_kernel(os.path.join(cur_dir, "kernels.cu"), self.header)
 
         self.kernel_encode = mod_kernels.get_function("encode")
-        self.kernel_decode = mod_kernels.get_function("decode")
         self.kernel_pack_clauses = mod_kernels.get_function("pack_clauses")
         self.kernel_eval_clauses = mod_kernels.get_function("eval_clauses")
         self.kernel_select_patch = mod_kernels.get_function("select_patch_and_count_votes")
@@ -101,7 +100,6 @@ class CUDADevice(BaseDevice):
         self.kernel_clause_inference = mod_kernels.get_function("clause_inference")
 
         self.kernel_encode.prepare("PiP")
-        self.kernel_decode.prepare("PiP")
         self.kernel_pack_clauses.prepare("PPP")
         self.kernel_eval_clauses.prepare("PPPPiP")
         self.kernel_select_patch.prepare("PPPPPPP")
@@ -153,26 +151,6 @@ class CUDADevice(BaseDevice):
         self.ctx.synchronize()
 
         return encoded_X_gpu.get()
-
-    def decode(self, encoded_X: np.ndarray):
-        N = encoded_X.shape[0]
-        encoded_X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
-        X_gpu = ga.to_gpu(
-            np.zeros(
-                (N, self.args.dim[0] * self.args.dim[1] * self.args.dim[2]),
-                dtype=np.int8,
-            )
-        )
-
-        self.kernel_decode.prepared_call(
-            *self._kernel_config(N * self.n_patches),
-            encoded_X_gpu.gpudata,
-            np.int32(N),
-            X_gpu.gpudata,
-        )
-        self.ctx.synchronize()
-
-        return X_gpu.get()
 
     def prepare_fit_buffers(
         self, encoded_X: np.ndarray, targets: np.ndarray, clause_drop_mask: np.ndarray
