@@ -160,7 +160,7 @@ class CUDADevice(BaseDevice):
             targets=ga.to_gpu(targets.astype(np.int8)),
             packed_clauses=ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
             n_includes=ga.empty((self.total_clauses,), dtype=np.uint32),
-            clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32),
+            clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.int8),
             selected_patch_ids=ga.empty((self.total_clauses,), dtype=np.int32),
             pos_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
             neg_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
@@ -350,13 +350,13 @@ class CUDADevice(BaseDevice):
         self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
     ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
         N = encoded_X.shape[0]
-        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
 
         X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
         packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
         n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
         clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.int8))
-        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.int8)
         self.pack_clauses(packed_clauses, n_includes)
 
         for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):

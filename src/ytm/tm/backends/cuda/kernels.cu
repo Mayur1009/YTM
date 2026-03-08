@@ -243,7 +243,7 @@ extern "C" {
     }
 
     __global__ void eval_clauses(const uint* packed_clauses, const uint* num_includes, const int8_t* clause_drop_mask,
-                                 const uint* encoded_X, const int e, uint* clause_outputs) {
+                                 const uint* encoded_X, const int e, int8_t* clause_outputs) {
         /*
          * Evaluate each clause on the input `e`.
          *
@@ -261,7 +261,7 @@ extern "C" {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull clause_patch = index; clause_patch < (ull)TOTAL_CLAUSES * (ull)PATCHES; clause_patch += stride) {
-            uint* clause_output = &clause_outputs[clause_patch];
+            int8_t* clause_output = &clause_outputs[clause_patch];
 
             ull clause = clause_patch / PATCHES;
             ull patch_id = clause_patch % PATCHES;
@@ -285,7 +285,7 @@ extern "C" {
     }
 
     __global__ void select_patch_and_count_votes(curandState* rng, const float* clause_weights,
-                                                 const uint* clause_outputs, int* patch_weights,
+                                                 const int8_t* clause_outputs, int* patch_weights,
                                                  int* selected_patch_ids, float* pos_votes, float* neg_votes) {
         /*
          * Voting.

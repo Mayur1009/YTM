@@ -63,8 +63,8 @@ class CPUDevice(BaseDevice):
 
         self.lib_encode.argtypes = [int8_p, c_int, uint32_p]
         self.lib_pack_clauses.argtypes = [uint32_p, uint32_p, uint32_p]
-        self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, int8_p, uint32_p, c_int, uint32_p]
-        self.lib_select_patch.argtypes = [uint32_p, float_p, uint32_p, int32_p, int32_p, float_p, float_p]
+        self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, int8_p, uint32_p, c_int, int8_p]
+        self.lib_select_patch.argtypes = [uint32_p, float_p, int8_p, int32_p, int32_p, float_p, float_p]
         self.lib_calc_update_prob.argtypes = [float_p, float_p, int8_p, c_int, float_p]
         self.lib_update_clauses.argtypes = [
             uint32_p,
@@ -167,7 +167,7 @@ class CPUDevice(BaseDevice):
             targets=targets.astype(np.int8),
             packed_clauses=np.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
             n_includes=np.empty((self.total_clauses,), dtype=np.uint32),
-            clause_outputs=np.empty((self.total_clauses * self.n_patches,), dtype=np.uint32),
+            clause_outputs=np.empty((self.total_clauses * self.n_patches,), dtype=np.int8),
             selected_patch_ids=np.empty((self.total_clauses,), dtype=np.int32),
             pos_votes=np.empty((self.args.n_classes,), dtype=np.float32),
             neg_votes=np.empty((self.args.n_classes,), dtype=np.float32),
@@ -198,7 +198,7 @@ class CPUDevice(BaseDevice):
             clause_drop_mask.ctypes.data_as(int8_p),
             encoded_X.ctypes.data_as(uint32_p),
             c_int(e),
-            clause_outputs.ctypes.data_as(uint32_p),
+            clause_outputs.ctypes.data_as(int8_p),
         )
 
     def select_patch_and_count_votes(
@@ -213,7 +213,7 @@ class CPUDevice(BaseDevice):
         self.lib_select_patch(
             self.p_rng,
             self.clause_weights.ctypes.data_as(float_p),
-            clause_outputs.ctypes.data_as(uint32_p),
+            clause_outputs.ctypes.data_as(int8_p),
             self.patch_weights.ctypes.data_as(int32_p),
             selected_patch_ids.ctypes.data_as(int32_p),
             pos_votes.ctypes.data_as(float_p),
@@ -340,12 +340,12 @@ class CPUDevice(BaseDevice):
         self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
     ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
         N = encoded_X.shape[0]
-        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
 
         packed_clauses = np.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
         n_includes = np.empty((self.total_clauses,), dtype=np.uint32)
         clause_drop_mask = np.zeros((self.total_clauses,), dtype=np.int8)
-        clause_outputs = np.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        clause_outputs = np.empty((self.total_clauses * self.n_patches,), dtype=np.int8)
         self.pack_clauses(packed_clauses, n_includes)
 
         for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):
@@ -355,7 +355,7 @@ class CPUDevice(BaseDevice):
                 clause_drop_mask.ctypes.data_as(int8_p),
                 encoded_X.ctypes.data_as(uint32_p),
                 c_int(i),
-                clause_outputs.ctypes.data_as(uint32_p),
+                clause_outputs.ctypes.data_as(int8_p),
             )
 
             co_patchwise[i] = clause_outputs.reshape((self.total_clauses, self.n_patches))

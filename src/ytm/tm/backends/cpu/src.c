@@ -273,7 +273,7 @@ void pack_clauses(const uint* restrict global_ta_states, uint* restrict packed_c
 
 void eval_clauses(const uint* restrict packed_clauses, const uint* restrict num_includes,
                   const int8_t* restrict clause_drop_mask, const uint* restrict encoded_X, const int e,
-                  uint* restrict clause_outputs) {
+                  int8_t* restrict clause_outputs) {
     /*
      * Evaluate each clause on the input `e`.
      *
@@ -291,7 +291,7 @@ void eval_clauses(const uint* restrict packed_clauses, const uint* restrict num_
 
     OMP_PARALLEL_FOR
     for (ull clause_patch = 0; clause_patch < (ull)TOTAL_CLAUSES * (ull)PATCHES; clause_patch++) {
-        uint* clause_output = &clause_outputs[clause_patch];
+        int8_t* clause_output = &clause_outputs[clause_patch];
 
         ull clause = clause_patch / PATCHES;
         ull patch_id = clause_patch % PATCHES;
@@ -315,7 +315,7 @@ void eval_clauses(const uint* restrict packed_clauses, const uint* restrict num_
 }
 
 void select_patch_and_count_votes(uint* restrict rng, const float* restrict clause_weights,
-                                  const uint* restrict clause_outputs, int* restrict patch_weights,
+                                  const int8_t* restrict clause_outputs, int* restrict patch_weights,
                                   int* restrict selected_patch_ids, float* restrict pos_votes,
                                   float* restrict neg_votes) {
     /*
