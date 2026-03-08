@@ -64,18 +64,16 @@ class CUDADevice(BaseDevice):
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
 
-        mod_kernels = self._load_kernel(
-            os.path.join(cur_dir, "kernels.cu"),
-            f"""
+        self.header = f"""
             #define TOTAL_CLAUSES {int(self.total_clauses)}
             #define THRESH {int(self.args.T)}
             #define S {float(self.args.s)}
-            #define DIM0 {int(self.args.dim[0])}
-            #define DIM1 {int(self.args.dim[1])}
-            #define DIM2 {int(self.args.dim[2])}
+            #define HEIGHT {int(self.args.dim[0])}
+            #define WIDTH {int(self.args.dim[1])}
+            #define DEPTH {int(self.args.dim[2])}
             #define CLASSES {int(self.args.n_classes)}
-            #define PATCH_DIM0 {int(self.args.patch_dim[0])}
-            #define PATCH_DIM1 {int(self.args.patch_dim[1])}
+            #define PATCH_HEIGHT {int(self.args.patch_dim[0])}
+            #define PATCH_WIDTH {int(self.args.patch_dim[1])}
             #define WEIGHTED {1 if self.args.weighted else 0}
             #define MAX_WEIGHT {float(self.args.max_weight)}f
             #define COALESCED {1 if self.args.coalesced else 0}
@@ -89,10 +87,9 @@ class CUDADevice(BaseDevice):
             #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
             #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
             #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
-            #define PATCHES {int(self.n_patches)}
-            #define LITERALS {int(self.n_literals)}
-            """,
-        )
+        """
+
+        mod_kernels = self._load_kernel(os.path.join(cur_dir, "kernels.cu"), self.header)
 
         self.kernel_encode = mod_kernels.get_function("encode")
         self.kernel_decode = mod_kernels.get_function("decode")
@@ -408,7 +405,7 @@ class CUDADevice(BaseDevice):
             "patch_weights": self.patch_weights.get(),
         }
 
-    def load_state_dict(self, state: dict):
-        self.ta_states = ga.to_gpu(state["ta_states"])
-        self.clause_weights = ga.to_gpu(state["clause_weights"])
-        self.patch_weights = ga.to_gpu(state["patch_weights"])
+    def load_state_dict(self, state_dict: dict):
+        self.ta_states = ga.to_gpu(state_dict["ta_states"])
+        self.clause_weights = ga.to_gpu(state_dict["clause_weights"])
+        self.patch_weights = ga.to_gpu(state_dict["patch_weights"])

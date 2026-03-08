@@ -3,11 +3,11 @@
     #define THRESH 100
     #define S 10.0
     #define CLASSES 10
-    #define DIM0 28
-    #define DIM1 28
-    #define DIM2 1
-    #define PATCH_DIM0 10
-    #define PATCH_DIM1 10
+    #define HEIGHT 28
+    #define WIDTH 28
+    #define DEPTH 1
+    #define PATCH_HEIGHT 10
+    #define PATCH_WIDTH 10
     #define NEGATED_LITERALS 1
     #define POSITION_LITERALS 1
     #define COALESCED 1
@@ -21,13 +21,23 @@
     #define TYPE1A_FB 1
     #define TYPE1B_FB 1
     #define TYPE2_FB 1
-    #define PATCHES 361
-    #define LITERALS 272
 #endif
 
 #define INT_SIZE 32
-#define NUM_LITERAL_CHUNKS ((LITERALS + INT_SIZE - 1) / INT_SIZE)
 #define S_INV (1.0f / S)
+
+#define N_POSITION_FEATS (HEIGHT - PATCH_HEIGHT + WIDTH - PATCH_WIDTH)
+#define N_FEATURE_FEATS (PATCH_HEIGHT * PATCH_WIDTH * DEPTH)
+#if NEGATED_LITERALS
+    #define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
+#else
+    #define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
+#endif
+#define NUM_LITERAL_CHUNKS ((LITERALS + INT_SIZE - 1) / INT_SIZE)
+
+#define N_PATCHES_Y (HEIGHT - PATCH_HEIGHT + 1)
+#define N_PATCHES_X (WIDTH - PATCH_WIDTH + 1)
+#define PATCHES (N_PATCHES_Y * N_PATCHES_X)
 
 #if ((LITERALS % INT_SIZE) != 0)
     #define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
@@ -130,7 +140,7 @@ extern "C" {
     __global__ void encode(const int8_t* X, const int N, uint* encoded_X) {
         /*
          * Inputs:
-         * X => (N * DIM0 * DIM1 * DIM2)
+         * X => (N * HEIGHT * WIDTH * DEPTH)
          * N => Number of examples in the batch
          *
          * Outputs:
@@ -143,8 +153,8 @@ extern "C" {
             ull patch_id = e_patch % PATCHES;
 
             // Calculate the starting point of the patch in the original image
-            int patch_coordinate_y = patch_id / (DIM0 - PATCH_DIM0 + 1);
-            int patch_coordinate_x = patch_id % (DIM0 - PATCH_DIM0 + 1);
+            int patch_coordinate_y = patch_id / (HEIGHT - PATCH_HEIGHT + 1);
+            int patch_coordinate_x = patch_id % (HEIGHT - PATCH_HEIGHT + 1);
 
             ull encX_offset = e * (ull)(PATCHES * NUM_LITERAL_CHUNKS) + patch_id * (ull)NUM_LITERAL_CHUNKS;
             uint* patch_output = &encoded_X[encX_offset];
@@ -173,30 +183,30 @@ extern "C" {
             }
 
             for (int lit = 0; lit < patch_coordinate_x; ++lit) {
-                int chunk_nr = (DIM1 - PATCH_DIM1 + lit) / INT_SIZE;
-                int chunk_pos = (DIM1 - PATCH_DIM1 + lit) % INT_SIZE;
+                int chunk_nr = (WIDTH - PATCH_WIDTH + lit) / INT_SIZE;
+                int chunk_pos = (WIDTH - PATCH_WIDTH + lit) % INT_SIZE;
                 patch_output[chunk_nr] |= (1u << chunk_pos);
 #if NEGATED_LITERALS
-                int neg_chunk_nr = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) / INT_SIZE;
-                int neg_chunk_pos = ((DIM1 - PATCH_DIM1 + lit) + (LITERALS / 2)) % INT_SIZE;
+                int neg_chunk_nr = ((WIDTH - PATCH_WIDTH + lit) + (LITERALS / 2)) / INT_SIZE;
+                int neg_chunk_pos = ((WIDTH - PATCH_WIDTH + lit) + (LITERALS / 2)) % INT_SIZE;
                 patch_output[neg_chunk_nr] &= ~(1u << neg_chunk_pos);
 #endif
             }
 
             // Iterate over features in a patch, that are either 1 (present) or 0(absent)
             // taken care of in the initialization.
-            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_DIM1; ++p_y) {
-                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_DIM0; ++p_x) {
-                    for (int z = 0; z < DIM2; ++z) {
-                        ull dense_idx = e * (ull)(DIM0 * DIM1 * DIM2) + p_y * (ull)(DIM0 * DIM2) + p_x * (ull)DIM2 + z;
+            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_WIDTH; ++p_y) {
+                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_HEIGHT; ++p_x) {
+                    for (int z = 0; z < DEPTH; ++z) {
+                        ull dense_idx = e * (ull)(HEIGHT * WIDTH * DEPTH) + p_y * (ull)(HEIGHT * DEPTH) + p_x * (ull)DEPTH + z;
 
                         int rel_y = p_y - patch_coordinate_y;
                         int rel_x = p_x - patch_coordinate_x;
 #if POSITION_LITERALS
                         int patch_pos =
-                            (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+                            (WIDTH - PATCH_WIDTH) + (HEIGHT - PATCH_HEIGHT) + rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
 #else
-                        int patch_pos = rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+                        int patch_pos = rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
 #endif
                         if (X[dense_idx] == 1) {
                             int chunk_nr = patch_pos / INT_SIZE;
@@ -225,7 +235,7 @@ extern "C" {
          * (N * PATCHES * NUM_LITERAL_CHUNKS) N => Number of examples in the batch
          *
          * Outputs:
-         * X => (N * DIM0 * DIM1 * DIM2)
+         * X => (N * HEIGHT * WIDTH * DEPTH)
          */
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
@@ -237,21 +247,21 @@ extern "C" {
             const uint* patch_input = &encoded_X[encX_offset];
 
             // Calculate the starting point of the patch in the original image
-            int patch_coordinate_y = patch_id / (DIM0 - PATCH_DIM0 + 1);
-            int patch_coordinate_x = patch_id % (DIM0 - PATCH_DIM0 + 1);
+            int patch_coordinate_y = patch_id / (HEIGHT - PATCH_HEIGHT + 1);
+            int patch_coordinate_x = patch_id % (HEIGHT - PATCH_HEIGHT + 1);
 
-            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_DIM1; ++p_y) {
-                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_DIM0; ++p_x) {
-                    for (int z = 0; z < DIM2; ++z) {
-                        ull dense_idx = e * (ull)(DIM0 * DIM1 * DIM2) + p_y * (ull)(DIM0 * DIM2) + p_x * (ull)DIM2 + z;
+            for (ull p_y = patch_coordinate_y; p_y < patch_coordinate_y + PATCH_WIDTH; ++p_y) {
+                for (ull p_x = patch_coordinate_x; p_x < patch_coordinate_x + PATCH_HEIGHT; ++p_x) {
+                    for (int z = 0; z < DEPTH; ++z) {
+                        ull dense_idx = e * (ull)(HEIGHT * WIDTH * DEPTH) + p_y * (ull)(HEIGHT * DEPTH) + p_x * (ull)DEPTH + z;
 
                         int rel_y = p_y - patch_coordinate_y;
                         int rel_x = p_x - patch_coordinate_x;
 #if POSITION_LITERALS
                         int patch_pos =
-                            (DIM1 - PATCH_DIM1) + (DIM0 - PATCH_DIM0) + rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+                            (WIDTH - PATCH_WIDTH) + (HEIGHT - PATCH_HEIGHT) + rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
 #else
-                        int patch_pos = rel_y * PATCH_DIM0 * DIM2 + rel_x * DIM2 + z;
+                        int patch_pos = rel_y * PATCH_HEIGHT * DEPTH + rel_x * DEPTH + z;
 #endif
 
                         int chunk_nr = patch_pos / INT_SIZE;
