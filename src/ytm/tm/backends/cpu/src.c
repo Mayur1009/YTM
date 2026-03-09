@@ -67,11 +67,13 @@
     #include <omp.h>
     #define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
     #define OMP_ATOMIC _Pragma("omp atomic")
+    #define OMP_SIMD _Pragma("omp simd")
     #define GET_THREAD_ID omp_get_thread_num()
 void set_num_threads(int num_threads) { omp_set_num_threads(num_threads); }
 #else
     #define OMP_PARALLEL_FOR
     #define OMP_ATOMIC
+    #define OMP_SIMD
     #define GET_THREAD_ID 0
 #endif
 
@@ -95,6 +97,26 @@ static inline int geometric_sample(uint* rng, float p) {
     float u = xorshift32(rng);
     if (u >= 1.0f) u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
+}
+
+// Probabilistically decrement literals in range [start, end) with probability p
+// offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+static inline void literal_dec_with_p(uint* restrict rng, uint* restrict ta_state, int start, int end, int offset,
+                                      float p) {
+    int li = start + geometric_sample(rng, p) - 1;
+    while (li < end) {
+        if (ta_state[li + offset] > 0) ta_state[li + offset] -= 1;
+        li += geometric_sample(rng, p);
+    }
+}
+
+// Increment literals in range [start, end) up to max_val (branchless, SIMD-friendly)
+// offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+static inline void literal_inc(uint* restrict ta_state, int start, int end, int offset, uint max_val) {
+    OMP_SIMD
+    for (int li = start; li < end; ++li) {
+        ta_state[li + offset] += (ta_state[li + offset] < max_val);
+    }
 }
 
 static inline int clause_match_fun(const uint* restrict ta_state, const uint* restrict X) {
@@ -133,14 +155,7 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
 
 static inline void type1b_fb(uint* restrict rng, uint* restrict ta_state, const int sign) {
 #if TYPE1B_FB
-    float s_inv = S_INV;
-    int li = geometric_sample(rng, s_inv) - 1;
-    while (li < LITERALS) {
-        if (ta_state[li] > 0) {
-            ta_state[li] -= 1;
-        }
-        li += geometric_sample(rng, s_inv);
-    }
+    literal_dec_with_p(rng, ta_state, 0, LITERALS, 0, S_INV);
 #endif
 }
 

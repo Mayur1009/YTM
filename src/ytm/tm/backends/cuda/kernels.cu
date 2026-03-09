@@ -80,6 +80,25 @@ extern "C" {
         return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
     }
 
+    // Probabilistically decrement literals in range [start, end) with probability p
+    // offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+    __device__ static inline void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset,
+                                                     float p) {
+        int li = start + geometric_sample(rng, p) - 1;
+        while (li < end) {
+            if (ta_state[li + offset] > 0) ta_state[li + offset] -= 1;
+            li += geometric_sample(rng, p);
+        }
+    }
+
+    // Increment literals in range [start, end) up to max_val (branchless)
+    // offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+    __device__ static inline void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+        for (int li = start; li < end; ++li) {
+            ta_state[li + offset] += (ta_state[li + offset] < max_val);
+        }
+    }
+
     __device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float* weight, const uint* patch,
                                             const int sign) {
 #if TYPE1A_FB
@@ -105,14 +124,7 @@ extern "C" {
 
     __device__ static inline void type1b_fb(curandState* rng, uint* ta_state, const int sign) {
 #if TYPE1B_FB
-        float s_inv = S_INV;
-        int li = geometric_sample(rng, s_inv) - 1;
-        while (li < LITERALS) {
-            if (ta_state[li] > 0) {
-                ta_state[li] -= 1;
-            }
-            li += geometric_sample(rng, s_inv);
-        }
+        literal_dec_with_p(rng, ta_state, 0, LITERALS, 0, S_INV);
 #endif
     }
 

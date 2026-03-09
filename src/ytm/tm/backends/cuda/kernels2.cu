@@ -78,6 +78,114 @@ extern "C" {
         return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
     }
 
+    // Probabilistically decrement literals in range [start, end) with probability p
+    // offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+    __device__ static inline void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset,
+                                                     float p) {
+        int li = start + geometric_sample(rng, p) - 1;
+        while (li < end) {
+            if (ta_state[li + offset] > 0) ta_state[li + offset] -= 1;
+            li += geometric_sample(rng, p);
+        }
+    }
+
+    // Increment literals in range [start, end) up to max_val (branchless)
+    // offset is added to index (use LITERALS/2 for negated, 0 otherwise)
+    __device__ static inline void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+        for (int li = start; li < end; ++li) {
+            ta_state[li + offset] += (ta_state[li + offset] < max_val);
+        }
+    }
+
+    // Get the literal value for a given literal index and patch position
+    // Works for position literals (Y, X) and feature literals
+    // For negated literals, caller should invert the result
+    __device__ static inline int8_t get_X_fid(const int8_t* X, int patch_row, int patch_col, int lit) {
+        if (lit < HEIGHT - PATCH_HEIGHT) {
+            // Y position literal: lit < patch_row → 1, else 0
+            return (lit < patch_row) ? 1 : 0;
+        } else if (lit < N_POSITION_FEATS) {
+            // X position literal: (lit - Y_offset) < patch_col → 1, else 0
+            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+            return (x_lit < patch_col) ? 1 : 0;
+        } else {
+            // Feature literal
+            int fid = lit - N_POSITION_FEATS;
+            int rel_y = fid / (PATCH_WIDTH * DEPTH);
+            int rel_x = (fid / DEPTH) % PATCH_WIDTH;
+            int z = fid % DEPTH;
+            int abs_y = patch_row + rel_y;
+            int abs_x = patch_col + rel_x;
+            return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+        }
+    }
+
+    // Scan ta_state to collect included literals and compute valid patch ranges
+    // Returns the number of included literals (0 if no includes)
+    __device__ static inline uint scan_clause(
+        const uint* ta_state,
+        int* included_feats_pos,
+        int* included_feats_neg,
+        int* n_feats_pos,
+        int* n_feats_neg,
+        int* min_row,
+        int* max_row,
+        int* min_col,
+        int* max_col
+    ) {
+        *min_row = 0; *max_row = N_PATCHES_Y;
+        *min_col = 0; *max_col = N_PATCHES_X;
+
+        *n_feats_pos = 0;
+        *n_feats_neg = 0;
+        uint total_includes = 0;
+        bool has_includes = false;
+
+        for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                if (lit + 1 > *min_row) *min_row = lit + 1;
+                total_includes++; has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                if (lit + 1 < *max_row) *max_row = lit + 1;
+                total_includes++; has_includes = true;
+            }
+#endif
+        }
+
+        for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
+            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+            if (ta_state[lit] >= INCLUDE_STATE) {
+                if (x_lit + 1 > *min_col) *min_col = x_lit + 1;
+                total_includes++; has_includes = true;
+            }
+#if NEGATED_LITERALS
+            if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+                if (x_lit + 1 < *max_col) *max_col = x_lit + 1;
+                total_includes++; has_includes = true;
+            }
+#endif
+        }
+
+        for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
+            int lit_pos = N_POSITION_FEATS + fid;
+            if (ta_state[lit_pos] >= INCLUDE_STATE) {
+                included_feats_pos[(*n_feats_pos)++] = fid;
+                total_includes++; has_includes = true;
+            }
+#if NEGATED_LITERALS
+            int lit_neg = lit_pos + LITERALS / 2;
+            if (ta_state[lit_neg] >= INCLUDE_STATE) {
+                included_feats_neg[(*n_feats_neg)++] = fid;
+                total_includes++; has_includes = true;
+            }
+#endif
+        }
+
+        return has_includes ? total_includes : 0;
+    }
+
     /**
      * Type 1a feedback - reinforce matching literals.
      * Increments TA states for literals with value=1, probabilistically decrements for value=0
@@ -90,40 +198,26 @@ extern "C" {
     #endif
 
         // Position Y literals: [0, patch_row) have value 1, [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
-        for (int lit = 0; lit < patch_row; ++lit) {
-            if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
-        }
-        for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
-            if (ta_state[lit] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit] -= 1;
-        }
+        literal_inc(ta_state, 0, patch_row, 0, MAX_TA_STATE);
+        literal_dec_with_p(rng, ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, S_INV);
 
         // Position X literals: [0, patch_col) have value 1, [patch_col, WIDTH-PATCH_WIDTH) have value 0
-        for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
-            if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
-        }
-        for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
-            if (ta_state[lit] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit] -= 1;
-        }
+        literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, 0, MAX_TA_STATE);
+        literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, 0, S_INV);
 
         // Feature literals: check pixel value
-        for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
-            int rel_y = fid / (PATCH_WIDTH * DEPTH);
-            int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-            int z = fid % DEPTH;
-            int abs_y = patch_row + rel_y;
-            int abs_x = patch_col + rel_x;
-            int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+        for (int lit = N_POSITION_FEATS; lit < N_POSITION_FEATS + N_FEATURE_FEATS; ++lit) {
+            int8_t val = get_X_fid(X, patch_row, patch_col, lit);
 
-            int lit_pos = N_POSITION_FEATS + fid;
-            if (pixel == 1) {
-                if (ta_state[lit_pos] < MAX_TA_STATE) ta_state[lit_pos] += 1;
+            if (val == 1) {
+                if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
             } else {
-                if (ta_state[lit_pos] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit_pos] -= 1;
+                if (ta_state[lit] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit] -= 1;
             }
 
     #if NEGATED_LITERALS
-            int lit_neg = lit_pos + LITERALS / 2;
-            if (pixel == 0) {
+            int lit_neg = lit + LITERALS / 2;
+            if (val == 0) {  // inverted
                 if (ta_state[lit_neg] < MAX_TA_STATE) ta_state[lit_neg] += 1;
             } else {
                 if (ta_state[lit_neg] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit_neg] -= 1;
@@ -133,20 +227,12 @@ extern "C" {
 
     #if NEGATED_LITERALS
         // Negated position Y: [0, patch_row) have value 0, [patch_row, HEIGHT-PATCH_HEIGHT) have value 1
-        for (int lit = 0; lit < patch_row; ++lit) {
-            if (ta_state[lit + LITERALS / 2] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit + LITERALS / 2] -= 1;
-        }
-        for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
-            if (ta_state[lit + LITERALS / 2] < MAX_TA_STATE) ta_state[lit + LITERALS / 2] += 1;
-        }
+        literal_dec_with_p(rng, ta_state, 0, patch_row, LITERALS / 2, S_INV);
+        literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, LITERALS / 2, MAX_TA_STATE);
 
         // Negated position X: [0, patch_col) have value 0, [patch_col, WIDTH-PATCH_WIDTH) have value 1
-        for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
-            if (ta_state[lit + LITERALS / 2] > 0 && curand_uniform(rng) <= S_INV) ta_state[lit + LITERALS / 2] -= 1;
-        }
-        for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
-            if (ta_state[lit + LITERALS / 2] < MAX_TA_STATE) ta_state[lit + LITERALS / 2] += 1;
-        }
+        literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, S_INV);
+        literal_inc(ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, LITERALS / 2, MAX_TA_STATE);
     #endif
 #endif
     }
@@ -156,14 +242,7 @@ extern "C" {
      */
     __device__ static inline void type1b_fb(curandState* rng, uint* ta_state, int sign) {
 #if TYPE1B_FB
-        float s_inv = S_INV;
-        int li = geometric_sample(rng, s_inv) - 1;
-        while (li < LITERALS) {
-            if (ta_state[li] > 0) {
-                ta_state[li] -= 1;
-            }
-            li += geometric_sample(rng, s_inv);
-        }
+        literal_dec_with_p(rng, ta_state, 0, LITERALS, 0, S_INV);
 #endif
     }
 
@@ -186,32 +265,22 @@ extern "C" {
     #endif
 
         // Position Y literals: [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
-        for (int lit = patch_row; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
-            if (ta_state[lit] < INCLUDE_STATE) ta_state[lit] += 1;
-        }
+        literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, INCLUDE_STATE);
 
         // Position X literals: [patch_col, WIDTH-PATCH_WIDTH) have value 0
-        for (int lit = HEIGHT - PATCH_HEIGHT + patch_col; lit < N_POSITION_FEATS; ++lit) {
-            if (ta_state[lit] < INCLUDE_STATE) ta_state[lit] += 1;
-        }
+        literal_inc(ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, 0, INCLUDE_STATE);
 
         // Feature literals: increment where pixel=0
-        for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
-            int rel_y = fid / (PATCH_WIDTH * DEPTH);
-            int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-            int z = fid % DEPTH;
-            int abs_y = patch_row + rel_y;
-            int abs_x = patch_col + rel_x;
-            int8_t pixel = X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+        for (int lit = N_POSITION_FEATS; lit < N_POSITION_FEATS + N_FEATURE_FEATS; ++lit) {
+            int8_t val = get_X_fid(X, patch_row, patch_col, lit);
 
-            int lit_pos = N_POSITION_FEATS + fid;
-            if (pixel == 0 && ta_state[lit_pos] < INCLUDE_STATE) {
-                ta_state[lit_pos] += 1;
+            if (val == 0 && ta_state[lit] < INCLUDE_STATE) {
+                ta_state[lit] += 1;
             }
 
     #if NEGATED_LITERALS
-            int lit_neg = lit_pos + LITERALS / 2;
-            if (pixel == 1 && ta_state[lit_neg] < INCLUDE_STATE) {
+            int lit_neg = lit + LITERALS / 2;
+            if (val == 1 && ta_state[lit_neg] < INCLUDE_STATE) {  // inverted
                 ta_state[lit_neg] += 1;
             }
     #endif
@@ -219,14 +288,10 @@ extern "C" {
 
     #if NEGATED_LITERALS
         // Negated position Y: [0, patch_row) have value 0
-        for (int lit = 0; lit < patch_row; ++lit) {
-            if (ta_state[lit + LITERALS / 2] < INCLUDE_STATE) ta_state[lit + LITERALS / 2] += 1;
-        }
+        literal_inc(ta_state, 0, patch_row, LITERALS / 2, INCLUDE_STATE);
 
         // Negated position X: [0, patch_col) have value 0
-        for (int lit = HEIGHT - PATCH_HEIGHT; lit < HEIGHT - PATCH_HEIGHT + patch_col; ++lit) {
-            if (ta_state[lit + LITERALS / 2] < INCLUDE_STATE) ta_state[lit + LITERALS / 2] += 1;
-        }
+        literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, INCLUDE_STATE);
     #endif
 #endif
     }
@@ -265,60 +330,12 @@ extern "C" {
             int* clause_feats_neg = &included_feats_neg[clause * N_FEATURE_FEATS];
             int* clause_patch_range = &patch_ranges[clause * 4];
 
-            int local_n_feats_pos = 0;
-            int local_n_feats_neg = 0;
+            int local_n_feats_pos, local_n_feats_neg;
+            int min_row, max_row, min_col, max_col;
 
-            int min_row = 0, max_row = N_PATCHES_Y;
-            int min_col = 0, max_col = N_PATCHES_X;
+            uint total_includes = scan_clause(ta_state, clause_feats_pos, clause_feats_neg,
+                                              &local_n_feats_pos, &local_n_feats_neg, &min_row, &max_row, &min_col, &max_col);
 
-            uint total_includes = 0;
-
-            // Scan position Y literals
-            for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
-                if (ta_state[lit] >= INCLUDE_STATE) {
-                    if (lit + 1 > min_row) min_row = lit + 1;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-                    if (lit + 1 < max_row) max_row = lit + 1;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Scan position X literals
-            for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
-                int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
-                if (ta_state[lit] >= INCLUDE_STATE) {
-                    if (x_lit + 1 > min_col) min_col = x_lit + 1;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-                    if (x_lit + 1 < max_col) max_col = x_lit + 1;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Scan feature literals
-            for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
-                int lit_pos = N_POSITION_FEATS + fid;
-                if (ta_state[lit_pos] >= INCLUDE_STATE) {
-                    clause_feats_pos[local_n_feats_pos++] = fid;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                int lit_neg = lit_pos + LITERALS / 2;
-                if (ta_state[lit_neg] >= INCLUDE_STATE) {
-                    clause_feats_neg[local_n_feats_neg++] = fid;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Store results
             n_feats_pos[clause] = local_n_feats_pos;
             n_feats_neg[clause] = local_n_feats_neg;
             clause_patch_range[0] = min_row;
@@ -397,31 +414,15 @@ extern "C" {
 
                     // Check positive feature literals
                     for (int i = 0; matches && i < clause_n_feats_pos; ++i) {
-                        int fid = clause_feats_pos[i];
-                        int rel_y = fid / (PATCH_WIDTH * DEPTH);
-                        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-                        int z = fid % DEPTH;
-
-                        int abs_y = patch_row + rel_y;
-                        int abs_x = patch_col + rel_x;
-
-                        int8_t pixel = X_sample[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
-                        if (pixel != 1) matches = false;
+                        int lit = N_POSITION_FEATS + clause_feats_pos[i];
+                        if (get_X_fid(X_sample, patch_row, patch_col, lit) != 1) matches = false;
                     }
 
 #if NEGATED_LITERALS
                     // Check negated feature literals
                     for (int i = 0; matches && i < clause_n_feats_neg; ++i) {
-                        int fid = clause_feats_neg[i];
-                        int rel_y = fid / (PATCH_WIDTH * DEPTH);
-                        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-                        int z = fid % DEPTH;
-
-                        int abs_y = patch_row + rel_y;
-                        int abs_x = patch_col + rel_x;
-
-                        int8_t pixel = X_sample[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
-                        if (pixel != 0) matches = false;
+                        int lit = N_POSITION_FEATS + clause_feats_neg[i];
+                        if (get_X_fid(X_sample, patch_row, patch_col, lit) != 0) matches = false;
                     }
 #endif
 
@@ -488,62 +489,14 @@ extern "C" {
 
             const uint* ta_state = &global_ta_states[clause * LITERALS];
 
-            // Compute sparse representation - store in local arrays
             int included_feats_pos[N_FEATURE_FEATS];
             int included_feats_neg[N_FEATURE_FEATS];
-            int local_n_feats_pos = 0, local_n_feats_neg = 0;
+            int n_feats_pos, n_feats_neg;
+            int min_row, max_row, min_col, max_col;
 
-            int min_row = 0, max_row = N_PATCHES_Y;
-            int min_col = 0, max_col = N_PATCHES_X;
+            uint total_includes = scan_clause(ta_state, included_feats_pos, included_feats_neg,
+                                              &n_feats_pos, &n_feats_neg, &min_row, &max_row, &min_col, &max_col);
 
-            uint total_includes = 0;
-
-            // Scan position Y literals
-            for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
-                if (ta_state[lit] >= INCLUDE_STATE) {
-                    if (lit + 1 > min_row) min_row = lit + 1;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-                    if (lit + 1 < max_row) max_row = lit + 1;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Scan position X literals
-            for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
-                int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
-                if (ta_state[lit] >= INCLUDE_STATE) {
-                    if (x_lit + 1 > min_col) min_col = x_lit + 1;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-                    if (x_lit + 1 < max_col) max_col = x_lit + 1;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Scan feature literals
-            for (int fid = 0; fid < N_FEATURE_FEATS; ++fid) {
-                int lit_pos = N_POSITION_FEATS + fid;
-                if (ta_state[lit_pos] >= INCLUDE_STATE) {
-                    included_feats_pos[local_n_feats_pos++] = fid;
-                    total_includes++;
-                }
-#if NEGATED_LITERALS
-                int lit_neg = lit_pos + LITERALS / 2;
-                if (ta_state[lit_neg] >= INCLUDE_STATE) {
-                    included_feats_neg[local_n_feats_neg++] = fid;
-                    total_includes++;
-                }
-#endif
-            }
-
-            // Write sparse representation to global memory for update to reuse
             int* clause_patch_range = &patch_ranges[clause * 4];
             clause_patch_range[0] = min_row;
             clause_patch_range[1] = max_row;
@@ -551,12 +504,10 @@ extern "C" {
             clause_patch_range[3] = max_col;
             num_includes[clause] = total_includes;
 
-            // Empty clauses match everything - randomly select a patch
             if (total_includes == 0) {
                 int selected_id = (int)(curand_uniform(&localRNG) * PATCHES);
                 selected_patch_ids[clause] = selected_id;
 
-                // Count votes for this clause
                 patch_weights[clause * PATCHES + selected_id]++;
                 ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
@@ -569,13 +520,11 @@ extern "C" {
                 continue;
             }
 
-            // Check if valid range is empty (no patches can match)
             if (min_row >= max_row || min_col >= max_col) {
                 selected_patch_ids[clause] = -1;
                 continue;
             }
 
-            // Reservoir sampling over all matching patches in valid range
             int selected_patch = -1;
             int active_patch_count = 0;
 
@@ -583,37 +532,18 @@ extern "C" {
                 for (int patch_col = min_col; patch_col < max_col; patch_col++) {
                     bool matches = true;
 
-                    // Check positive feature literals
-                    for (int i = 0; matches && i < local_n_feats_pos; ++i) {
-                        int fid = included_feats_pos[i];
-                        int rel_y = fid / (PATCH_WIDTH * DEPTH);
-                        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-                        int z = fid % DEPTH;
-
-                        int abs_y = patch_row + rel_y;
-                        int abs_x = patch_col + rel_x;
-
-                        int8_t pixel = X_sample[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
-                        if (pixel != 1) matches = false;
+                    for (int i = 0; matches && i < n_feats_pos; ++i) {
+                        int lit = N_POSITION_FEATS + included_feats_pos[i];
+                        if (get_X_fid(X_sample, patch_row, patch_col, lit) != 1) matches = false;
                     }
 
 #if NEGATED_LITERALS
-                    // Check negated feature literals
-                    for (int i = 0; matches && i < local_n_feats_neg; ++i) {
-                        int fid = included_feats_neg[i];
-                        int rel_y = fid / (PATCH_WIDTH * DEPTH);
-                        int rel_x = (fid / DEPTH) % PATCH_WIDTH;
-                        int z = fid % DEPTH;
-
-                        int abs_y = patch_row + rel_y;
-                        int abs_x = patch_col + rel_x;
-
-                        int8_t pixel = X_sample[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
-                        if (pixel != 0) matches = false;
+                    for (int i = 0; matches && i < n_feats_neg; ++i) {
+                        int lit = N_POSITION_FEATS + included_feats_neg[i];
+                        if (get_X_fid(X_sample, patch_row, patch_col, lit) != 0) matches = false;
                     }
 #endif
 
-                    // Reservoir sampling
                     if (matches) {
                         active_patch_count++;
                         if (curand_uniform(&localRNG) < 1.0f / active_patch_count) {
@@ -625,7 +555,6 @@ extern "C" {
 
             selected_patch_ids[clause] = selected_patch;
 
-            // Count votes if clause matched
             if (selected_patch != -1) {
                 patch_weights[clause * PATCHES + selected_patch]++;
                 ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
