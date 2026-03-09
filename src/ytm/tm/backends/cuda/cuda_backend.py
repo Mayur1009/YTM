@@ -4,7 +4,7 @@ import numpy as np
 import pycuda.gpuarray as ga
 from pycuda.compiler import SourceModule
 from pycuda.curandom import XORWOWRandomNumberGenerator
-from pycuda.driver import Context, device_attribute, memset_d32  # pyright: ignore # ty: ignore
+from pycuda.driver import Context, device_attribute, memset_d32, memset_d32_async  # pyright: ignore # ty: ignore
 from tqdm import tqdm
 
 from .. import BaseDevice, FitBuffers
@@ -169,14 +169,13 @@ class CUDADevice(BaseDevice):
         )
 
     def pack_clauses(self, packed_clauses: ga.GPUArray, n_includes: ga.GPUArray):
-        memset_d32(packed_clauses.gpudata, 0, self.total_clauses * self.n_literal_chunks)
+        memset_d32_async(packed_clauses.gpudata, 0, self.total_clauses * self.n_literal_chunks)
         self.kernel_pack_clauses.prepared_call(
             *self._kernel_config(self.total_clauses),
             self.ta_states.gpudata,
             packed_clauses.gpudata,
             n_includes.gpudata,
         )
-        self.ctx.synchronize()
 
     def eval_clauses(
         self,
@@ -196,7 +195,6 @@ class CUDADevice(BaseDevice):
             np.int32(e),
             clause_outputs.gpudata,
         )
-        self.ctx.synchronize()
 
     def select_patch_and_count_votes(
         self,
@@ -205,8 +203,8 @@ class CUDADevice(BaseDevice):
         pos_votes: ga.GPUArray,
         neg_votes: ga.GPUArray,
     ):
-        memset_d32(pos_votes.gpudata, 0, self.args.n_classes)
-        memset_d32(neg_votes.gpudata, 0, self.args.n_classes)
+        memset_d32_async(pos_votes.gpudata, 0, self.args.n_classes)
+        memset_d32_async(neg_votes.gpudata, 0, self.args.n_classes)
         self.kernel_select_patch.prepared_call(
             *self.kernel_select_patch_launch_config,
             self.rng.state,
@@ -217,7 +215,6 @@ class CUDADevice(BaseDevice):
             pos_votes.gpudata,
             neg_votes.gpudata,
         )
-        self.ctx.synchronize()
 
     def calc_update_prob(
         self,
@@ -235,7 +232,6 @@ class CUDADevice(BaseDevice):
             np.int32(e),
             update_probs.gpudata,
         )
-        self.ctx.synchronize()
 
     def update_clauses(
         self,
@@ -260,7 +256,6 @@ class CUDADevice(BaseDevice):
             self.ta_states.gpudata,
             self.clause_weights.gpudata,
         )
-        self.ctx.synchronize()
 
     def fit_epoch(self, encoded_X, targets, clause_drop_p):
         N = encoded_X.shape[0]
@@ -308,6 +303,7 @@ class CUDADevice(BaseDevice):
                 dev_buffers.targets,
                 e,
             )
+            self.ctx.synchronize()
 
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1):
         N = encoded_X.shape[0]
@@ -318,6 +314,7 @@ class CUDADevice(BaseDevice):
         n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
 
         self.pack_clauses(packed_clauses, n_includes)
+        self.ctx.synchronize()
 
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
         for i in tqdm(range(0, N, batch_size), desc="Inference", leave=False, dynamic_ncols=True):
@@ -387,3 +384,195 @@ class CUDADevice(BaseDevice):
         self.ta_states = ga.to_gpu(state_dict["ta_states"])
         self.clause_weights = ga.to_gpu(state_dict["clause_weights"])
         self.patch_weights = ga.to_gpu(state_dict["patch_weights"])
+
+    # =========================================================================
+    # No-encoding methods (kernels2.cu)
+    # =========================================================================
+
+    def _init_kernels2(self):
+        """Initialize kernels2.cu for no-encoding implementation."""
+        self.cur_dir = os.path.dirname(os.path.abspath(__file__))
+        mod_kernels2 = self._load_kernel(os.path.join(self.cur_dir, "kernels2.cu"), self.header)
+
+        # Inference kernel
+        self.kernel2_pack_clauses = mod_kernels2.get_function("pack_clauses")
+        self.kernel2_infer_batch = mod_kernels2.get_function("infer_batch")
+
+        # Fused 2-kernel training approach
+        self.kernel2_eval_and_count = mod_kernels2.get_function("eval_and_count")
+        self.kernel2_prob_and_update = mod_kernels2.get_function("prob_and_update")
+
+        # Prepare kernel signatures
+        self.kernel2_pack_clauses.prepare("PPPPPPP")
+        self.kernel2_infer_batch.prepare("PPPPPPPPiP")
+        self.kernel2_eval_and_count.prepare("PPiPPPPPPPPP")
+        self.kernel2_prob_and_update.prepare("PPPPPPPiPPPP")
+
+        # Launch configs
+        self.kernel2_clauses_launch_config = self._kernel_config(self.total_clauses)
+
+        # Allocate buffers for sparse clause representation
+        n_feature_feats = self.args.patch_dim[0] * self.args.patch_dim[1] * self.args.dim[2]
+        self.sparse_included_feats_pos = ga.empty((self.total_clauses, n_feature_feats), dtype=np.int32)
+        self.sparse_included_feats_neg = ga.empty((self.total_clauses, n_feature_feats), dtype=np.int32)
+        self.sparse_n_feats_pos = ga.empty((self.total_clauses,), dtype=np.int32)
+        self.sparse_n_feats_neg = ga.empty((self.total_clauses,), dtype=np.int32)
+        self.sparse_patch_ranges = ga.empty((self.total_clauses, 4), dtype=np.int32)
+        self.sparse_num_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
+
+        self._kernels2_initialized = True
+
+    def fit_epoch2(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int = -1):
+        """
+        Memory-efficient training that computes patch matching on-the-fly.
+        Does not pre-encode patches. Uses fused 2-kernel approach.
+
+        Args:
+            X: Raw input data of shape (N, HEIGHT, WIDTH, DEPTH) as int8
+            targets: Target labels of shape (N, n_classes) as int8
+            clause_drop_p: Probability of dropping a clause
+            batch_size: Number of samples to process per batch. -1 means all at once.
+        """
+        # Lazy initialization of kernels2
+        if not hasattr(self, "_kernels2_initialized"):
+            self._init_kernels2()
+
+        N = X.shape[0]
+        if batch_size == -1:
+            batch_size = N
+
+        # Generate clause drop mask
+        if clause_drop_p > 0.0:
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
+        else:
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
+
+        clause_drop_mask_gpu = ga.to_gpu(clause_drop_mask)
+
+        # Allocate GPU buffers for training
+        selected_patch_ids = ga.empty((self.total_clauses,), dtype=np.int32)
+        pos_votes = ga.empty((self.args.n_classes,), dtype=np.float32)
+        neg_votes = ga.empty((self.args.n_classes,), dtype=np.float32)
+
+        # Process in batches
+        pbar = tqdm(range(0, N, batch_size), desc="Fitting (no-enc)", leave=False, dynamic_ncols=True)
+        for batch_start in pbar:
+            batch_end = min(batch_start + batch_size, N)
+            batch_N = batch_end - batch_start
+
+            # Upload entire batch to GPU once
+            X_batch_gpu = ga.to_gpu(X[batch_start:batch_end].astype(np.int8).reshape(batch_N, -1))
+            targets_batch_gpu = ga.to_gpu(targets[batch_start:batch_end].astype(np.int8))
+
+            # Pre-compute skip mask to avoid np.all() in hot loop
+            skip_mask = np.all(targets[batch_start:batch_end] == 0, axis=1)
+
+            # Process each sample in the batch sequentially (training requires sequential updates)
+            # Using fused 2-kernel approach: eval_and_count -> prob_and_update
+            for e in range(batch_N):
+                # Skip if all targets are zero
+                if skip_mask[e]:
+                    continue
+
+                # Zero votes using async memset (will complete before kernel reads them)
+                memset_d32_async(pos_votes.gpudata, 0, self.args.n_classes)
+                memset_d32_async(neg_votes.gpudata, 0, self.args.n_classes)
+
+                # Kernel 1: Evaluate clauses and count votes (fused)
+                self.kernel2_eval_and_count.prepared_call(
+                    *self.kernel2_clauses_launch_config,
+                    self.rng.state,
+                    X_batch_gpu.gpudata,
+                    np.int32(e),
+                    self.ta_states.gpudata,
+                    clause_drop_mask_gpu.gpudata,
+                    self.clause_weights.gpudata,
+                    selected_patch_ids.gpudata,
+                    self.sparse_patch_ranges.gpudata,
+                    self.sparse_num_includes.gpudata,
+                    self.patch_weights.gpudata,
+                    pos_votes.gpudata,
+                    neg_votes.gpudata,
+                )
+
+                # Kernel 2: Calculate probabilities and update clauses (fused)
+                self.kernel2_prob_and_update.prepared_call(
+                    *self.kernel2_clauses_launch_config,
+                    self.rng.state,
+                    selected_patch_ids.gpudata,
+                    self.sparse_patch_ranges.gpudata,
+                    self.sparse_num_includes.gpudata,
+                    clause_drop_mask_gpu.gpudata,
+                    X_batch_gpu.gpudata,
+                    targets_batch_gpu.gpudata,
+                    np.int32(e),
+                    pos_votes.gpudata,
+                    neg_votes.gpudata,
+                    self.ta_states.gpudata,
+                    self.clause_weights.gpudata,
+                )
+
+            # Sync once at end of batch
+            self.ctx.synchronize()
+
+    def infer2(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+        """
+        Memory-efficient inference that computes patch matching on-the-fly.
+        Does not require pre-encoded data.
+
+        Args:
+            X: Raw input data of shape (N, HEIGHT, WIDTH, DEPTH) as int8
+            batch_size: Number of samples to process per batch. -1 means all at once.
+
+        Returns:
+            class_sums: Array of shape (N, n_classes) with vote sums per class
+        """
+        # Lazy initialization of kernels2
+        if not hasattr(self, "_kernels2_initialized"):
+            self._init_kernels2()
+
+        N = X.shape[0]
+        if batch_size == -1:
+            batch_size = N
+
+        # Pack clauses once before inference - sparse representation is reused for all samples
+        self.kernel2_pack_clauses.prepared_call(
+            *self.kernel2_clauses_launch_config,
+            self.ta_states.gpudata,
+            self.sparse_included_feats_pos.gpudata,
+            self.sparse_included_feats_neg.gpudata,
+            self.sparse_n_feats_pos.gpudata,
+            self.sparse_n_feats_neg.gpudata,
+            self.sparse_patch_ranges.gpudata,
+            self.sparse_num_includes.gpudata,
+        )
+        self.ctx.synchronize()
+
+        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
+
+        for i in tqdm(range(0, N, batch_size), desc="Inference (no-enc)", leave=False, dynamic_ncols=True):
+            batch_end = min(i + batch_size, N)
+            batch_N = batch_end - i
+
+            # Upload batch to GPU (flatten each sample)
+            X_batch = ga.to_gpu(X[i:batch_end].astype(np.int8).reshape(batch_N, -1))
+            cs_batch = ga.to_gpu(np.zeros((batch_N, self.args.n_classes), dtype=np.float32))
+
+            self.kernel2_infer_batch.prepared_call(
+                *self._kernel_config(batch_N * self.total_clauses),
+                X_batch.gpudata,
+                self.clause_weights.gpudata,
+                self.sparse_included_feats_pos.gpudata,
+                self.sparse_included_feats_neg.gpudata,
+                self.sparse_n_feats_pos.gpudata,
+                self.sparse_n_feats_neg.gpudata,
+                self.sparse_patch_ranges.gpudata,
+                self.sparse_num_includes.gpudata,
+                np.int32(batch_N),
+                cs_batch.gpudata,
+            )
+            self.ctx.synchronize()
+
+            class_sums[i:batch_end] = cs_batch.get()
+
+        return class_sums
