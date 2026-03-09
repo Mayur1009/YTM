@@ -89,6 +89,14 @@ static inline float xorshift32(uint* state) {
     return (float)x * UINT_MAX_INV;
 }
 
+// Sample from geometric distribution with probability p
+// Returns the number of trials until first success (1-indexed)
+static inline int geometric_sample(uint* rng, float p) {
+    float u = xorshift32(rng);
+    if (u >= 1.0f) u = 0.9999999f;
+    return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
+}
+
 static inline int clause_match_fun(const uint* restrict ta_state, const uint* restrict X) {
     for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk)
         if ((ta_state[chunk] & X[chunk]) != ta_state[chunk]) return 0;
@@ -126,10 +134,12 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
 static inline void type1b_fb(uint* restrict rng, uint* restrict ta_state, const int sign) {
 #if TYPE1B_FB
     float s_inv = S_INV;
-    for (int li = 0; li < LITERALS; ++li) {
-        if (ta_state[li] > 0 && xorshift32(rng) <= s_inv) {
+    int li = geometric_sample(rng, s_inv) - 1;
+    while (li < LITERALS) {
+        if (ta_state[li] > 0) {
             ta_state[li] -= 1;
         }
+        li += geometric_sample(rng, s_inv);
     }
 #endif
 }

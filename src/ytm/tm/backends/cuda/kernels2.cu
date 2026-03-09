@@ -70,6 +70,14 @@ extern "C" {
         return prob;
     }
 
+    // Sample from geometric distribution with probability p
+    // Returns the number of trials until first success (1-indexed)
+    __device__ static inline int geometric_sample(curandState* rng, float p) {
+        float u = curand_uniform(rng);
+        if (u >= 1.0f) u = 0.9999999f;
+        return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
+    }
+
     /**
      * Type 1a feedback - reinforce matching literals.
      * Increments TA states for literals with value=1, probabilistically decrements for value=0
@@ -148,10 +156,13 @@ extern "C" {
      */
     __device__ static inline void type1b_fb(curandState* rng, uint* ta_state, int sign) {
 #if TYPE1B_FB
-        for (int li = 0; li < LITERALS; ++li) {
-            if (ta_state[li] > 0 && curand_uniform(rng) <= S_INV) {
+        float s_inv = S_INV;
+        int li = geometric_sample(rng, s_inv) - 1;
+        while (li < LITERALS) {
+            if (ta_state[li] > 0) {
                 ta_state[li] -= 1;
             }
+            li += geometric_sample(rng, s_inv);
         }
 #endif
     }

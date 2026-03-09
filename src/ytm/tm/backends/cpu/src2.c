@@ -89,6 +89,14 @@ static inline float xorshift32(uint* state) {
     return (float)x * UINT_MAX_INV;
 }
 
+// Sample from geometric distribution with probability p
+// Returns the number of trials until first success (1-indexed)
+static inline int geometric_sample(uint* rng, float p) {
+    float u = xorshift32(rng);
+    if (u >= 1.0f) u = 0.9999999f;
+    return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
+}
+
 static inline float uprob_fun(float v, float y) {
     float prob = (y - v) / (2 * y);
     return prob;
@@ -125,8 +133,8 @@ static inline int8_t get_literal_value_for_patch(const int8_t* X, int patch_row,
 
 // Type 1a feedback - reinforce matching literals (optimized version)
 // Increments TA states for literals with value=1, probabilistically decrements for value=0
-static inline void type1a_fb_noenc(uint* restrict rng, uint* restrict ta_state, float* restrict weight, const int8_t* X,
-                                   int patch_row, int patch_col, const int sign) {
+static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float* restrict weight, const int8_t* X,
+                             int patch_row, int patch_col, const int sign) {
 #if TYPE1A_FB
     #if WEIGHTED
     if (fabs(*weight) < MAX_WEIGHT) (*weight) += sign * 1.0f;
@@ -196,20 +204,23 @@ static inline void type1a_fb_noenc(uint* restrict rng, uint* restrict ta_state, 
 }
 
 // Type 1b feedback - probabilistically decrement all literals (no pre-encoding version)
-static inline void type1b_fb_noenc(uint* restrict rng, uint* restrict ta_state, const int sign) {
+static inline void type1b_fb(uint* restrict rng, uint* restrict ta_state, const int sign) {
 #if TYPE1B_FB
-    for (int li = 0; li < LITERALS; ++li) {
-        if (ta_state[li] > 0 && xorshift32(rng) <= S_INV) {
+    float s_inv = S_INV;
+    int li = geometric_sample(rng, s_inv) - 1;
+    while (li < LITERALS) {
+        if (ta_state[li] > 0) {
             ta_state[li] -= 1;
         }
+        li += geometric_sample(rng, s_inv);
     }
 #endif
 }
 
 // Type 2 feedback - include absent literals (optimized version)
 // Increments TA states for literals with value=0 (to include them and break the clause)
-static inline void type2_fb_noenc(uint* restrict ta_state, float* restrict weight, const int8_t* X, int patch_row,
-                                  int patch_col, const int sign) {
+static inline void type2_fb(uint* restrict ta_state, float* restrict weight, const int8_t* X, int patch_row,
+                            int patch_col, const int sign) {
 #if TYPE2_FB
     #if WEIGHTED
     if (fabs(*weight) < MAX_WEIGHT) (*weight) -= sign * 1.0f;
@@ -467,17 +478,17 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 
             // Type 1a feedback - TP - clause is active with correct polarity and has space
             if (should_update && t1 && local_clause_output && clause_has_space) {
-                type1a_fb_noenc(&rng[GET_THREAD_ID], ta_state, local_weight, X, patch_row, patch_col, sign);
+                type1a_fb(&rng[GET_THREAD_ID], ta_state, local_weight, X, patch_row, patch_col, sign);
             }
 
             // Type 1b feedback - FN - clause is inactive or overflowing, but should have been active
             if (should_update && t1 && !(local_clause_output && clause_has_space)) {
-                type1b_fb_noenc(&rng[GET_THREAD_ID], ta_state, sign);
+                type1b_fb(&rng[GET_THREAD_ID], ta_state, sign);
             }
 
             // Type 2 feedback - FP - clause is active but has wrong polarity
             if (should_update && (local_target * sign) < 0 && local_clause_output) {
-                type2_fb_noenc(ta_state, local_weight, X, patch_row, patch_col, sign);
+                type2_fb(ta_state, local_weight, X, patch_row, patch_col, sign);
             }
         }
     }
