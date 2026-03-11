@@ -1,0 +1,97 @@
+import numpy as np
+from typing import Literal, TypedDict
+from dataclasses import dataclass
+
+
+@dataclass()
+class TMArgs:
+    n_clauses: int
+    T: float | int
+    s: float
+    dim: tuple[int, int, int]
+    n_classes: int
+    feat_mins: int | np.ndarray | None = None
+    feat_maxs: int | np.ndarray | None = None
+    patch_dim: tuple[int, int] = (0, 0)
+    q: float = 1.0
+    weighted: bool = True
+    max_weight: float = float(np.finfo(np.float32).max)
+    coalesced: bool = True
+    negated_literals: bool = True
+    position_literals: bool = True
+    negative_clauses: bool = True
+    allow_polarity_change: bool = True
+    max_includes: int = -1
+    n_states: int = 256
+    include_state: int = -1
+    skip_t1a_fb: bool = False
+    skip_t1b_fb: bool = False
+    skip_t2_fb: bool = False
+    seed: int = -1
+
+    # Device specific arguments
+    device: Literal["cpu", "cuda"] = "cpu"
+    n_threads: int = 1
+    grid_size: int | None = None
+    block_size: int = 128
+
+    def __post_init__(self):
+        self.patch_dim = (
+            self.dim[0] if self.patch_dim[0] <= 0 or self.patch_dim[0] > self.dim[0] else self.patch_dim[0],
+            self.dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self.dim[1] else self.patch_dim[1],
+        )
+
+        if self.include_state == -1:
+            self.include_state = self.n_states // 2
+
+        if self.seed == 0:
+            self.seed = 1
+        elif self.seed < 0:
+            self.seed = np.random.randint(0, 1 << 30)
+
+        n_feat = self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
+
+        if self.feat_mins is None:
+            self.feat_mins = np.zeros(n_feat, dtype=np.int32)
+        elif np.isscalar(self.feat_mins):
+            self.feat_mins = np.full(n_feat, self.feat_mins, dtype=np.int32)
+        else:
+            self.feat_mins = np.asarray(self.feat_mins, dtype=np.int32)
+            assert self.feat_mins.shape == (n_feat,), (
+                f"feat_mins must have shape ({n_feat},), got {self.feat_mins.shape}"
+            )
+
+        if self.feat_maxs is None:
+            self.feat_maxs = np.ones(n_feat, dtype=np.int32)
+        elif np.isscalar(self.feat_maxs):
+            self.feat_maxs = np.full(n_feat, self.feat_maxs, dtype=np.int32)
+        else:
+            self.feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32)
+            assert self.feat_maxs.shape == (n_feat,), (
+                f"feat_maxs must have shape ({n_feat},), got {self.feat_maxs.shape}"
+            )
+
+
+class T_args(TypedDict, total=False):
+    feat_mins: int | np.ndarray | None
+    feat_maxs: int | np.ndarray | None
+    patch_dim: tuple[int, int]
+    q: float
+    weighted: bool
+    max_weight: float
+    coalesced: bool
+    negated_literals: bool
+    position_literals: bool
+    negative_clauses: bool
+    allow_polarity_change: bool
+    max_includes: int
+    n_states: int
+    include_state: int
+    skip_t1a_fb: bool
+    skip_t1b_fb: bool
+    skip_t2_fb: bool
+    seed: int
+    device: Literal["cpu", "cuda"]
+    n_threads: int
+    grid_size: int | None
+    block_size: int
