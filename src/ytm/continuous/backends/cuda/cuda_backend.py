@@ -4,7 +4,7 @@ from tqdm import tqdm
 import pycuda.gpuarray as ga
 from pycuda.compiler import SourceModule
 from pycuda.curandom import XORWOWRandomNumberGenerator
-from pycuda.driver import Context, device_attribute  # pyright: ignore # ty: ignore
+from pycuda.driver import Context, device_attribute, memset_d32_async  # pyright: ignore # ty: ignore
 from ..base import BaseDevice
 
 
@@ -60,14 +60,33 @@ class CUDADevice(BaseDevice):
             no_extern_c=True,
         )
 
-        # Get kernel functions
-        self.k_infer_clauses = mod.get_function("infer_clauses")
-        self.k_infer_sample = mod.get_function("infer_sample")
+        # Training kernels (5-kernel approach)
+        self.k_pack_clauses = mod.get_function("pack_clauses")
+        self.k_pack_clauses.prepare("PPPPPPPPP")  # 9 args (+clause_dirty)
+
         self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_count_votes = mod.get_function("count_votes")
+        self.k_eval_clauses.prepare("PiPPPPPPPPPPP")  # 13 args (+lit_to_fid)
+
+        self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
+        self.k_select_patch_and_count_votes.prepare("PPPPPP")  # 6 args
+
         self.k_calc_update_prob = mod.get_function("calc_update_prob")
+        self.k_calc_update_prob.prepare("PPiP")  # 4 args
+
         self.k_update_clauses = mod.get_function("update_clauses")
+        self.k_update_clauses.prepare("PPPPPPPPPPPPP")  # 13 args (+clause_dirty)
+
+        # Inference kernels
+        self.k_infer_batch = mod.get_function("infer_batch")
+        self.k_infer_batch.prepare("PPPiPPPPPPPPP")  # 13 args (+lit_to_fid)
+
         self.k_transform_patchwise = mod.get_function("transform_patchwise")
+        self.k_transform_patchwise.prepare("PPiPPPPPPPPP")  # 12 args (+lit_to_fid)
+
+        # Kernel configs
+        self.kconf_clauses = self._kernel_config(self.total_clauses)
+        self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
+        self.kconf_classes = self._kernel_config(self.args.n_classes)
 
     def _init_clauses(self):
         self.ta_states = ga.to_gpu(
@@ -82,42 +101,18 @@ class CUDADevice(BaseDevice):
         n_neg_polarity = self.args.n_clauses // 2
         clause_weights = np.zeros((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
         for i in range(self.args.n_classes):
-            wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
+            wt = np.ones((self.args.n_clauses,), dtype=np.float32)
             wt[n_neg_polarity:] *= -1.0
             clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
         self.clause_weights = ga.to_gpu(clause_weights)
         self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
 
-    def _init_clause_arrays(self):
-        """Allocate GPU arrays for pre-computed clause information."""
-        self.clause_positions = ga.zeros((self.total_clauses, 4), dtype=np.int32)
-        self.valid_feat_ranges = ga.zeros((self.total_clauses, self.n_raw_patch_feats * 2), dtype=np.int32)
-        self.clause_valid = ga.zeros(self.total_clauses, dtype=np.bool_)
-        self.num_includes = ga.zeros(self.total_clauses, dtype=np.uint32)
-        self.interesting_fids = ga.zeros((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        self.interesting_fid_lens = ga.zeros(self.total_clauses, dtype=np.int32)
-
-        # Upload constant arrays to GPU
-        self.d_feat_mins = ga.to_gpu(self.args.feat_mins.astype(np.int32))
-        self.d_literal_offsets = ga.to_gpu(self.literal_offsets.astype(np.int32))
-
-    def _init_training_arrays(self):
-        """Allocate GPU arrays for training."""
-        self.selected_patch_ids = ga.zeros(self.total_clauses, dtype=np.int32)
-        self.clause_num_includes = ga.zeros(self.total_clauses, dtype=np.uint32)
-        self.votes = ga.zeros(self.args.n_classes, dtype=np.float32)
-        self.prob = ga.zeros(self.args.n_classes, dtype=np.float32)
-
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-        # Ensure hardware compliance
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
 
         if self.args.grid_size is None:
-            # Calculate grid size
             gs = (n + bs - 1) // bs
-
-            # Limit grid size to reasonable bounds
             max_blocks = min(65535, self.cuda_props["multiprocessor_count"] * 4)
             gs = min(gs, max_blocks)
         else:
@@ -145,114 +140,153 @@ class CUDADevice(BaseDevice):
         }
         self._init_clauses()
         self._init_weights()
-        self._init_clause_arrays()
-        self._init_training_arrays()
         self._init_kernels()
+        self.feat_mins_gpu = ga.to_gpu(self.args.feat_mins.astype(np.int32))
+        self.literal_offsets_gpu = ga.to_gpu(self.literal_offsets.astype(np.int32))
 
-    def _run_infer_clauses(self):
-        """Pre-compute clause information (call once before inference batch)."""
-        grid, block = self._kernel_config(self.total_clauses)
-        self.k_infer_clauses(
-            self.ta_states,
-            self.clause_positions,
-            self.valid_feat_ranges,
-            self.clause_valid,
-            self.d_feat_mins,
-            self.d_literal_offsets,
-            self.num_includes,
-            self.interesting_fids,
-            self.interesting_fid_lens,
-            block=block,
-            grid=grid,
-        )
+        # Precompute lit_to_fid lookup table: O(1) lookup instead of O(N_RAW_PATCH_FEATS) scan
+        lit_to_fid = np.zeros(self.n_patch_feats, dtype=np.int32)
+        for fid in range(self.n_raw_patch_feats):
+            for lit in range(self.literal_offsets[fid], self.literal_offsets[fid + 1]):
+                lit_to_fid[lit] = fid
+        self.lit_to_fid_gpu = ga.to_gpu(lit_to_fid)
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
 
+        # Clause dropout mask (same for entire epoch)
         if clause_drop_p > 0.0:
             clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
+        clause_drop_mask_gpu = ga.to_gpu(clause_drop_mask)
 
-        d_clause_drop_mask = ga.to_gpu(clause_drop_mask)
-
-        # Get RNG state for CUDA - need curandState array
-        # XORWOWRandomNumberGenerator uses its own state, we need to get the underlying state
-        grid, block = self._kernel_config(self.total_clauses)
-        grid_classes, block_classes = self._kernel_config(self.args.n_classes)
-
-        # Allocate curandState if not already done
-        if not hasattr(self, "d_rng_states"):
-            # Use the RNG's internal state
-            self.d_rng_states = self.rng.state
+        # Persistent buffers for training
+        clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
+        included_lits_pos = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        included_lits_neg = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        n_lits_pos = ga.empty(self.total_clauses, dtype=np.int32)
+        n_lits_neg = ga.empty(self.total_clauses, dtype=np.int32)
+        num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
+        clause_outputs = ga.empty((self.total_clauses, self.n_patches), dtype=np.int8)
+        selected_patch_ids = ga.empty(self.total_clauses, dtype=np.int32)
+        votes = ga.zeros(self.args.n_classes, dtype=np.float32)
+        prob = ga.empty(self.args.n_classes, dtype=np.float32)
+        clause_dirty = ga.to_gpu(np.ones(self.total_clauses, dtype=np.int8))
 
         for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_targets = np.ascontiguousarray(targets[i:batch_end], dtype=np.int8)
+            X_batch = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
+            tar_batch = ga.to_gpu(np.ascontiguousarray(targets[i:batch_end], dtype=np.int8))
+            bs = batch_end - i
 
-            d_X = ga.to_gpu(batch_X)
-            d_targets = ga.to_gpu(batch_targets)
-
-            # Process each sample in the batch sequentially (to preserve learning dynamics)
-            for j in range(batch_end - i):
-                sample_X = int(d_X.gpudata) + j * self.args.dim[0] * self.args.dim[1] * self.args.dim[2] * 4
-                sample_targets = int(d_targets.gpudata) + j * self.args.n_classes
-
-                # Reset votes
-                self.votes.fill(0)
-
-                # 1. Evaluate clauses and select patches
-                self.k_eval_clauses(
-                    self.d_rng_states,
-                    np.intp(sample_X),
-                    self.ta_states,
-                    d_clause_drop_mask,
-                    self.selected_patch_ids,
-                    self.clause_num_includes,
-                    self.d_feat_mins,
-                    self.d_literal_offsets,
-                    block=block,
-                    grid=grid,
+            for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):
+                # K1: Pack clauses - scan TA states into sparse representation (skip unchanged)
+                self.k_pack_clauses.prepared_call(
+                    *self.kconf_clauses,
+                    self.ta_states.gpudata,
+                    self.literal_offsets_gpu.gpudata,
+                    clause_positions.gpudata,
+                    included_lits_pos.gpudata,
+                    included_lits_neg.gpudata,
+                    n_lits_pos.gpudata,
+                    n_lits_neg.gpudata,
+                    num_includes.gpudata,
+                    clause_dirty.gpudata,
                 )
 
-                # 2. Count votes
-                self.k_count_votes(
-                    self.selected_patch_ids,
-                    self.clause_weights,
-                    self.patch_weights,
-                    self.votes,
-                    block=block,
-                    grid=grid,
+                # K2: Eval clauses - parallel over (clause, patch) pairs
+                self.k_eval_clauses.prepared_call(
+                    *self.kconf_clause_patches,
+                    X_batch.gpudata,
+                    np.int32(e),
+                    clause_drop_mask_gpu.gpudata,
+                    self.feat_mins_gpu.gpudata,
+                    self.literal_offsets_gpu.gpudata,
+                    self.lit_to_fid_gpu.gpudata,
+                    clause_positions.gpudata,
+                    included_lits_pos.gpudata,
+                    included_lits_neg.gpudata,
+                    n_lits_pos.gpudata,
+                    n_lits_neg.gpudata,
+                    num_includes.gpudata,
+                    clause_outputs.gpudata,
                 )
 
-                # 3. Calculate update probabilities
-                self.k_calc_update_prob(
-                    self.votes,
-                    np.intp(sample_targets),
-                    self.prob,
-                    block=block_classes,
-                    grid=grid_classes,
+                # K3: Select patch and count votes
+                memset_d32_async(votes.gpudata, 0, self.args.n_classes)
+                self.k_select_patch_and_count_votes.prepared_call(
+                    *self.kconf_clauses,
+                    self.rng.state,
+                    clause_outputs.gpudata,
+                    self.clause_weights.gpudata,
+                    selected_patch_ids.gpudata,
+                    self.patch_weights.gpudata,
+                    votes.gpudata,
                 )
 
-                # 4. Update clauses
-                self.k_update_clauses(
-                    self.d_rng_states,
-                    self.selected_patch_ids,
-                    self.clause_num_includes,
-                    d_clause_drop_mask,
-                    np.intp(sample_X),
-                    np.intp(sample_targets),
-                    self.prob,
-                    self.ta_states,
-                    self.clause_weights,
-                    self.d_feat_mins,
-                    self.d_literal_offsets,
-                    block=block,
-                    grid=grid,
+                # K4: Calculate update probability
+                self.k_calc_update_prob.prepared_call(
+                    *self.kconf_classes,
+                    votes.gpudata,
+                    tar_batch.gpudata,
+                    np.int32(e),
+                    prob.gpudata,
                 )
+
+                # K5: Update clauses (marks dirty clauses for re-packing)
+                self.k_update_clauses.prepared_call(
+                    *self.kconf_clauses,
+                    self.rng.state,
+                    selected_patch_ids.gpudata,
+                    num_includes.gpudata,
+                    clause_drop_mask_gpu.gpudata,
+                    X_batch.gpudata,
+                    tar_batch.gpudata,
+                    np.int32(e),
+                    prob.gpudata,
+                    self.ta_states.gpudata,
+                    self.clause_weights.gpudata,
+                    self.feat_mins_gpu.gpudata,
+                    self.literal_offsets_gpu.gpudata,
+                    clause_dirty.gpudata,
+                )
+
+            self.ctx.synchronize()
+
+    def _pack_clauses_for_inference(self):
+        """Precompute sparse representation for all clauses (called once before inference)."""
+        clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
+        included_lits_pos = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        included_lits_neg = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        n_lits_pos = ga.empty(self.total_clauses, dtype=np.int32)
+        n_lits_neg = ga.empty(self.total_clauses, dtype=np.int32)
+        num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
+        clause_dirty = ga.to_gpu(np.ones(self.total_clauses, dtype=np.int8))
+
+        self.k_pack_clauses.prepared_call(
+            *self.kconf_clauses,
+            self.ta_states.gpudata,
+            self.literal_offsets_gpu.gpudata,
+            clause_positions.gpudata,
+            included_lits_pos.gpudata,
+            included_lits_neg.gpudata,
+            n_lits_pos.gpudata,
+            n_lits_neg.gpudata,
+            num_includes.gpudata,
+            clause_dirty.gpudata,
+        )
+
+        return {
+            "clause_positions": clause_positions,
+            "included_lits_pos": included_lits_pos,
+            "included_lits_neg": included_lits_neg,
+            "n_lits_pos": n_lits_pos,
+            "n_lits_neg": n_lits_neg,
+            "num_includes": num_includes,
+        }
 
     def infer(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
@@ -260,37 +294,33 @@ class CUDADevice(BaseDevice):
             batch_size = N
 
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
-
-        # Pre-compute clause information once
-        self._run_infer_clauses()
+        bufs = self._pack_clauses_for_inference()
 
         for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_size_actual = batch_end - i
+            batch_X = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
+            bs = batch_end - i
 
-            d_X = ga.to_gpu(batch_X)
-            d_class_sums = ga.zeros((batch_size_actual, self.args.n_classes), dtype=np.float32)
+            cs_batch = ga.zeros((bs, self.args.n_classes), dtype=np.float32)
 
-            grid, block = self._kernel_config(batch_size_actual * self.total_clauses)
-
-            self.k_infer_sample(
-                d_X,
-                self.clause_weights,
-                d_class_sums,
-                np.int32(batch_size_actual),
-                self.d_feat_mins,
-                self.clause_positions,
-                self.valid_feat_ranges,
-                self.clause_valid,
-                self.num_includes,
-                self.interesting_fids,
-                self.interesting_fid_lens,
-                block=block,
-                grid=grid,
+            self.k_infer_batch.prepared_call(
+                *self._kernel_config(bs * self.total_clauses),
+                batch_X.gpudata,
+                self.clause_weights.gpudata,
+                cs_batch.gpudata,
+                np.int32(bs),
+                self.feat_mins_gpu.gpudata,
+                self.literal_offsets_gpu.gpudata,
+                self.lit_to_fid_gpu.gpudata,
+                bufs["clause_positions"].gpudata,
+                bufs["included_lits_pos"].gpudata,
+                bufs["included_lits_neg"].gpudata,
+                bufs["n_lits_pos"].gpudata,
+                bufs["n_lits_neg"].gpudata,
+                bufs["num_includes"].gpudata,
             )
 
-            class_sums[i:batch_end] = d_class_sums.get()
+            class_sums[i:batch_end] = cs_batch.get()
 
         return class_sums
 
@@ -300,36 +330,31 @@ class CUDADevice(BaseDevice):
             batch_size = N
 
         patch_output = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
-
-        # Pre-compute clause information once
-        self._run_infer_clauses()
+        bufs = self._pack_clauses_for_inference()
 
         for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_size_actual = batch_end - i
+            batch_X = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
+            bs = batch_end - i
+            po_batch = ga.zeros((bs, self.total_clauses, self.n_patches), dtype=np.int8)
 
-            d_X = ga.to_gpu(batch_X)
-            d_patch_output = ga.zeros((batch_size_actual, self.total_clauses, self.n_patches), dtype=np.int8)
-
-            grid, block = self._kernel_config(batch_size_actual * self.total_clauses)
-
-            self.k_transform_patchwise(
-                d_X,
-                d_patch_output,
-                np.int32(batch_size_actual),
-                self.d_feat_mins,
-                self.clause_positions,
-                self.valid_feat_ranges,
-                self.clause_valid,
-                self.num_includes,
-                self.interesting_fids,
-                self.interesting_fid_lens,
-                block=block,
-                grid=grid,
+            self.k_transform_patchwise.prepared_call(
+                *self._kernel_config(bs * self.total_clauses * self.n_patches),
+                batch_X.gpudata,
+                po_batch.gpudata,
+                np.int32(bs),
+                self.feat_mins_gpu.gpudata,
+                self.literal_offsets_gpu.gpudata,
+                self.lit_to_fid_gpu.gpudata,
+                bufs["clause_positions"].gpudata,
+                bufs["included_lits_pos"].gpudata,
+                bufs["included_lits_neg"].gpudata,
+                bufs["n_lits_pos"].gpudata,
+                bufs["n_lits_neg"].gpudata,
+                bufs["num_includes"].gpudata,
             )
 
-            patch_output[i:batch_end] = d_patch_output.get()
+            patch_output[i:batch_end] = po_batch.get()
 
         return patch_output
 
