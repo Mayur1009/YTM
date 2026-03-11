@@ -206,7 +206,7 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 // K1: pack_clauses - Scan TA states into sparse representation
 // ============================================================================
 
-__global__ void pack_clauses(const uint* __restrict__ ta_states, const int* __restrict__ literal_offsets,
+__global__ void pack_clauses(const uint* __restrict__ global_ta_states, const int* __restrict__ literal_offsets,
                              int* __restrict__ clause_positions, int* __restrict__ included_lits_pos,
                              int* __restrict__ included_lits_neg, int* __restrict__ n_lits_pos,
                              int* __restrict__ n_lits_neg, uint* __restrict__ num_includes,
@@ -219,7 +219,7 @@ __global__ void pack_clauses(const uint* __restrict__ ta_states, const int* __re
         if (clause_dirty[clause] == 0)
             continue;
 
-        const uint* ta_state = &ta_states[clause * N_LITERALS];
+        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
         int* pos = &clause_positions[clause * 4];
         int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
         int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
@@ -348,18 +348,16 @@ __global__ void eval_clauses(const int* __restrict__ X, const int e, const int8_
 
 #if NEGATED_LITERALS
         // Check negated literals
-        if (matches) {
-            const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-            int clause_n_lits_neg = n_lits_neg[clause];
+        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        int clause_n_lits_neg = n_lits_neg[clause];
 
-            for (int i = 0; i < clause_n_lits_neg && matches; ++i) {
-                int lit_idx = lits_neg[i];
-                int fid = lit_to_fid[lit_idx];
-                int bit = lit_idx - literal_offsets[fid];
-                int shifted_val = get_feature_value(Xe, patch_row, patch_col, fid) - feat_mins[fid];
-                if (shifted_val > bit)
-                    matches = false;
-            }
+        for (int i = 0; i < clause_n_lits_neg && matches; ++i) {
+            int lit_idx = lits_neg[i];
+            int fid = lit_to_fid[lit_idx];
+            int bit = lit_idx - literal_offsets[fid];
+            int shifted_val = get_feature_value(Xe, patch_row, patch_col, fid) - feat_mins[fid];
+            if (shifted_val > bit)
+                matches = false;
         }
 #endif
 

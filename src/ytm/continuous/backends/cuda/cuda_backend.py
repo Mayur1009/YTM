@@ -143,13 +143,7 @@ class CUDADevice(BaseDevice):
         self._init_kernels()
         self.feat_mins_gpu = ga.to_gpu(self.args.feat_mins.astype(np.int32))
         self.literal_offsets_gpu = ga.to_gpu(self.literal_offsets.astype(np.int32))
-
-        # Precompute lit_to_fid lookup table: O(1) lookup instead of O(N_RAW_PATCH_FEATS) scan
-        lit_to_fid = np.zeros(self.n_patch_feats, dtype=np.int32)
-        for fid in range(self.n_raw_patch_feats):
-            for lit in range(self.literal_offsets[fid], self.literal_offsets[fid + 1]):
-                lit_to_fid[lit] = fid
-        self.lit_to_fid_gpu = ga.to_gpu(lit_to_fid)
+        self.lit_to_fid_gpu = ga.to_gpu(self.lit_to_fid)
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]

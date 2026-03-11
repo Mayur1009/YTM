@@ -41,6 +41,12 @@ class BaseDevice(abc.ABC):
         if self.args.max_includes <= 0 or self.args.max_includes > self.n_literals:
             self.args.max_includes = self.n_literals
 
+        # Precompute lit_to_fid lookup table: O(1) lookup instead of O(N_RAW_PATCH_FEATS) scan
+        self.lit_to_fid = np.zeros(self.n_patch_feats, dtype=np.int32)
+        for fid in range(self.n_raw_patch_feats):
+            for lit in range(self.literal_offsets[fid], self.literal_offsets[fid + 1]):
+                self.lit_to_fid[lit] = fid
+
         self.np_rng = np.random.default_rng(self.args.seed)
 
         self.dev_init()

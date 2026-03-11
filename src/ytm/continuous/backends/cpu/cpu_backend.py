@@ -106,6 +106,21 @@ class CPUDevice(BaseDevice):
         header = self._build_header()
         self.lib = self._compile_code(src_file, header)
 
+        self.lib_pack_clauses = self.lib.pack_clauses
+        self.lib_pack_clauses.argtypes = [
+            uint32_p,  # ta_states
+            int32_p,  # literal_offsets
+            int32_p,  # clause_positions
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
+            uint32_p,  # num_includes
+            int8_p,  # clause_dirty
+        ]
+        self.lib_pack_clauses.restype = None
+
+
         # fit_batch signature
         self.lib_fit_batch = self.lib.fit_batch
         self.lib_fit_batch.argtypes = [
@@ -119,23 +134,16 @@ class CPUDevice(BaseDevice):
             c_int,  # N
             int32_p,  # feat_mins
             int32_p,  # literal_offsets
+            int32_p,  # lit_to_fid
+            int32_p,  # clause_positions
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
+            uint32_p,  # num_includes
+            int8_p,  # clause_dirty
         ]
         self.lib_fit_batch.restype = None
-
-        # infer_clauses signature
-        self.lib_infer_clauses = self.lib.infer_clauses
-        self.lib_infer_clauses.argtypes = [
-            uint32_p,  # global_ta_states
-            int32_p,  # clause_positions
-            int32_p,  # valid_feat_ranges
-            bool_p,  # clause_valid
-            int32_p,  # feat_mins
-            int32_p,  # literal_offsets
-            uint32_p,  # num_includes
-            int32_p,  # interesting_fids
-            int32_p,  # interesting_fid_len
-        ]
-        self.lib_infer_clauses.restype = None
 
         # infer_batch signature
         self.lib_infer_batch = self.lib.infer_batch
@@ -146,11 +154,13 @@ class CPUDevice(BaseDevice):
             c_int,  # N
             int32_p,  # feat_mins
             int32_p,  # clause_positions
-            int32_p,  # valid_feat_ranges
-            bool_p,  # clause_valid
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
             uint32_p,  # num_includes
-            int32_p,  # interesting_fids
-            int32_p,  # interesting_fid_lens
+            int32_p,  # lit_to_fid
+            int32_p,  # literal_offsets
         ]
         self.lib_infer_batch.restype = None
 
@@ -161,11 +171,13 @@ class CPUDevice(BaseDevice):
             c_int,  # N
             int32_p,  # feat_mins
             int32_p,  # clause_positions
-            int32_p,  # valid_feat_ranges
-            bool_p,  # clause_valid
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
             uint32_p,  # num_includes
-            int32_p,  # interesting_fids
-            int32_p,  # interesting_fid_lens
+            int32_p,  # lit_to_fid
+            int32_p,  # literal_offsets
         ]
         self.lib_transform_patchwise.restype = None
 
@@ -205,6 +217,7 @@ class CPUDevice(BaseDevice):
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
         self.p_feat_mins = self.args.feat_mins.ctypes.data_as(int32_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
+        self.p_lit_to_fid = self.lit_to_fid.ctypes.data_as(int32_p)
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
@@ -217,6 +230,13 @@ class CPUDevice(BaseDevice):
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
+        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
+        included_lits_pos = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        included_lits_neg = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        n_lits_pos = np.empty(self.total_clauses, dtype=np.int32)
+        n_lits_neg = np.empty(self.total_clauses, dtype=np.int32)
+        num_includes = np.empty(self.total_clauses, dtype=np.uint32)
+        clause_dirty = np.ones(self.total_clauses, dtype=np.int8)
 
         for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
@@ -237,33 +257,43 @@ class CPUDevice(BaseDevice):
                 batch_end - i,
                 self.p_feat_mins,
                 self.p_literal_offsets,
+                self.p_lit_to_fid,
+                clause_positions.ctypes.data_as(int32_p),
+                included_lits_pos.ctypes.data_as(int32_p),
+                included_lits_neg.ctypes.data_as(int32_p),
+                n_lits_pos.ctypes.data_as(int32_p),
+                n_lits_neg.ctypes.data_as(int32_p),
+                num_includes.ctypes.data_as(uint32_p),
+                clause_dirty.ctypes.data_as(int8_p),
             )
 
-    def infer_clauses(self):
-        clause_positions = np.zeros((self.total_clauses, 4), dtype=np.int32)
-        valid_feat_ranges = np.zeros((self.total_clauses, self.n_raw_patch_feats * 2), dtype=np.int32)
-        clause_valid = np.zeros(self.total_clauses, dtype=np.bool_)
-        num_includes = np.zeros(self.total_clauses, dtype=np.uint32)
-        interesting_fids = np.zeros((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        interesting_fid_lens = np.zeros(self.total_clauses, dtype=np.int32)
-        self.lib_infer_clauses(
+    def pack_clauses(self):
+        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
+        included_lits_pos = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        included_lits_neg = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        n_lits_pos = np.empty(self.total_clauses, dtype=np.int32)
+        n_lits_neg = np.empty(self.total_clauses, dtype=np.int32)
+        num_includes = np.empty(self.total_clauses, dtype=np.uint32)
+        clause_dirty = np.ones(self.total_clauses, dtype=np.int8)
+        self.lib_pack_clauses(
             self.p_ta_states,
-            clause_positions.ctypes.data_as(int32_p),
-            valid_feat_ranges.ctypes.data_as(int32_p),
-            clause_valid.ctypes.data_as(bool_p),
-            self.p_feat_mins,
             self.p_literal_offsets,
+            clause_positions.ctypes.data_as(int32_p),
+            included_lits_pos.ctypes.data_as(int32_p),
+            included_lits_neg.ctypes.data_as(int32_p),
+            n_lits_pos.ctypes.data_as(int32_p),
+            n_lits_neg.ctypes.data_as(int32_p),
             num_includes.ctypes.data_as(uint32_p),
-            interesting_fids.ctypes.data_as(int32_p),
-            interesting_fid_lens.ctypes.data_as(int32_p),
+            clause_dirty.ctypes.data_as(int8_p),
+
         )
         return {
             "clause_positions": clause_positions,
-            "valid_feat_ranges": valid_feat_ranges,
-            "clause_valid": clause_valid,
+            "included_lits_pos": included_lits_pos,
+            "included_lits_neg": included_lits_neg,
+            "n_lits_pos": n_lits_pos,
+            "n_lits_neg": n_lits_neg,
             "num_includes": num_includes,
-            "interesting_fids": interesting_fids,
-            "interesting_fid_lens": interesting_fid_lens,
         }
 
     def infer(self, X: np.ndarray, batch_size: int):
@@ -273,13 +303,13 @@ class CPUDevice(BaseDevice):
 
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
 
-        bufs = self.infer_clauses()
+        bufs = self.pack_clauses()
         p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
-        p_valid_feat_ranges = bufs["valid_feat_ranges"].ctypes.data_as(int32_p)
-        p_clause_valid = bufs["clause_valid"].ctypes.data_as(bool_p)
+        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
+        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
+        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
+        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
         p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
-        p_interesting_fids = bufs["interesting_fids"].ctypes.data_as(int32_p)
-        p_interesting_fid_lens = bufs["interesting_fid_lens"].ctypes.data_as(int32_p)
 
         for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
@@ -296,11 +326,13 @@ class CPUDevice(BaseDevice):
                 batch_end - i,
                 self.p_feat_mins,
                 p_clause_positions,
-                p_valid_feat_ranges,
-                p_clause_valid,
+                p_included_lits_pos,
+                p_included_lits_neg,
+                p_n_lits_pos,
+                p_n_lits_neg,
                 p_num_includes,
-                p_interesting_fids,
-                p_interesting_fid_lens,
+                self.p_lit_to_fid,
+                self.p_literal_offsets,
             )
 
             class_sums[i:batch_end] = batch_class_sums
@@ -314,13 +346,13 @@ class CPUDevice(BaseDevice):
 
         patch_outputs = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int32)
 
-        bufs = self.infer_clauses()
+        bufs = self.pack_clauses()
         p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
-        p_valid_feat_ranges = bufs["valid_feat_ranges"].ctypes.data_as(int32_p)
-        p_clause_valid = bufs["clause_valid"].ctypes.data_as(bool_p)
+        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
+        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
+        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
+        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
         p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
-        p_interesting_fids = bufs["interesting_fids"].ctypes.data_as(int32_p)
-        p_interesting_fid_lens = bufs["interesting_fid_lens"].ctypes.data_as(int32_p)
 
         for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
@@ -336,11 +368,13 @@ class CPUDevice(BaseDevice):
                 batch_end - i,
                 self.p_feat_mins,
                 p_clause_positions,
-                p_valid_feat_ranges,
-                p_clause_valid,
+                p_included_lits_pos,
+                p_included_lits_neg,
+                p_n_lits_pos,
+                p_n_lits_neg,
                 p_num_includes,
-                p_interesting_fids,
-                p_interesting_fid_lens,
+                self.p_lit_to_fid,
+                self.p_literal_offsets,
             )
 
             patch_outputs[i:batch_end] = batch_po
@@ -355,7 +389,7 @@ class CPUDevice(BaseDevice):
 
     def get_clauses(self):
         # Use infer clauses to get clause ranges. Then create a array of (TOTAL_CLAUSES, N_RAW_PATCH_FEATS) (or *2 if negated_literals) and depending on the range set the thermometer bin value. The positive literals will mean this clause matches >= that value, and the neagated literal value will mean, the clauses matches < that value.
-        bufs = self.infer_clauses()
+        bufs = self.pack_clauses()
 
         if self.args.position_literals:
             translated_pos_positions = np.zeros((self.total_clauses, 2))
