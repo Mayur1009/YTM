@@ -76,6 +76,8 @@ class CPUDevice(BaseDevice):
 #define DEPTH {self.args.dim[2]}
 #define PATCH_HEIGHT {self.args.patch_dim[0]}
 #define PATCH_WIDTH {self.args.patch_dim[1]}
+#define STRIDE_Y {self.args.stride[0]}
+#define STRIDE_X {self.args.stride[1]}
 #define NEGATED_LITERALS {1 if self.args.negated_literals else 0}
 #define POSITION_LITERALS {1 if self.args.position_literals else 0}
 #define COALESCED {1 if self.args.coalesced else 0}
@@ -89,10 +91,13 @@ class CPUDevice(BaseDevice):
 #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
 #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
-#define N_FEATURES {self.n_features}
-#define N_FEAT_LITERALS {self.n_feat_literals}
-#define N_POSITION_FEATS {self.n_position_feat}
-#define LITERALS {self.n_literals}
+#define N_RAW_PATCH_FEATS {self.n_raw_patch_feats}
+#define N_PATCH_FEATS {self.n_patch_feats}
+#define N_POSITION_FEATS {self.n_position_feats}
+#define N_PATCHES_Y {self.n_patches_y}
+#define N_PATCHES_X {self.n_patches_x}
+#define N_PATCHES {self.n_patches}
+#define N_LITERALS {self.n_literals}
 """
         return header
 
@@ -236,10 +241,10 @@ class CPUDevice(BaseDevice):
 
     def infer_clauses(self):
         clause_positions = np.zeros((self.total_clauses, 4), dtype=np.int32)
-        valid_feat_ranges = np.zeros((self.total_clauses, self.n_features * 2), dtype=np.int32)
+        valid_feat_ranges = np.zeros((self.total_clauses, self.n_raw_patch_feats * 2), dtype=np.int32)
         clause_valid = np.zeros(self.total_clauses, dtype=np.bool_)
         num_includes = np.zeros(self.total_clauses, dtype=np.uint32)
-        interesting_fids = np.zeros((self.total_clauses, self.n_features), dtype=np.int32)
+        interesting_fids = np.zeros((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         interesting_fid_lens = np.zeros(self.total_clauses, dtype=np.int32)
         self.lib_infer_clauses(
             self.p_ta_states,
@@ -349,7 +354,7 @@ class CPUDevice(BaseDevice):
         return self.ta_states.reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
 
     def get_clauses(self):
-        # Use infer clauses to get clause ranges. Then create a array of (TOTAL_CLAUSES, N_FEATURES) (or *2 if negated_literals) and depending on the range set the thermometer bin value. The positive literals will mean this clause matches >= that value, and the neagated literal value will mean, the clauses matches < that value.
+        # Use infer clauses to get clause ranges. Then create a array of (TOTAL_CLAUSES, N_RAW_PATCH_FEATS) (or *2 if negated_literals) and depending on the range set the thermometer bin value. The positive literals will mean this clause matches >= that value, and the neagated literal value will mean, the clauses matches < that value.
         bufs = self.infer_clauses()
 
         if self.args.position_literals:

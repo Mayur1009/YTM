@@ -11,6 +11,8 @@
     #define DEPTH 1
     #define PATCH_HEIGHT 10
     #define PATCH_WIDTH 10
+    #define STRIDE_Y 1
+    #define STRIDE_X 1
     #define NEGATED_LITERALS 1
     #define POSITION_LITERALS 1
     #define COALESCED 1
@@ -24,19 +26,20 @@
     #define TYPE1A_FB 1
     #define TYPE1B_FB 1
     #define TYPE2_FB 1
-    #define N_FEATURES 100
-    #define N_FEAT_LITERALS 100
+    #define N_RAW_PATCH_FEATS 100
+    #define N_PATCH_FEATS 100
     #define N_POSITION_FEATS 36
-    #define LITERALS 272
+    #define N_PATCHES_Y 19
+    #define N_PATCHES_X 19
+    #define N_PATCHES 361
+    #define N_LITERALS 272
 #endif
 
 // Derived macros
+#define N_POSITION_FEATS_Y (N_PATCHES_Y - 1)
+#define N_POSITION_FEATS_X (N_PATCHES_X - 1)
 #define INT_SIZE 32
 #define S_INV (1.0f / S)
-
-#define N_PATCHES_Y (HEIGHT - PATCH_HEIGHT + 1)
-#define N_PATCHES_X (WIDTH - PATCH_WIDTH + 1)
-#define PATCHES (N_PATCHES_Y * N_PATCHES_X)
 
 #if COALESCED == 0
     #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
@@ -93,12 +96,12 @@ __device__ static inline float uprob_fun(float v, float y) {
 }
 
 // Get feature value from X at a given patch position
-__device__ static inline int get_feature_value(const int* X, int patch_row, int patch_col, int fid) {
+__device__ static inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
     ull rel_y = fid / (PATCH_WIDTH * DEPTH);
     ull rel_x = (fid / DEPTH) % PATCH_WIDTH;
     ull z = fid % DEPTH;
-    ull abs_y = patch_row + rel_y;
-    ull abs_x = patch_col + rel_x;
+    ull abs_y = patch_idx_y * STRIDE_Y + rel_y;
+    ull abs_x = patch_idx_x * STRIDE_X + rel_x;
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
@@ -116,16 +119,14 @@ __device__ static inline uint scan_clause(const uint* ta_state, const int* liter
     clause_position[3] = N_PATCHES_X;  // max_col
 
 #if POSITION_LITERALS
-    // Initialize position ranges
-
     // Process Y position literals
-    for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
+    for (int lit = 0; lit < N_POSITION_FEATS_Y; ++lit) {
         if (ta_state[lit] >= INCLUDE_STATE) {
             d_max(&clause_position[0], lit + 1);
             num_includes++;
         }
     #if NEGATED_LITERALS
-        if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
+        if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
             d_min(&clause_position[1], lit + 1);
             num_includes++;
         }
@@ -133,15 +134,15 @@ __device__ static inline uint scan_clause(const uint* ta_state, const int* liter
     }
 
     // Process X position literals
-    for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
+    for (int lit = N_POSITION_FEATS_Y; lit < N_POSITION_FEATS; ++lit) {
         if (ta_state[lit] >= INCLUDE_STATE) {
-            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+            int x_lit = lit - N_POSITION_FEATS_Y;
             d_max(&clause_position[2], x_lit + 1);
             num_includes++;
         }
     #if NEGATED_LITERALS
-        if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-            int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
+        if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
+            int x_lit = lit - N_POSITION_FEATS_Y;
             d_min(&clause_position[3], x_lit + 1);
             num_includes++;
         }
@@ -152,7 +153,7 @@ __device__ static inline uint scan_clause(const uint* ta_state, const int* liter
 #endif
 
     *fid_len = 0;
-    for (int fid = 0; fid < N_FEATURES; ++fid) {
+    for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
         // Valid range is [0, n_bits] inclusive, stored as closed [min, max]
         valid_feat_range[fid * 2] = 0;
@@ -166,7 +167,7 @@ __device__ static inline uint scan_clause(const uint* ta_state, const int* liter
                 num_includes++;
             }
 #if NEGATED_LITERALS
-            int lit_neg = lit_pos + LITERALS / 2;
+            int lit_neg = lit_pos + N_LITERALS / 2;
             if (ta_state[lit_neg] >= INCLUDE_STATE) {
                 // Negated literal at bit k: shifted_val <= k (closed interval)
                 d_min(&valid_feat_range[fid * 2 + 1], bit);
@@ -190,39 +191,39 @@ __device__ static inline uint scan_clause(const uint* ta_state, const int* liter
 // Feedback functions
 // ============================================================================
 
-__device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float* weight, const int* X, int patch_row,
-                                        int patch_col, int sign, const int* feat_mins, const int* literal_offsets) {
+__device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float* weight, const int* X, int patch_idx_y,
+                                        int patch_idx_x, int sign, const int* feat_mins, const int* literal_offsets) {
 #if TYPE1A_FB
     #if WEIGHTED
     if (fabs(*weight) < MAX_WEIGHT) (*weight) += sign * 1.0f;
     #endif
 
     #if POSITION_LITERALS
-    // Position Y literals
-    literal_inc(ta_state, 0, patch_row, 0, MAX_TA_STATE);
-    literal_dec_with_p(rng, ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, S_INV);
+    // Position Y literals: [0, patch_idx_y) have value 1, [patch_idx_y, N_POSITION_FEATS_Y) have value 0
+    literal_inc(ta_state, 0, patch_idx_y, 0, MAX_TA_STATE);
+    literal_dec_with_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
 
-    // Position X literals
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, 0, MAX_TA_STATE);
-    literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, 0, S_INV);
+    // Position X literals: [0, patch_idx_x) have value 1, [patch_idx_x, N_POSITION_FEATS_X) have value 0
+    literal_inc(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, MAX_TA_STATE);
+    literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
 
         #if NEGATED_LITERALS
-    // Negated position Y
-    literal_dec_with_p(rng, ta_state, 0, patch_row, LITERALS / 2, S_INV);
-    literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, LITERALS / 2, MAX_TA_STATE);
+    // Negated position Y: [0, patch_idx_y) have value 0, [patch_idx_y, N_POSITION_FEATS_Y) have value 1
+    literal_dec_with_p(rng, ta_state, 0, patch_idx_y, N_LITERALS / 2, S_INV);
+    literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, MAX_TA_STATE);
 
-    // Negated position X
-    literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, S_INV);
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, LITERALS / 2, MAX_TA_STATE);
+    // Negated position X: [0, patch_idx_x) have value 0, [patch_idx_x, N_POSITION_FEATS_X) have value 1
+    literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
+    literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, MAX_TA_STATE);
         #endif
     #endif
 
     // Feature literals with thermometer encoding
-    for (int fid = 0; fid < N_FEATURES; ++fid) {
+    for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
 
-        int val = get_feature_value(X, patch_row, patch_col, fid);
+        int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
         int shifted_val = val - feat_mins[fid];
 
         // Positive literals: bits [0, shifted_val) are 1, [shifted_val, n_bits) are 0
@@ -231,8 +232,8 @@ __device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float*
 
     #if NEGATED_LITERALS
         // Negated: bits [0, shifted_val) are 0, [shifted_val, n_bits) are 1
-        literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, LITERALS / 2, S_INV);
-        literal_inc(ta_state, lit_start + shifted_val, lit_end, LITERALS / 2, MAX_TA_STATE);
+        literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
+        literal_inc(ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, MAX_TA_STATE);
     #endif
     }
 #endif
@@ -240,11 +241,11 @@ __device__ static inline void type1a_fb(curandState* rng, uint* ta_state, float*
 
 __device__ static inline void type1b_fb(curandState* rng, uint* ta_state, int sign) {
 #if TYPE1B_FB
-    literal_dec_with_p(rng, ta_state, 0, LITERALS, 0, S_INV);
+    literal_dec_with_p(rng, ta_state, 0, N_LITERALS, 0, S_INV);
 #endif
 }
 
-__device__ static inline void type2_fb(uint* ta_state, float* weight, const int* X, int patch_row, int patch_col,
+__device__ static inline void type2_fb(uint* ta_state, float* weight, const int* X, int patch_idx_y, int patch_idx_x,
                                        int sign, const int* feat_mins, const int* literal_offsets) {
 #if TYPE2_FB
     #if WEIGHTED
@@ -259,27 +260,27 @@ __device__ static inline void type2_fb(uint* ta_state, float* weight, const int*
     #endif
 
     #if POSITION_LITERALS
-    // Position Y literals: [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
-    literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, INCLUDE_STATE);
+    // Position Y literals: [patch_idx_y, N_POSITION_FEATS_Y) have value 0
+    literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, INCLUDE_STATE);
 
-    // Position X literals: [patch_col, WIDTH-PATCH_WIDTH) have value 0
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, 0, INCLUDE_STATE);
+    // Position X literals: [patch_idx_x, N_POSITION_FEATS_X) have value 0
+    literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, INCLUDE_STATE);
 
         #if NEGATED_LITERALS
-    // Negated position Y: [0, patch_row) have value 0
-    literal_inc(ta_state, 0, patch_row, LITERALS / 2, INCLUDE_STATE);
+    // Negated position Y: [0, patch_idx_y) have value 0
+    literal_inc(ta_state, 0, patch_idx_y, N_LITERALS / 2, INCLUDE_STATE);
 
-    // Negated position X: [0, patch_col) have value 0
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, INCLUDE_STATE);
+    // Negated position X: [0, patch_idx_x) have value 0
+    literal_inc(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, INCLUDE_STATE);
         #endif
     #endif
 
     // Feature literals with thermometer encoding
-    for (int fid = 0; fid < N_FEATURES; ++fid) {
+    for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
 
-        int val = get_feature_value(X, patch_row, patch_col, fid);
+        int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
         int shifted_val = val - feat_mins[fid];
 
         // Positive literals: increment where value is 0, i.e., [shifted_val, n_bits)
@@ -287,7 +288,7 @@ __device__ static inline void type2_fb(uint* ta_state, float* weight, const int*
 
     #if NEGATED_LITERALS
         // Negated: increment where value is 0, i.e., [0, shifted_val)
-        literal_inc(ta_state, lit_start, lit_start + shifted_val, LITERALS / 2, INCLUDE_STATE);
+        literal_inc(ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, INCLUDE_STATE);
     #endif
     }
 #endif
@@ -307,12 +308,12 @@ __global__ void infer_clauses(const uint* __restrict__ global_ta_states, int* __
     ull stride = blockDim.x * gridDim.x;
 
     for (ull clause = index; clause < TOTAL_CLAUSES; clause += stride) {
-        const uint* ta_state = &global_ta_states[clause * LITERALS];
+        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
         int* local_clause_position = &clause_positions[clause * 4];
-        int* local_valid_feat_range = &valid_feat_ranges[clause * N_FEATURES * 2];
+        int* local_valid_feat_range = &valid_feat_ranges[clause * N_RAW_PATCH_FEATS * 2];
         bool* is_valid = &clause_valid[clause];
         uint* local_num_includes = &num_includes[clause];
-        int* local_interesting_fids = &interesting_fids[clause * N_FEATURES];
+        int* local_interesting_fids = &interesting_fids[clause * N_RAW_PATCH_FEATS];
         int* local_interesting_fid_len = &interesting_fid_lens[clause];
 
         *local_num_includes =
@@ -339,21 +340,21 @@ __global__ void infer_sample(const int* __restrict__ X, const float* __restrict_
 
         const int* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
         const int* local_clause_positions = &clause_positions[clause * 4];
-        const int* local_valid_feat_ranges = &valid_feat_ranges[clause * N_FEATURES * 2];
-        const int* local_interesting_fids = &interesting_fids[clause * N_FEATURES];
+        const int* local_valid_feat_ranges = &valid_feat_ranges[clause * N_RAW_PATCH_FEATS * 2];
+        const int* local_interesting_fids = &interesting_fids[clause * N_RAW_PATCH_FEATS];
         int local_interesting_fid_len = interesting_fid_lens[clause];
 
         bool clause_matched = false;
 
-        for (int patch_row = local_clause_positions[0]; patch_row < local_clause_positions[1] && !clause_matched;
-             patch_row++) {
-            for (int patch_col = local_clause_positions[2]; patch_col < local_clause_positions[3] && !clause_matched;
-                 patch_col++) {
+        for (int patch_idx_y = local_clause_positions[0]; patch_idx_y < local_clause_positions[1] && !clause_matched;
+             patch_idx_y++) {
+            for (int patch_idx_x = local_clause_positions[2]; patch_idx_x < local_clause_positions[3] && !clause_matched;
+                 patch_idx_x++) {
                 bool matches = true;
 
                 for (int i = 0; matches && i < local_interesting_fid_len; ++i) {
                     int fid = local_interesting_fids[i];
-                    int val = get_feature_value(X_sample, patch_row, patch_col, fid);
+                    int val = get_feature_value(X_sample, patch_idx_y, patch_idx_x, fid);
                     int shifted_val = val - feat_mins[fid];
                     if (shifted_val < local_valid_feat_ranges[fid * 2] ||
                         shifted_val > local_valid_feat_ranges[fid * 2 + 1]) {
@@ -392,11 +393,11 @@ __global__ void eval_clauses(curandState* rng, const int* __restrict__ X, const 
             continue;
         }
 
-        const uint* ta_state = &global_ta_states[clause * LITERALS];
+        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
 
         int clause_positions[4];
-        int valid_feat_ranges[N_FEATURES * 2];
-        int interesting_fids[N_FEATURES];
+        int valid_feat_ranges[N_RAW_PATCH_FEATS * 2];
+        int interesting_fids[N_RAW_PATCH_FEATS];
         int interesting_fid_len = 0;
         bool is_valid;
 
@@ -413,20 +414,20 @@ __global__ void eval_clauses(curandState* rng, const int* __restrict__ X, const 
 
         if (num_includes == 0) {
             // Empty clause: randomly select a patch
-            selected_patch_ids[clause] = (int)(curand_uniform(&local_rng) * PATCHES);
+            selected_patch_ids[clause] = (int)(curand_uniform(&local_rng) * N_PATCHES);
             continue;
         }
 
         int selected_patch = -1;
         int active_patch_count = 0;
 
-        for (int patch_row = clause_positions[0]; patch_row < clause_positions[1]; patch_row++) {
-            for (int patch_col = clause_positions[2]; patch_col < clause_positions[3]; patch_col++) {
+        for (int patch_idx_y = clause_positions[0]; patch_idx_y < clause_positions[1]; patch_idx_y++) {
+            for (int patch_idx_x = clause_positions[2]; patch_idx_x < clause_positions[3]; patch_idx_x++) {
                 bool matches = true;
 
                 for (int i = 0; matches && i < interesting_fid_len; ++i) {
                     int fid = interesting_fids[i];
-                    int val = get_feature_value(X, patch_row, patch_col, fid);
+                    int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
                     int shifted_val = val - feat_mins[fid];
                     if (shifted_val < valid_feat_ranges[fid * 2] || shifted_val > valid_feat_ranges[fid * 2 + 1]) {
                         matches = false;
@@ -436,7 +437,7 @@ __global__ void eval_clauses(curandState* rng, const int* __restrict__ X, const 
                 if (matches) {
                     active_patch_count++;
                     if (curand_uniform(&local_rng) < 1.0f / active_patch_count) {
-                        selected_patch = patch_row * N_PATCHES_X + patch_col;
+                        selected_patch = patch_idx_y * N_PATCHES_X + patch_idx_x;
                     }
                 }
             }
@@ -456,7 +457,7 @@ __global__ void count_votes(const int* __restrict__ selected_patch_ids, const fl
 
     for (ull clause = index; clause < TOTAL_CLAUSES; clause += stride) {
         if (selected_patch_ids[clause] != -1) {
-            patch_weights[clause * PATCHES + selected_patch_ids[clause]]++;
+            patch_weights[clause * N_PATCHES + selected_patch_ids[clause]]++;
 
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
@@ -500,13 +501,13 @@ __global__ void update_clauses(curandState* rng, const int* __restrict__ selecte
     for (ull clause = index; clause < TOTAL_CLAUSES; clause += stride) {
         if (clause_drop_mask[clause] == 1) continue;
 
-        uint* ta_state = &global_ta_states[clause * LITERALS];
+        uint* ta_state = &global_ta_states[clause * N_LITERALS];
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
 
-        int patch_row = -1, patch_col = -1;
+        int patch_idx_y = -1, patch_idx_x = -1;
         if (local_clause_output) {
-            patch_row = selected_patch_ids[clause] / N_PATCHES_X;
-            patch_col = selected_patch_ids[clause] % N_PATCHES_X;
+            patch_idx_y = selected_patch_ids[clause] / N_PATCHES_X;
+            patch_idx_x = selected_patch_ids[clause] % N_PATCHES_X;
         }
 
         uint num_includes = clause_num_includes[clause];
@@ -526,7 +527,7 @@ __global__ void update_clauses(curandState* rng, const int* __restrict__ selecte
 
             // Type 1a feedback
             if (should_update && t1 && local_clause_output && clause_has_space) {
-                type1a_fb(&local_rng, ta_state, local_weight, X, patch_row, patch_col, sign, feat_mins, literal_offsets);
+                type1a_fb(&local_rng, ta_state, local_weight, X, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
             }
 
             // Type 1b feedback
@@ -536,7 +537,7 @@ __global__ void update_clauses(curandState* rng, const int* __restrict__ selecte
 
             // Type 2 feedback
             if (should_update && (local_target * sign) < 0 && local_clause_output) {
-                type2_fb(ta_state, local_weight, X, patch_row, patch_col, sign, feat_mins, literal_offsets);
+                type2_fb(ta_state, local_weight, X, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
             }
         }
     }
@@ -558,10 +559,10 @@ __global__ void transform_patchwise(const int* __restrict__ X, int8_t* __restric
         ull clause = e_clause % TOTAL_CLAUSES;
 
         const int* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
-        int8_t* po = &patch_output[e * TOTAL_CLAUSES * PATCHES + clause * PATCHES];
+        int8_t* po = &patch_output[e * TOTAL_CLAUSES * N_PATCHES + clause * N_PATCHES];
 
         // Initialize all patches to 0 for this clause
-        for (int p = 0; p < PATCHES; p++) po[p] = 0;
+        for (int p = 0; p < N_PATCHES; p++) po[p] = 0;
 
         if (!clause_valid[clause]) {
             // Clause is false for all patches
@@ -570,22 +571,22 @@ __global__ void transform_patchwise(const int* __restrict__ X, int8_t* __restric
 
         if (num_includes[clause] == 0) {
             // Clause is true for all patches
-            for (int p = 0; p < PATCHES; p++) po[p] = 1;
+            for (int p = 0; p < N_PATCHES; p++) po[p] = 1;
             continue;
         }
 
         const int* local_clause_positions = &clause_positions[clause * 4];
-        const int* local_valid_feat_ranges = &valid_feat_ranges[clause * N_FEATURES * 2];
-        const int* local_interesting_fids = &interesting_fids[clause * N_FEATURES];
+        const int* local_valid_feat_ranges = &valid_feat_ranges[clause * N_RAW_PATCH_FEATS * 2];
+        const int* local_interesting_fids = &interesting_fids[clause * N_RAW_PATCH_FEATS];
         int local_interesting_fid_len = interesting_fid_lens[clause];
 
-        for (int patch_row = local_clause_positions[0]; patch_row < local_clause_positions[1]; patch_row++) {
-            for (int patch_col = local_clause_positions[2]; patch_col < local_clause_positions[3]; patch_col++) {
+        for (int patch_idx_y = local_clause_positions[0]; patch_idx_y < local_clause_positions[1]; patch_idx_y++) {
+            for (int patch_idx_x = local_clause_positions[2]; patch_idx_x < local_clause_positions[3]; patch_idx_x++) {
                 bool matches = true;
 
                 for (int i = 0; matches && i < local_interesting_fid_len; ++i) {
                     int fid = local_interesting_fids[i];
-                    int val = get_feature_value(X_sample, patch_row, patch_col, fid);
+                    int val = get_feature_value(X_sample, patch_idx_y, patch_idx_x, fid);
                     int shifted_val = val - feat_mins[fid];
                     if (shifted_val < local_valid_feat_ranges[fid * 2] ||
                         shifted_val > local_valid_feat_ranges[fid * 2 + 1]) {
@@ -593,7 +594,7 @@ __global__ void transform_patchwise(const int* __restrict__ X, int8_t* __restric
                     }
                 }
 
-                po[patch_row * N_PATCHES_X + patch_col] = matches;
+                po[patch_idx_y * N_PATCHES_X + patch_idx_x] = matches;
             }
         }
     }

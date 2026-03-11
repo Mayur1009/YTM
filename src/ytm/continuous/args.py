@@ -10,9 +10,10 @@ class TMArgs:
     s: float
     dim: tuple[int, int, int]
     n_classes: int
-    feat_mins: int | np.ndarray | None = None
-    feat_maxs: int | np.ndarray | None = None
+    feat_mins: int | np.ndarray = 0
+    feat_maxs: int | np.ndarray = 1
     patch_dim: tuple[int, int] = (0, 0)
+    stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
@@ -51,9 +52,7 @@ class TMArgs:
 
         n_feat = self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
 
-        if self.feat_mins is None:
-            self.feat_mins = np.zeros(n_feat, dtype=np.int32)
-        elif np.isscalar(self.feat_mins):
+        if np.isscalar(self.feat_mins):
             self.feat_mins = np.full(n_feat, self.feat_mins, dtype=np.int32)
         else:
             self.feat_mins = np.asarray(self.feat_mins, dtype=np.int32)
@@ -61,9 +60,7 @@ class TMArgs:
                 f"feat_mins must have shape ({n_feat},), got {self.feat_mins.shape}"
             )
 
-        if self.feat_maxs is None:
-            self.feat_maxs = np.ones(n_feat, dtype=np.int32)
-        elif np.isscalar(self.feat_maxs):
+        if np.isscalar(self.feat_maxs):
             self.feat_maxs = np.full(n_feat, self.feat_maxs, dtype=np.int32)
         else:
             self.feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32)
@@ -76,6 +73,7 @@ class T_args(TypedDict, total=False):
     feat_mins: int | np.ndarray | None
     feat_maxs: int | np.ndarray | None
     patch_dim: tuple[int, int]
+    stride: tuple[int, int]
     q: float
     weighted: bool
     max_weight: float
