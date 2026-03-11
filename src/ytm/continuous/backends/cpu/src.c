@@ -328,12 +328,11 @@ void pack_clauses(uint* restrict global_ta_states, const int* restrict literal_o
     }
 }
 
-void eval_clauses(uint* restrict rng, const int32_t* restrict X, const uint* restrict global_ta_states,
-                  const int8_t* restrict clause_drop_mask, int* restrict selected_patch_ids,
-                  const uint* restrict num_includes, const int* restrict feat_mins, const int* restrict literal_offsets,
-                  const int* restrict clause_positions, const int* restrict included_lits_pos,
-                  const int* restrict n_lits_pos, const int* included_lits_neg, const int* restrict n_lits_neg,
-                  const int* restrict lit_to_fid) {
+void eval_clauses(uint* restrict rng, const int32_t* restrict X, const int8_t* restrict clause_drop_mask,
+                  int* restrict selected_patch_ids, const uint* restrict num_includes, const int* restrict feat_mins,
+                  const int* restrict literal_offsets, const int* restrict clause_positions,
+                  const int* restrict included_lits_pos, const int* restrict n_lits_pos, const int* included_lits_neg,
+                  const int* restrict n_lits_neg, const int* restrict lit_to_fid) {
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         // Skip dropped clauses
@@ -342,7 +341,6 @@ void eval_clauses(uint* restrict rng, const int32_t* restrict X, const uint* res
             continue;
         }
 
-        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
         const int* pos = &clause_positions[clause * 4];
 
         if (pos[0] >= pos[1] || pos[2] >= pos[3]) {
@@ -545,9 +543,8 @@ void fit_batch(uint* restrict rng, uint* restrict global_ta_states, float* restr
                      n_lits_pos, n_lits_neg, num_includes, clause_dirty);
 
         int selected_patch_ids[TOTAL_CLAUSES];
-        eval_clauses(rng, X_sample, global_ta_states, clause_drop_mask, selected_patch_ids, num_includes, feat_mins,
-                     literal_offsets, clause_positions, included_lits_pos, n_lits_pos, included_lits_neg, n_lits_neg,
-                     lit_to_fid);
+        eval_clauses(rng, X_sample, clause_drop_mask, selected_patch_ids, num_includes, feat_mins, literal_offsets,
+                     clause_positions, included_lits_pos, n_lits_pos, included_lits_neg, n_lits_neg, lit_to_fid);
 
         // Step 2: Count votes
         float votes[CLASSES];

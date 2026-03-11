@@ -36,8 +36,6 @@ class BaseDevice(abc.ABC):
         if self.args.negated_literals:
             self.n_literals *= 2
 
-        self.n_literal_chunks = (self.n_literals + 31) // 32
-
         if self.args.max_includes <= 0 or self.args.max_includes > self.n_literals:
             self.args.max_includes = self.n_literals
 

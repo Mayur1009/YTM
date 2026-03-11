@@ -120,7 +120,6 @@ class CPUDevice(BaseDevice):
         ]
         self.lib_pack_clauses.restype = None
 
-
         # fit_batch signature
         self.lib_fit_batch = self.lib.fit_batch
         self.lib_fit_batch.argtypes = [
@@ -285,7 +284,6 @@ class CPUDevice(BaseDevice):
             n_lits_neg.ctypes.data_as(int32_p),
             num_includes.ctypes.data_as(uint32_p),
             clause_dirty.ctypes.data_as(int8_p),
-
         )
         return {
             "clause_positions": clause_positions,
@@ -344,7 +342,7 @@ class CPUDevice(BaseDevice):
         if batch_size == -1:
             batch_size = N
 
-        patch_outputs = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int32)
+        patch_outputs = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
 
         bufs = self.pack_clauses()
         p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
@@ -360,7 +358,7 @@ class CPUDevice(BaseDevice):
             batch_po = np.ascontiguousarray(patch_outputs[i:batch_end], dtype=np.int8)
 
             p_X = batch_X.ctypes.data_as(int32_p)
-            p_po = batch_po.ctypes.data_as(int32_p)
+            p_po = batch_po.ctypes.data_as(int8_p)
 
             self.lib_transform_patchwise(
                 p_X,
@@ -388,17 +386,72 @@ class CPUDevice(BaseDevice):
         return self.ta_states.reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
 
     def get_clauses(self):
-        # Use infer clauses to get clause ranges. Then create a array of (TOTAL_CLAUSES, N_RAW_PATCH_FEATS) (or *2 if negated_literals) and depending on the range set the thermometer bin value. The positive literals will mean this clause matches >= that value, and the neagated literal value will mean, the clauses matches < that value.
+        """
+        Returns human-interpretable clause constraints.
+
+        Returns:
+            dict with:
+            - "feature_bounds": (total_clauses, n_raw_patch_feats, 2)
+               [..., 0] = lower bound (value >= this), inclusive, in original feature space
+               [..., 1] = upper bound (value <= this), inclusive, in original feature space
+            - "position_bounds": (total_clauses, 4) if position_literals else None
+               [min_patch_y, max_patch_y, min_patch_x, max_patch_x], inclusive bounds
+            - "is_valid": (total_clauses,) bool - False if clause has contradictory constraints
+        """
         bufs = self.pack_clauses()
 
+        feat_mins = self.args.feat_mins
+        feat_maxs = self.args.feat_maxs
+
+        # Initialize bounds: lower=feat_min, upper=feat_max (no constraint)
+        feature_bounds = np.zeros((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
+        feature_bounds[:, :, 0] = feat_mins  # lower bounds
+        feature_bounds[:, :, 1] = feat_maxs  # upper bounds
+
+        # Process positive literals (define lower bounds)
+        for clause in range(self.total_clauses):
+            n_pos = bufs["n_lits_pos"][clause]
+            for i in range(n_pos):
+                lit_idx = bufs["included_lits_pos"][clause, i]
+                fid = self.lit_to_fid[lit_idx]
+                bit = lit_idx - self.literal_offsets[fid]
+                # Positive literal k means value >= (k + 1 + feat_min)
+                lower = bit + 1 + feat_mins[fid]
+                feature_bounds[clause, fid, 0] = max(feature_bounds[clause, fid, 0], lower)
+
+        # Process negated literals (define upper bounds)
+        if self.args.negated_literals:
+            for clause in range(self.total_clauses):
+                n_neg = bufs["n_lits_neg"][clause]
+                for i in range(n_neg):
+                    lit_idx = bufs["included_lits_neg"][clause, i]
+                    fid = self.lit_to_fid[lit_idx]
+                    bit = lit_idx - self.literal_offsets[fid]
+                    # Negated literal k means value < (k + 1 + feat_min), i.e., value <= k + feat_min
+                    upper = bit + feat_mins[fid]
+                    feature_bounds[clause, fid, 1] = min(feature_bounds[clause, fid, 1], upper)
+
+        # Position bounds (convert from exclusive max to inclusive)
+        position_bounds = None
         if self.args.position_literals:
-            translated_pos_positions = np.zeros((self.total_clauses, 2))
+            position_bounds = bufs["clause_positions"].copy()
+            # Convert [min, max) to [min, max] (inclusive)
+            position_bounds[:, 1] -= 1  # max_y
+            position_bounds[:, 3] -= 1  # max_x
 
-            if self.args.negated_literals:
-                translated_neg_positions = np.zeros((self.total_clauses, 2))
+        # Check validity: lower <= upper for all features, and position bounds valid
+        is_valid = np.all(feature_bounds[:, :, 0] <= feature_bounds[:, :, 1], axis=1)
+        if position_bounds is not None:
+            pos_valid = (position_bounds[:, 0] <= position_bounds[:, 1]) & (
+                position_bounds[:, 2] <= position_bounds[:, 3]
+            )
+            is_valid = is_valid & pos_valid
 
-        # TODO:
-
+        return {
+            "feature_bounds": feature_bounds,
+            "position_bounds": position_bounds,
+            "is_valid": is_valid,
+        }
 
     def get_state_dict(self):
         return {

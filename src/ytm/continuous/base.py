@@ -73,6 +73,9 @@ class BaseTM:
     def get_ta_states(self) -> np.ndarray:
         return self.dev.get_ta_states()
 
+    def get_clauses(self):
+        return self.dev.get_clauses()
+
     def to(self, device: Literal["cpu", "cuda"]):
         if device == self.args.device:
             return

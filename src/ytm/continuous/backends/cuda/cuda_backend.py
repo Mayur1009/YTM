@@ -358,6 +358,81 @@ class CUDADevice(BaseDevice):
     def get_ta_states(self):
         return self.ta_states.get().reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
 
+    def get_clauses(self):
+        """
+        Returns human-interpretable clause constraints.
+
+        Returns:
+            dict with:
+            - "feature_bounds": (total_clauses, n_raw_patch_feats, 2)
+               [..., 0] = lower bound (value >= this), inclusive, in original feature space
+               [..., 1] = upper bound (value <= this), inclusive, in original feature space
+            - "position_bounds": (total_clauses, 4) if position_literals else None
+               [min_patch_y, max_patch_y, min_patch_x, max_patch_x], inclusive bounds
+            - "is_valid": (total_clauses,) bool - False if clause has contradictory constraints
+        """
+        bufs = self._pack_clauses_for_inference()
+
+        # Transfer to CPU for processing
+        included_lits_pos = bufs["included_lits_pos"].get()
+        included_lits_neg = bufs["included_lits_neg"].get()
+        n_lits_pos = bufs["n_lits_pos"].get()
+        n_lits_neg = bufs["n_lits_neg"].get()
+        clause_positions = bufs["clause_positions"].get()
+
+        feat_mins = self.args.feat_mins
+        feat_maxs = self.args.feat_maxs
+
+        # Initialize bounds: lower=feat_min, upper=feat_max (no constraint)
+        feature_bounds = np.zeros((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
+        feature_bounds[:, :, 0] = feat_mins  # lower bounds
+        feature_bounds[:, :, 1] = feat_maxs  # upper bounds
+
+        # Process positive literals (define lower bounds)
+        for clause in range(self.total_clauses):
+            n_pos = n_lits_pos[clause]
+            for i in range(n_pos):
+                lit_idx = included_lits_pos[clause, i]
+                fid = self.lit_to_fid[lit_idx]
+                bit = lit_idx - self.literal_offsets[fid]
+                # Positive literal k means value >= (k + 1 + feat_min)
+                lower = bit + 1 + feat_mins[fid]
+                feature_bounds[clause, fid, 0] = max(feature_bounds[clause, fid, 0], lower)
+
+        # Process negated literals (define upper bounds)
+        if self.args.negated_literals:
+            for clause in range(self.total_clauses):
+                n_neg = n_lits_neg[clause]
+                for i in range(n_neg):
+                    lit_idx = included_lits_neg[clause, i]
+                    fid = self.lit_to_fid[lit_idx]
+                    bit = lit_idx - self.literal_offsets[fid]
+                    # Negated literal k means value < (k + 1 + feat_min), i.e., value <= k + feat_min
+                    upper = bit + feat_mins[fid]
+                    feature_bounds[clause, fid, 1] = min(feature_bounds[clause, fid, 1], upper)
+
+        # Position bounds (convert from exclusive max to inclusive)
+        position_bounds = None
+        if self.args.position_literals:
+            position_bounds = clause_positions.copy()
+            # Convert [min, max) to [min, max] (inclusive)
+            position_bounds[:, 1] -= 1  # max_y
+            position_bounds[:, 3] -= 1  # max_x
+
+        # Check validity: lower <= upper for all features, and position bounds valid
+        is_valid = np.all(feature_bounds[:, :, 0] <= feature_bounds[:, :, 1], axis=1)
+        if position_bounds is not None:
+            pos_valid = (position_bounds[:, 0] <= position_bounds[:, 1]) & (
+                position_bounds[:, 2] <= position_bounds[:, 3]
+            )
+            is_valid = is_valid & pos_valid
+
+        return {
+            "feature_bounds": feature_bounds,
+            "position_bounds": position_bounds,
+            "is_valid": is_valid,
+        }
+
     def get_state_dict(self):
         return {
             "ta_states": self.ta_states.get(),
