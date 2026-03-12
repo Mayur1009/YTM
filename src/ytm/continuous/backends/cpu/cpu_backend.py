@@ -5,6 +5,7 @@ import tempfile
 from ctypes import CDLL, POINTER, c_bool, c_float, c_int, c_int8, c_int32, c_uint32
 
 import numpy as np
+from tqdm import tqdm
 
 from ..base import BaseDevice
 
@@ -119,9 +120,9 @@ class CPUDevice(BaseDevice):
         ]
         self.lib_pack_clauses.restype = None
 
-        # fit_epoch signature
-        self.lib_fit_epoch = self.lib.fit_epoch
-        self.lib_fit_epoch.argtypes = [
+        # fit_sample signature (21 params)
+        self.lib_fit_sample = self.lib.fit_sample
+        self.lib_fit_sample.argtypes = [
             uint32_p,  # rng
             uint32_p,  # global_ta_states
             float_p,  # clause_weights
@@ -129,37 +130,59 @@ class CPUDevice(BaseDevice):
             int8_p,  # clause_drop_mask
             int32_p,  # X
             int8_p,  # targets
-            c_int,  # N
+            c_int,  # e
             int32_p,  # feat_mins
             int32_p,  # literal_offsets
             int32_p,  # lit_to_fid
+            int32_p,  # clause_positions
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
+            uint32_p,  # num_includes
+            int8_p,  # clause_dirty
+            int32_p,  # selected_patch_ids
+            float_p,  # votes
+            float_p,  # prob
         ]
+        self.lib_fit_sample.restype = None
 
-        # infer_batch signature
-        self.lib_infer_batch = self.lib.infer_batch
-        self.lib_infer_batch.argtypes = [
-            uint32_p,  # global_ta_states
+        # infer_sample signature (12 params)
+        self.lib_infer_sample = self.lib.infer_sample
+        self.lib_infer_sample.argtypes = [
+            int32_p,  # X
             float_p,  # clause_weights
-            int32_p,  # X
-            c_int,  # N
-            int32_p,  # feat_mins
-            int32_p,  # literal_offsets
-            int32_p,  # lit_to_fid
             float_p,  # class_sums
+            c_int,  # e
+            int32_p,  # feat_mins
+            int32_p,  # clause_positions
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
+            uint32_p,  # num_includes
+            int32_p,  # lit_to_fid
+            int32_p,  # literal_offsets
         ]
-        self.lib_infer_batch.restype = None
+        self.lib_infer_sample.restype = None
 
-        self.lib_transform_patchwise = self.lib.transform_patchwise
-        self.lib_transform_patchwise.argtypes = [
-            uint32_p,  # global_ta_states
+        # eval_sample_patchwise signature (11 params)
+        self.lib_eval_sample_patchwise = self.lib.eval_sample_patchwise
+        self.lib_eval_sample_patchwise.argtypes = [
             int32_p,  # X
-            c_int,  # N
             int32_p,  # feat_mins
             int32_p,  # literal_offsets
             int32_p,  # lit_to_fid
+            int32_p,  # clause_positions
+            int32_p,  # included_lits_pos
+            int32_p,  # included_lits_neg
+            int32_p,  # n_lits_pos
+            int32_p,  # n_lits_neg
+            uint32_p,  # num_includes
             int8_p,  # co_patchwise
+            c_int,  # e
         ]
-        self.lib_transform_patchwise.restype = None
+        self.lib_eval_sample_patchwise.restype = None
 
         if self.args.n_threads > 1:
             self.lib_set_num_threads = self.lib.set_num_threads
@@ -210,19 +233,53 @@ class CPUDevice(BaseDevice):
         X = X.astype(np.int32)
         targets = targets.astype(np.int8)
 
-        self.lib_fit_epoch(
-            self.p_rng,
-            self.p_ta_states,
-            self.p_clause_weights,
-            self.p_patch_weights,
-            clause_drop_mask.ctypes.data_as(int8_p),
-            X.ctypes.data_as(int32_p),
-            targets.ctypes.data_as(int8_p),
-            c_int(N),
-            self.p_feat_mins,
-            self.p_literal_offsets,
-            self.p_lit_to_fid,
-        )
+        # Allocate persistent workspace buffers
+        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
+        included_lits_pos = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        included_lits_neg = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
+        n_lits_pos = np.empty(self.total_clauses, dtype=np.int32)
+        n_lits_neg = np.empty(self.total_clauses, dtype=np.int32)
+        num_includes = np.empty(self.total_clauses, dtype=np.uint32)
+        clause_dirty = np.ones(self.total_clauses, dtype=np.int8)
+        selected_patch_ids = np.empty(self.total_clauses, dtype=np.int32)
+        votes = np.empty(self.args.n_classes, dtype=np.float32)
+        prob = np.empty(self.args.n_classes, dtype=np.float32)
+
+        p_clause_positions = clause_positions.ctypes.data_as(int32_p)
+        p_included_lits_pos = included_lits_pos.ctypes.data_as(int32_p)
+        p_included_lits_neg = included_lits_neg.ctypes.data_as(int32_p)
+        p_n_lits_pos = n_lits_pos.ctypes.data_as(int32_p)
+        p_n_lits_neg = n_lits_neg.ctypes.data_as(int32_p)
+        p_num_includes = num_includes.ctypes.data_as(uint32_p)
+        p_clause_dirty = clause_dirty.ctypes.data_as(int8_p)
+        p_selected_patch_ids = selected_patch_ids.ctypes.data_as(int32_p)
+        p_votes = votes.ctypes.data_as(float_p)
+        p_prob = prob.ctypes.data_as(float_p)
+
+        for e in tqdm(range(N), desc="Fit", leave=False):
+            self.lib_fit_sample(
+                self.p_rng,
+                self.p_ta_states,
+                self.p_clause_weights,
+                self.p_patch_weights,
+                clause_drop_mask.ctypes.data_as(int8_p),
+                X.ctypes.data_as(int32_p),
+                targets.ctypes.data_as(int8_p),
+                c_int(e),
+                self.p_feat_mins,
+                self.p_literal_offsets,
+                self.p_lit_to_fid,
+                p_clause_positions,
+                p_included_lits_pos,
+                p_included_lits_neg,
+                p_n_lits_pos,
+                p_n_lits_neg,
+                p_num_includes,
+                p_clause_dirty,
+                p_selected_patch_ids,
+                p_votes,
+                p_prob,
+            )
 
     def pack_clauses(self):
         clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
@@ -255,18 +312,33 @@ class CPUDevice(BaseDevice):
     def infer(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
         X = X.astype(np.int32)
-        class_sums = np.empty((N, self.args.n_classes), dtype=np.float32)
+        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
 
-        self.lib_infer_batch(
-            self.p_ta_states,
-            self.p_clause_weights,
-            X.ctypes.data_as(int32_p),
-            c_int(N),
-            self.p_feat_mins,
-            self.p_literal_offsets,
-            self.p_lit_to_fid,
-            class_sums.ctypes.data_as(float_p),
-        )
+        # Pack clauses once for all samples
+        bufs = self.pack_clauses()
+        p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
+        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
+        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
+        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
+        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
+        p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
+
+        for e in tqdm(range(N), desc="Infer", leave=False):
+            self.lib_infer_sample(
+                X.ctypes.data_as(int32_p),
+                self.p_clause_weights,
+                class_sums.ctypes.data_as(float_p),
+                c_int(e),
+                self.p_feat_mins,
+                p_clause_positions,
+                p_included_lits_pos,
+                p_included_lits_neg,
+                p_n_lits_pos,
+                p_n_lits_neg,
+                p_num_includes,
+                self.p_lit_to_fid,
+                self.p_literal_offsets,
+            )
 
         return class_sums
 
@@ -275,15 +347,30 @@ class CPUDevice(BaseDevice):
         X = X.astype(np.int32)
         patch_outputs = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
 
-        self.lib_transform_patchwise(
-            self.p_ta_states,
-            X.ctypes.data_as(int32_p),
-            c_int(N),
-            self.p_feat_mins,
-            self.p_literal_offsets,
-            self.p_lit_to_fid,
-            patch_outputs.ctypes.data_as(int8_p),
-        )
+        # Pack clauses once for all samples
+        bufs = self.pack_clauses()
+        p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
+        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
+        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
+        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
+        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
+        p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
+
+        for e in tqdm(range(N), desc="Transform", leave=False):
+            self.lib_eval_sample_patchwise(
+                X.ctypes.data_as(int32_p),
+                self.p_feat_mins,
+                self.p_literal_offsets,
+                self.p_lit_to_fid,
+                p_clause_positions,
+                p_included_lits_pos,
+                p_included_lits_neg,
+                p_n_lits_pos,
+                p_n_lits_neg,
+                p_num_includes,
+                patch_outputs.ctypes.data_as(int8_p),
+                c_int(e),
+            )
 
         return patch_outputs.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
 

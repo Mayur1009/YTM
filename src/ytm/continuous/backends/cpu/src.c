@@ -53,8 +53,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if USE_OMP
@@ -488,6 +488,7 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
         }
     }
 
+    OMP_PARALLEL_FOR
     for (ull class_id = 0; class_id < CLASSES; class_id++) {
         int local_target = targets_sample[class_id];
         if (local_target == 0) {
@@ -504,52 +505,15 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
                    targets_sample, prob, feat_mins, literal_offsets, clause_dirty);
 }
 
-void fit_epoch(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
-               int* restrict patch_weights, const int8_t* restrict clause_drop_mask, const int32_t* restrict X,
-               const int8_t* restrict targets, int N, const int* restrict feat_mins,
-               const int* restrict literal_offsets, const int* restrict lit_to_fid) {
-
-    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
-    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
-    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
-    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
-    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
-    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
-
-    int* selected_patch_ids = malloc(sizeof(int) * TOTAL_CLAUSES);
-    float* votes = malloc(sizeof(float) * CLASSES);
-    float* prob = malloc(sizeof(float) * CLASSES);
-
-    for (int e = 0; e < N; e++) {
-        fit_sample(rng, global_ta_states, clause_weights, patch_weights, clause_drop_mask, X, targets, e, feat_mins,
-                   literal_offsets, lit_to_fid, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
-                   n_lits_neg, num_includes, clause_dirty, selected_patch_ids, votes, prob);
-
-        if ((e + 1) % 1000 == 0) {
-            printf("\x1b[2K\rFit: %d/%d", e + 1, N);
-            fflush(stdout);
-        }
-    }
-    printf("\n");
-    free(clause_positions);
-    free(included_lits_pos);
-    free(included_lits_neg);
-    free(n_lits_pos);
-    free(n_lits_neg);
-    free(num_includes);
-    free(clause_dirty);
-    free(selected_patch_ids);
-    free(votes);
-    free(prob);
-}
-
-void infer_sample(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums,
+void infer_sample(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums, int e,
                   const int* restrict feat_mins, const int* restrict clause_positions, const int* included_lits_pos,
                   const int* included_lits_neg, const int* n_lits_pos, const int* n_lits_neg,
                   const uint* restrict num_includes, const int* restrict lit_to_fid,
                   const int* restrict literal_offsets) {
+
+    float* class_sums_e = &class_sums[(ull)e * CLASSES];
+    const int32_t* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    memset(class_sums_e, 0, sizeof(float) * CLASSES);
 
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
@@ -580,7 +544,7 @@ void infer_sample(const int32_t* restrict X, const float* restrict clause_weight
                     int lit_idx = lits_pos[i];
                     int fid = lit_to_fid[lit_idx];
                     int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
                     if (shifted_val < bit + 1)
                         match = false;
                 }
@@ -590,7 +554,7 @@ void infer_sample(const int32_t* restrict X, const float* restrict clause_weight
                     int lit_idx = lits_neg[i];
                     int fid = lit_to_fid[lit_idx];
                     int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
                     if (shifted_val > bit)
                         match = false;
                 }
@@ -605,58 +569,25 @@ void infer_sample(const int32_t* restrict X, const float* restrict clause_weight
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
                 OMP_ATOMIC
-                class_sums[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+                class_sums_e[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
         }
     }
-}
-
-void infer_batch(const uint* restrict global_ta_states, const float* restrict clause_weights, const int32_t* restrict X,
-                 int N, const int* restrict feat_mins, const int* restrict literal_offsets,
-                 const int* restrict lit_to_fid, float* restrict class_sums) {
-
-    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
-    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
-    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
-    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
-    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
-    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
-    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
-                 n_lits_neg, num_includes, clause_dirty);
-
-    memset(class_sums, 0, sizeof(float) * N * CLASSES);
-    for (int e = 0; e < N; e++) {
-        infer_sample(&X[(ull)e * HEIGHT * WIDTH * DEPTH], clause_weights, &class_sums[(ull)e * CLASSES], feat_mins,
-                     clause_positions, included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
-                     lit_to_fid, literal_offsets);
-
-        if ((e + 1) % 1000 == 0) {
-            printf("\x1b[2K\rInfer: %d/%d", e + 1, N);
-            fflush(stdout);
-        }
-    }
-    printf("\n");
-    free(clause_positions);
-    free(included_lits_pos);
-    free(included_lits_neg);
-    free(n_lits_pos);
-    free(n_lits_neg);
-    free(num_includes);
-    free(clause_dirty);
 }
 
 void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_mins,
                            const int* restrict literal_offsets, const int* restrict lit_to_fid,
                            const int* restrict clause_positions, const int* restrict included_lits_pos,
                            const int* included_lits_neg, const int* restrict n_lits_pos, const int* n_lits_neg,
-                           const uint* restrict num_includes, int8_t* restrict co_patchwise) {
+                           const uint* restrict num_includes, int8_t* restrict co_patchwise, int e) {
+
+    int8_t* co_patchwise_e = &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES];
+
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         if (num_includes[clause] == 0) {
             // Empty clauses match all patches
-            memset(&co_patchwise[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
+            memset(&co_patchwise_e[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
             continue;
         }
 
@@ -697,48 +628,9 @@ void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_m
 #endif
 
                 if (match) {
-                    co_patchwise[clause * N_PATCHES + py * N_PATCHES_X + px] = 1;
+                    co_patchwise_e[clause * N_PATCHES + py * N_PATCHES_X + px] = 1;
                 }
             }
         }
     }
-}
-
-void transform_patchwise(const uint* restrict global_ta_states, const int32_t* restrict X, int N,
-                         const int* restrict feat_mins, const int* restrict literal_offsets,
-                         const int* restrict lit_to_fid, int8_t* restrict co_patchwise) {
-
-    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
-    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
-    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
-    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
-    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
-    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
-    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
-
-    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
-                 n_lits_neg, num_includes, clause_dirty);
-
-    memset(co_patchwise, 0, sizeof(int8_t) * N * N_PATCHES * TOTAL_CLAUSES);
-
-    for (int e = 0; e < N; e++) {
-        eval_sample_patchwise(&X[(ull)e * HEIGHT * WIDTH * DEPTH], feat_mins, literal_offsets, lit_to_fid, clause_positions,
-                               included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
-                               &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES]);
-
-        if ((e + 1) % 1000 == 0) {
-            printf("\x1b[2K\rTranform: %d/%d", e + 1, N);
-            fflush(stdout);
-        }
-    }
-    printf("\n");
-
-    free(clause_positions);
-    free(included_lits_pos);
-    free(included_lits_neg);
-    free(n_lits_pos);
-    free(n_lits_neg);
-    free(num_includes);
-    free(clause_dirty);
 }
