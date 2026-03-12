@@ -53,6 +53,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -508,29 +509,40 @@ void fit_epoch(uint* restrict rng, uint* restrict global_ta_states, float* restr
                const int8_t* restrict targets, int N, const int* restrict feat_mins,
                const int* restrict literal_offsets, const int* restrict lit_to_fid) {
 
-    int clause_positions[TOTAL_CLAUSES * 4];
-    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int n_lits_pos[TOTAL_CLAUSES];
-    int n_lits_neg[TOTAL_CLAUSES];
-    uint num_includes[TOTAL_CLAUSES];
-    int8_t clause_dirty[TOTAL_CLAUSES];
-    int selected_patch_ids[TOTAL_CLAUSES];
-    float votes[CLASSES];
-    float prob[CLASSES];
+    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
+    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
+    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
+    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
+    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
     memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
+
+    int* selected_patch_ids = malloc(sizeof(int) * TOTAL_CLAUSES);
+    float* votes = malloc(sizeof(float) * CLASSES);
+    float* prob = malloc(sizeof(float) * CLASSES);
 
     for (int e = 0; e < N; e++) {
         fit_sample(rng, global_ta_states, clause_weights, patch_weights, clause_drop_mask, X, targets, e, feat_mins,
                    literal_offsets, lit_to_fid, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
                    n_lits_neg, num_includes, clause_dirty, selected_patch_ids, votes, prob);
 
-        if ((e+1) % 1000 == 0) {
+        if ((e + 1) % 1000 == 0) {
             printf("\x1b[2K\rFit: %d/%d", e + 1, N);
             fflush(stdout);
         }
     }
     printf("\n");
+    free(clause_positions);
+    free(included_lits_pos);
+    free(included_lits_neg);
+    free(n_lits_pos);
+    free(n_lits_neg);
+    free(num_includes);
+    free(clause_dirty);
+    free(selected_patch_ids);
+    free(votes);
+    free(prob);
 }
 
 void infer_sample(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums,
@@ -603,13 +615,13 @@ void infer_batch(const uint* restrict global_ta_states, const float* restrict cl
                  int N, const int* restrict feat_mins, const int* restrict literal_offsets,
                  const int* restrict lit_to_fid, float* restrict class_sums) {
 
-    int clause_positions[TOTAL_CLAUSES * 4];
-    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int n_lits_pos[TOTAL_CLAUSES];
-    int n_lits_neg[TOTAL_CLAUSES];
-    uint num_includes[TOTAL_CLAUSES];
-    int8_t clause_dirty[TOTAL_CLAUSES];
+    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
+    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
+    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
+    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
+    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
     memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
     pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
                  n_lits_neg, num_includes, clause_dirty);
@@ -620,13 +632,19 @@ void infer_batch(const uint* restrict global_ta_states, const float* restrict cl
                      clause_positions, included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
                      lit_to_fid, literal_offsets);
 
-        if ((e+1) % 1000 == 0) {
+        if ((e + 1) % 1000 == 0) {
             printf("\x1b[2K\rInfer: %d/%d", e + 1, N);
             fflush(stdout);
         }
     }
     printf("\n");
-
+    free(clause_positions);
+    free(included_lits_pos);
+    free(included_lits_neg);
+    free(n_lits_pos);
+    free(n_lits_neg);
+    free(num_includes);
+    free(clause_dirty);
 }
 
 void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_mins,
@@ -689,14 +707,15 @@ void transform_patchwise(const uint* restrict global_ta_states, const int32_t* r
                          const int* restrict feat_mins, const int* restrict literal_offsets,
                          const int* restrict lit_to_fid, int8_t* restrict co_patchwise) {
 
-    int clause_positions[TOTAL_CLAUSES * 4];
-    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
-    int n_lits_pos[TOTAL_CLAUSES];
-    int n_lits_neg[TOTAL_CLAUSES];
-    uint num_includes[TOTAL_CLAUSES];
-    int8_t clause_dirty[TOTAL_CLAUSES];
+    int* clause_positions = malloc(sizeof(int) * TOTAL_CLAUSES * 4);
+    int* included_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* included_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES * N_PATCH_FEATS);
+    int* n_lits_pos = malloc(sizeof(int) * TOTAL_CLAUSES);
+    int* n_lits_neg = malloc(sizeof(int) * TOTAL_CLAUSES);
+    uint* num_includes = malloc(sizeof(uint) * TOTAL_CLAUSES);
+    int8_t* clause_dirty = malloc(sizeof(int8_t) * TOTAL_CLAUSES);
     memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
+
     pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
                  n_lits_neg, num_includes, clause_dirty);
 
@@ -707,10 +726,18 @@ void transform_patchwise(const uint* restrict global_ta_states, const int32_t* r
                               included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
                               &co_patchwise[e * N_PATCHES]);
 
-        if ((e+1) % 1000 == 0) {
+        if ((e + 1) % 1000 == 0) {
             printf("\x1b[2K\rTranform: %d/%d", e + 1, N);
             fflush(stdout);
         }
     }
     printf("\n");
+
+    free(clause_positions);
+    free(included_lits_pos);
+    free(included_lits_neg);
+    free(n_lits_pos);
+    free(n_lits_neg);
+    free(num_includes);
+    free(clause_dirty);
 }

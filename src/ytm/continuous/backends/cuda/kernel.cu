@@ -510,10 +510,6 @@ __global__ void update_clauses(curandState* __restrict__ rng, const int* __restr
 // Inference Kernels
 // ============================================================================
 
-/**
- * Batch inference using precomputed sparse representation.
- * Parallelized over (sample, clause) pairs with early exit on first matching patch.
- */
 __global__ void infer_batch(const int* __restrict__ X, const float* __restrict__ clause_weights,
                             float* __restrict__ class_sums, const int N, const int* __restrict__ feat_mins,
                             const int* __restrict__ literal_offsets, const int* __restrict__ lit_to_fid,
