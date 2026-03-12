@@ -12,7 +12,7 @@
 #define STRIDE_X 1
 #define NEGATED_LITERALS 1
 #define POSITION_LITERALS 1
-#define COALESCED 1
+#define COALESCED 0
 #define WEIGHTED 1
 #define MAX_WEIGHT 10.0f
 #define NEGATIVE_CLAUSES 1
@@ -57,18 +57,17 @@ extern "C" {
 // Device helper functions
 // ============================================================================
 
-__device__ __forceinline__ void d_max(int* a, int b) { *a = (*a > b) ? *a : b; }
-__device__ __forceinline__ void d_min(int* a, int b) { *a = (*a < b) ? *a : b; }
+__device__ void d_max(int* a, int b) { *a = (*a > b) ? *a : b; }
+__device__ void d_min(int* a, int b) { *a = (*a < b) ? *a : b; }
 
-__device__ __forceinline__ int geometric_sample(curandState* rng, float p) {
+__device__ int geometric_sample(curandState* rng, float p) {
     float u = curand_uniform(rng);
     if (u >= 1.0f)
         u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
-__device__ __forceinline__ void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset,
-                                                   float p) {
+__device__ void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
     int li = start + geometric_sample(rng, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] > 0)
@@ -77,15 +76,15 @@ __device__ __forceinline__ void literal_dec_with_p(curandState* rng, uint* ta_st
     }
 }
 
-__device__ __forceinline__ void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+__device__ void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
     for (int li = start; li < end; ++li) {
         ta_state[li + offset] += (ta_state[li + offset] < max_val);
     }
 }
 
-__device__ __forceinline__ float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+__device__ float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
 
-__device__ __forceinline__ int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+__device__ int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -206,23 +205,21 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 // K1: pack_clauses - Scan TA states into sparse representation
 // ============================================================================
 
-__global__ void pack_clauses(const uint* __restrict__ global_ta_states, const int* __restrict__ literal_offsets,
-                             int* __restrict__ clause_positions, int* __restrict__ included_lits_pos,
-                             int* __restrict__ included_lits_neg, int* __restrict__ n_lits_pos,
-                             int* __restrict__ n_lits_neg, uint* __restrict__ num_includes,
-                             int8_t* __restrict__ clause_dirty) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void pack_clauses(const uint* global_ta_states, const int* literal_offsets, int* clause_positions,
+                             int* included_lits_pos, int* included_lits_neg, int* n_lits_pos, int* n_lits_neg,
+                             uint* num_includes, int8_t* clause_dirty) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
-    for (int clause = tid; clause < TOTAL_CLAUSES; clause += stride) {
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
         // Skip clauses that weren't updated since last pack
         if (clause_dirty[clause] == 0)
             continue;
 
-        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
+        const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_positions[clause * 4];
-        int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
+        int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
 
         // Initialize position bounds
         pos[0] = 0;           // min_row
@@ -293,22 +290,20 @@ __global__ void pack_clauses(const uint* __restrict__ global_ta_states, const in
 // K2: eval_clauses - Parallel evaluation over (clause, patch) pairs
 // ============================================================================
 
-__global__ void eval_clauses(const int* __restrict__ X, const int e, const int8_t* __restrict__ clause_drop_mask,
-                             const int* __restrict__ feat_mins, const int* __restrict__ literal_offsets,
-                             const int* __restrict__ lit_to_fid, const int* __restrict__ clause_positions,
-                             const int* __restrict__ included_lits_pos, const int* __restrict__ included_lits_neg,
-                             const int* __restrict__ n_lits_pos, const int* __restrict__ n_lits_neg,
-                             const uint* __restrict__ num_includes, int8_t* __restrict__ clause_outputs) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask, const int* feat_mins,
+                             const int* literal_offsets, const int* lit_to_fid, const int* clause_positions,
+                             const int* included_lits_pos, const int* included_lits_neg, const int* n_lits_pos,
+                             const int* n_lits_neg, const uint* num_includes, int8_t* clause_outputs) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
-    const int* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
+    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
-    for (int idx = tid; idx < TOTAL_CLAUSES * N_PATCHES; idx += stride) {
-        int clause = idx / N_PATCHES;
+    for (ull idx = tid; idx < (ull)TOTAL_CLAUSES * N_PATCHES; idx += stride) {
+        ull clause = idx / N_PATCHES;
         int patch = idx % N_PATCHES;
 
-        int8_t* output = &clause_outputs[clause * N_PATCHES + patch];
+        int8_t* output = &clause_outputs[clause * (ull)N_PATCHES + patch];
 
         // Skip dropped clauses
         if (clause_drop_mask[clause] == 1) {
@@ -333,7 +328,7 @@ __global__ void eval_clauses(const int* __restrict__ X, const int e, const int8_
         }
 
         // Check positive literals
-        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
+        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
         int clause_n_lits_pos = n_lits_pos[clause];
         bool matches = true;
 
@@ -348,7 +343,7 @@ __global__ void eval_clauses(const int* __restrict__ X, const int e, const int8_
 
 #if NEGATED_LITERALS
         // Check negated literals
-        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
         int clause_n_lits_neg = n_lits_neg[clause];
 
         for (int i = 0; i < clause_n_lits_neg && matches; ++i) {
@@ -369,17 +364,16 @@ __global__ void eval_clauses(const int* __restrict__ X, const int e, const int8_
 // K3: select_patch_and_count_votes - Reservoir sampling + vote counting
 // ============================================================================
 
-__global__ void select_patch_and_count_votes(curandState* __restrict__ rng, const int8_t* __restrict__ clause_outputs,
-                                             const float* __restrict__ clause_weights,
-                                             int* __restrict__ selected_patch_ids, int* __restrict__ patch_weights,
-                                             float* __restrict__ votes) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void select_patch_and_count_votes(curandState* rng, const int8_t* clause_outputs,
+                                             const float* clause_weights, int* selected_patch_ids, int* patch_weights,
+                                             float* votes) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
     curandState local_rng = rng[tid];
 
-    for (int clause = tid; clause < TOTAL_CLAUSES; clause += stride) {
-        const int8_t* outputs = &clause_outputs[clause * N_PATCHES];
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+        const int8_t* outputs = &clause_outputs[clause * (ull)N_PATCHES];
 
 #if N_PATCHES > 1
         // Reservoir sampling over matching patches
@@ -403,12 +397,12 @@ __global__ void select_patch_and_count_votes(curandState* __restrict__ rng, cons
 
         if (selected_id >= 0) {
             // Update patch weights (no race - each clause has unique row)
-            patch_weights[clause * N_PATCHES + selected_id]++;
+            patch_weights[clause * (ull)N_PATCHES + selected_id]++;
 
             // Accumulate votes (atomic needed)
-            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
-                atomicAdd(&votes[class_id], clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause]);
+                atomicAdd(&votes[class_id], clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
             }
         }
     }
@@ -420,12 +414,11 @@ __global__ void select_patch_and_count_votes(curandState* __restrict__ rng, cons
 // K4: calc_update_prob - Compute update probability per class
 // ============================================================================
 
-__global__ void calc_update_prob(const float* __restrict__ votes, const int8_t* __restrict__ targets, const int e,
-                                 float* __restrict__ prob) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-    for (int class_id = tid; class_id < CLASSES; class_id += stride) {
-        int target = targets[e * CLASSES + class_id];
+__global__ void calc_update_prob(const float* votes, const int8_t* targets, const int e, float* prob) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
+    for (ull class_id = tid; class_id < (ull)CLASSES; class_id += stride) {
+        int target = targets[(ull)e * CLASSES + class_id];
         if (target == 0) {
             prob[class_id] = 0.0f;
             continue;
@@ -440,24 +433,22 @@ __global__ void calc_update_prob(const float* __restrict__ votes, const int8_t* 
 // K5: update_clauses - Apply Type 1a/1b/2 feedback
 // ============================================================================
 
-__global__ void update_clauses(curandState* __restrict__ rng, const int* __restrict__ selected_patch_ids,
-                               const uint* __restrict__ num_includes, const int8_t* __restrict__ clause_drop_mask,
-                               const int* __restrict__ X, const int8_t* __restrict__ targets, const int e,
-                               const float* __restrict__ prob, uint* __restrict__ ta_states,
-                               float* __restrict__ clause_weights, const int* __restrict__ feat_mins,
-                               const int* __restrict__ literal_offsets, int8_t* __restrict__ clause_dirty) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void update_clauses(curandState* rng, const int* selected_patch_ids, const uint* num_includes,
+                               const int8_t* clause_drop_mask, const int* X, const int8_t* targets, const int e,
+                               const float* prob, uint* ta_states, float* clause_weights, const int* feat_mins,
+                               const int* literal_offsets, int8_t* clause_dirty) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
-    const int* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
-    const int8_t* targets_e = &targets[e * CLASSES];
+    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const int8_t* targets_e = &targets[(ull)e * CLASSES];
     curandState local_rng = rng[tid];
 
-    for (int clause = tid; clause < TOTAL_CLAUSES; clause += stride) {
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
         if (clause_drop_mask[clause] == 1)
             continue;
 
-        uint* ta_state = &ta_states[clause * N_LITERALS];
+        uint* ta_state = &ta_states[clause * (ull)N_LITERALS];
         int patch_id = selected_patch_ids[clause];
         int clause_output = (patch_id >= 0) ? 1 : 0;
 
@@ -469,13 +460,13 @@ __global__ void update_clauses(curandState* __restrict__ rng, const int* __restr
 
         uint clause_includes = num_includes[clause];
 
-        ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+        ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
             int target = targets_e[class_id];
             if (target == 0)
                 continue;
 
-            float* weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+            float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
             int sign = (*weight >= 0) - (*weight < 0);
 
             float update_prob = prob[class_id];
@@ -510,32 +501,30 @@ __global__ void update_clauses(curandState* __restrict__ rng, const int* __restr
 // Inference Kernels
 // ============================================================================
 
-__global__ void infer_batch(const int* __restrict__ X, const float* __restrict__ clause_weights,
-                            float* __restrict__ class_sums, const int N, const int* __restrict__ feat_mins,
-                            const int* __restrict__ literal_offsets, const int* __restrict__ lit_to_fid,
-                            const int* __restrict__ clause_positions, const int* __restrict__ included_lits_pos,
-                            const int* __restrict__ included_lits_neg, const int* __restrict__ n_lits_pos,
-                            const int* __restrict__ n_lits_neg, const uint* __restrict__ num_includes) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void infer_batch(const int* X, const float* clause_weights, float* class_sums, const int N,
+                            const int* feat_mins, const int* literal_offsets, const int* lit_to_fid,
+                            const int* clause_positions, const int* included_lits_pos, const int* included_lits_neg,
+                            const int* n_lits_pos, const int* n_lits_neg, const uint* num_includes) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
-    for (int idx = tid; idx < N * TOTAL_CLAUSES; idx += stride) {
-        int e = idx / TOTAL_CLAUSES;
-        int clause = idx % TOTAL_CLAUSES;
+    for (ull e_clause = tid; e_clause < (ull)N * TOTAL_CLAUSES; e_clause += stride) {
+        ull e = e_clause / (ull)TOTAL_CLAUSES;
+        ull clause = e_clause % (ull)TOTAL_CLAUSES;
 
         // Skip empty clauses
         if (num_includes[clause] == 0)
             continue;
 
-        const int* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
+        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
         const int* pos = &clause_positions[clause * 4];
 
         // Check if clause is valid (position bounds)
         if (pos[0] >= pos[1] || pos[2] >= pos[3])
             continue;
 
-        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
+        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
         int clause_n_lits_pos = n_lits_pos[clause];
         int clause_n_lits_neg = n_lits_neg[clause];
 
@@ -574,10 +563,10 @@ __global__ void infer_batch(const int* __restrict__ X, const float* __restrict__
         }
 
         if (matched) {
-            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
-                atomicAdd(&class_sums[e * CLASSES + class_id],
-                          clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause]);
+                atomicAdd(&class_sums[e * (ull)CLASSES + class_id],
+                          clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
             }
         }
     }
@@ -587,22 +576,20 @@ __global__ void infer_batch(const int* __restrict__ X, const float* __restrict__
  * Transform: compute clause output for each patch.
  * Uses precomputed sparse representation.
  */
-__global__ void transform_patchwise(const int* __restrict__ X, int8_t* __restrict__ patch_output, const int N,
-                                    const int* __restrict__ feat_mins, const int* __restrict__ literal_offsets,
-                                    const int* __restrict__ lit_to_fid, const int* __restrict__ clause_positions,
-                                    const int* __restrict__ included_lits_pos,
-                                    const int* __restrict__ included_lits_neg, const int* __restrict__ n_lits_pos,
-                                    const int* __restrict__ n_lits_neg, const uint* __restrict__ num_includes) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
+__global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* feat_mins,
+                                    const int* literal_offsets, const int* lit_to_fid, const int* clause_positions,
+                                    const int* included_lits_pos, const int* included_lits_neg, const int* n_lits_pos,
+                                    const int* n_lits_neg, const uint* num_includes) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
 
-    for (int idx = tid; idx < N * TOTAL_CLAUSES * N_PATCHES; idx += stride) {
-        int e = idx / (TOTAL_CLAUSES * N_PATCHES);
-        int clause_patch = idx % (TOTAL_CLAUSES * N_PATCHES);
-        int clause = clause_patch / N_PATCHES;
+    for (ull idx = tid; idx < (ull)N * TOTAL_CLAUSES * N_PATCHES; idx += stride) {
+        ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
+        ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
+        ull clause = clause_patch / (ull)N_PATCHES;
         int patch = clause_patch % N_PATCHES;
 
-        int8_t* output = &patch_output[e * TOTAL_CLAUSES * N_PATCHES + clause * N_PATCHES + patch];
+        int8_t* output = &patch_output[e * (ull)TOTAL_CLAUSES * N_PATCHES + clause * (ull)N_PATCHES + patch];
 
         // Empty clause matches all patches
         if (num_includes[clause] == 0) {
@@ -621,9 +608,9 @@ __global__ void transform_patchwise(const int* __restrict__ X, int8_t* __restric
             continue;
         }
 
-        const int* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
-        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
+        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
+        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
         int clause_n_lits_pos = n_lits_pos[clause];
         int clause_n_lits_neg = n_lits_neg[clause];
 

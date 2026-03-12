@@ -467,8 +467,8 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
                 int* restrict n_lits_neg, uint* restrict num_includes, int8_t* restrict clause_dirty,
                 int* restrict selected_patch_ids, float* restrict votes, float* restrict prob) {
 
-    const int32_t* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
-    const int8_t* targets_sample = &targets[e * CLASSES];
+    const int32_t* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const int8_t* targets_sample = &targets[(ull)e * CLASSES];
 
     pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
                  n_lits_neg, num_includes, clause_dirty);
@@ -628,7 +628,7 @@ void infer_batch(const uint* restrict global_ta_states, const float* restrict cl
 
     memset(class_sums, 0, sizeof(float) * N * CLASSES);
     for (int e = 0; e < N; e++) {
-        infer_sample(&X[e * HEIGHT * WIDTH * DEPTH], clause_weights, &class_sums[e * CLASSES], feat_mins,
+        infer_sample(&X[(ull)e * HEIGHT * WIDTH * DEPTH], clause_weights, &class_sums[(ull)e * CLASSES], feat_mins,
                      clause_positions, included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
                      lit_to_fid, literal_offsets);
 
@@ -657,6 +657,7 @@ void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_m
         if (num_includes[clause] == 0) {
             // Empty clauses match all patches
             memset(&co_patchwise[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
+            continue;
         }
 
         const int* pos = &clause_positions[clause * 4];
@@ -719,12 +720,12 @@ void transform_patchwise(const uint* restrict global_ta_states, const int32_t* r
     pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
                  n_lits_neg, num_includes, clause_dirty);
 
-    memset(co_patchwise, 0, sizeof(int8_t) * N * N_PATCHES);
+    memset(co_patchwise, 0, sizeof(int8_t) * N * N_PATCHES * TOTAL_CLAUSES);
 
     for (int e = 0; e < N; e++) {
-        eval_sample_patchwise(&X[e * HEIGHT * WIDTH * DEPTH], feat_mins, literal_offsets, lit_to_fid, clause_positions,
-                              included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
-                              &co_patchwise[e * N_PATCHES]);
+        eval_sample_patchwise(&X[(ull)e * HEIGHT * WIDTH * DEPTH], feat_mins, literal_offsets, lit_to_fid, clause_positions,
+                               included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
+                               &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES]);
 
         if ((e + 1) % 1000 == 0) {
             printf("\x1b[2K\rTranform: %d/%d", e + 1, N);
