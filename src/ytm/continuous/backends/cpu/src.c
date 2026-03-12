@@ -53,6 +53,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #if USE_OMP
@@ -251,9 +252,10 @@ static inline void type2_fb(uint* restrict ta_state, float* restrict weight, con
 // Clause evaluation and update
 // ============================================================================
 
-void pack_clauses(uint* restrict global_ta_states, const int* restrict literal_offsets, int* restrict clause_positions,
-                  int* restrict included_lits_pos, int* restrict included_lits_neg, int* restrict n_lits_pos,
-                  int* restrict n_lits_neg, uint* restrict num_includes, int8_t* restrict clause_dirty) {
+void pack_clauses(const uint* restrict global_ta_states, const int* restrict literal_offsets,
+                  int* restrict clause_positions, int* restrict included_lits_pos, int* restrict included_lits_neg,
+                  int* restrict n_lits_pos, int* restrict n_lits_neg, uint* restrict num_includes,
+                  int8_t* restrict clause_dirty) {
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         if (!clause_dirty[clause])
@@ -456,190 +458,259 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids,
     }
 }
 
-void infer_batch(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums, int N,
-                 const int* restrict feat_mins, const int* restrict clause_positions, const int* included_lits_pos,
-                 const int* included_lits_neg, const int* n_lits_pos, const int* n_lits_neg,
-                 const uint* restrict num_includes, const int* restrict lit_to_fid,
-                 const int* restrict literal_offsets) {
-    for (int e = 0; e < N; e++) {
-        const int32_t* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
-        float* cs_sample = &class_sums[e * CLASSES];
-        memset(cs_sample, 0, sizeof(float) * CLASSES);
+void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
+                int* restrict patch_weights, const int8_t* restrict clause_drop_mask, const int32_t* restrict X,
+                const int8_t* restrict targets, int e, const int* restrict feat_mins,
+                const int* restrict literal_offsets, const int* restrict lit_to_fid, int* restrict clause_positions,
+                int* restrict included_lits_pos, int* restrict included_lits_neg, int* restrict n_lits_pos,
+                int* restrict n_lits_neg, uint* restrict num_includes, int8_t* restrict clause_dirty,
+                int* restrict selected_patch_ids, float* restrict votes, float* restrict prob) {
 
-        OMP_PARALLEL_FOR
-        for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-            if (num_includes[clause] == 0) {
-                // Skip empty clauses during inference
-                continue;
+    const int32_t* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
+    const int8_t* targets_sample = &targets[e * CLASSES];
+
+    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
+                 n_lits_neg, num_includes, clause_dirty);
+
+    eval_clauses(rng, Xe, clause_drop_mask, selected_patch_ids, num_includes, feat_mins, literal_offsets,
+                 clause_positions, included_lits_pos, n_lits_pos, included_lits_neg, n_lits_neg, lit_to_fid);
+
+    memset(votes, 0, sizeof(float) * CLASSES);
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        if (selected_patch_ids[clause] != -1) {
+            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            LOOP_CLASS_ID(class_id, clause) {
+                OMP_ATOMIC
+                votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
-            const int* pos = &clause_positions[clause * 4];
-
-            // Check if clause is valid (position bounds)
-            if (pos[0] >= pos[1] || pos[2] >= pos[3])
-                continue;
-
-            const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-            const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-            int clause_n_lits_pos = n_lits_pos[clause];
-            int clause_n_lits_neg = n_lits_neg[clause];
-
-            bool matched = false;
-
-            // Early exit on first matching patch
-            for (int py = pos[0]; py < pos[1] && !matched; ++py) {
-                for (int px = pos[2]; px < pos[3] && !matched; ++px) {
-                    bool match = true;
-
-                    // Check positive literals
-                    for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-                        int lit_idx = lits_pos[i];
-                        int fid = lit_to_fid[lit_idx];
-                        int bit = lit_idx - literal_offsets[fid];
-                        int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                        if (shifted_val < bit + 1)
-                            match = false;
-                    }
-
-#if NEGATED_LITERALS
-                    // Check negated literals
-                    for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-                        int lit_idx = lits_neg[i];
-                        int fid = lit_to_fid[lit_idx];
-                        int bit = lit_idx - literal_offsets[fid];
-                        int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                        if (shifted_val > bit)
-                            match = false;
-                    }
-#endif
-
-                    if (match)
-                        matched = true;
-                }
-            }
-
-            if (matched) {
-                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
-                LOOP_CLASS_ID(class_id, clause) {
-                    OMP_ATOMIC
-                    cs_sample[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
-                }
-            }
+            patch_weights[clause * N_PATCHES + selected_patch_ids[clause]]++;
         }
     }
+
+    for (ull class_id = 0; class_id < CLASSES; class_id++) {
+        int local_target = targets_sample[class_id];
+        if (local_target == 0) {
+            prob[class_id] = 0.0f;
+            continue;
+        }
+
+        float y = (float)THRESH * (float)local_target;
+        float class_sum = (float)CLIP(votes[class_id], -THRESH, THRESH);
+        prob[class_id] = uprob_fun(class_sum, y);
+    }
+
+    update_clauses(rng, selected_patch_ids, num_includes, global_ta_states, clause_weights, clause_drop_mask, Xe,
+                   targets_sample, prob, feat_mins, literal_offsets, clause_dirty);
 }
 
-void fit_batch(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
+void fit_epoch(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
                int* restrict patch_weights, const int8_t* restrict clause_drop_mask, const int32_t* restrict X,
                const int8_t* restrict targets, int N, const int* restrict feat_mins,
-               const int* restrict literal_offsets, const int* restrict lit_to_fid, int* restrict clause_positions,
-               int* restrict included_lits_pos, int* restrict included_lits_neg, int* restrict n_lits_pos,
-               int* restrict n_lits_neg, uint* restrict num_includes, int8_t* restrict clause_dirty) {
+               const int* restrict literal_offsets, const int* restrict lit_to_fid) {
+
+    int clause_positions[TOTAL_CLAUSES * 4];
+    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int n_lits_pos[TOTAL_CLAUSES];
+    int n_lits_neg[TOTAL_CLAUSES];
+    uint num_includes[TOTAL_CLAUSES];
+    int8_t clause_dirty[TOTAL_CLAUSES];
+    int selected_patch_ids[TOTAL_CLAUSES];
+    float votes[CLASSES];
+    float prob[CLASSES];
+    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
 
     for (int e = 0; e < N; e++) {
-        const int32_t* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
-        const int8_t* targets_sample = &targets[e * CLASSES];
+        fit_sample(rng, global_ta_states, clause_weights, patch_weights, clause_drop_mask, X, targets, e, feat_mins,
+                   literal_offsets, lit_to_fid, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
+                   n_lits_neg, num_includes, clause_dirty, selected_patch_ids, votes, prob);
 
-        pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg,
-                     n_lits_pos, n_lits_neg, num_includes, clause_dirty);
+        if ((e+1) % 1000 == 0) {
+            printf("\x1b[2K\rFit: %d/%d", e + 1, N);
+            fflush(stdout);
+        }
+    }
+    printf("\n");
+}
 
-        int selected_patch_ids[TOTAL_CLAUSES];
-        eval_clauses(rng, X_sample, clause_drop_mask, selected_patch_ids, num_includes, feat_mins, literal_offsets,
-                     clause_positions, included_lits_pos, n_lits_pos, included_lits_neg, n_lits_neg, lit_to_fid);
+void infer_sample(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums,
+                  const int* restrict feat_mins, const int* restrict clause_positions, const int* included_lits_pos,
+                  const int* included_lits_neg, const int* n_lits_pos, const int* n_lits_neg,
+                  const uint* restrict num_includes, const int* restrict lit_to_fid,
+                  const int* restrict literal_offsets) {
 
-        // Step 2: Count votes
-        float votes[CLASSES];
-        memset(votes, 0, sizeof(votes));
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        if (num_includes[clause] == 0) {
+            // Skip empty clauses during inference
+            continue;
+        }
+        const int* pos = &clause_positions[clause * 4];
 
-        for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-            if (selected_patch_ids[clause] != -1) {
-                ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
-                LOOP_CLASS_ID(class_id, clause) {
-                    // This needs to be atomic, so do not parallelize
-                    votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+        // Check if clause is valid (position bounds)
+        if (pos[0] >= pos[1] || pos[2] >= pos[3])
+            continue;
+
+        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
+        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        const int clause_n_lits_pos = n_lits_pos[clause];
+        const int clause_n_lits_neg = n_lits_neg[clause];
+
+        bool matched = false;
+
+        // Early exit on first matching patch
+        for (int py = pos[0]; py < pos[1] && !matched; ++py) {
+            for (int px = pos[2]; px < pos[3] && !matched; ++px) {
+                bool match = true;
+
+                // Check positive literals
+                for (int i = 0; i < clause_n_lits_pos && match; ++i) {
+                    int lit_idx = lits_pos[i];
+                    int fid = lit_to_fid[lit_idx];
+                    int bit = lit_idx - literal_offsets[fid];
+                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    if (shifted_val < bit + 1)
+                        match = false;
                 }
-                patch_weights[clause * N_PATCHES + selected_patch_ids[clause]]++;
+#if NEGATED_LITERALS
+                // Check negated literals
+                for (int i = 0; i < clause_n_lits_neg && match; ++i) {
+                    int lit_idx = lits_neg[i];
+                    int fid = lit_to_fid[lit_idx];
+                    int bit = lit_idx - literal_offsets[fid];
+                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    if (shifted_val > bit)
+                        match = false;
+                }
+#endif
+
+                if (match)
+                    matched = true;
             }
         }
 
-        // Step 3: Calculate update probabilities
-        float prob[CLASSES];
-        OMP_PARALLEL_FOR
-        for (ull class_id = 0; class_id < CLASSES; class_id++) {
-            int local_target = targets_sample[class_id];
-            if (local_target == 0) {
-                prob[class_id] = 0.0f;
-                continue;
+        if (matched) {
+            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
+            LOOP_CLASS_ID(class_id, clause) {
+                OMP_ATOMIC
+                class_sums[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
-
-            float y = (float)THRESH * (float)local_target;
-            float class_sum = (float)CLIP(votes[class_id], -THRESH, THRESH);
-            prob[class_id] = uprob_fun(class_sum, y);
         }
-
-        // Step 4: Update clauses
-        update_clauses(rng, selected_patch_ids, num_includes, global_ta_states, clause_weights, clause_drop_mask,
-                       X_sample, targets_sample, prob, feat_mins, literal_offsets, clause_dirty);
     }
 }
 
-void transform_patchwise(const int32_t* restrict X, int8_t* restrict patch_output, int N, const int* restrict feat_mins,
-                         const int* restrict clause_positions, const int* included_lits_pos,
-                         const int* included_lits_neg, const int* n_lits_pos, const int* n_lits_neg,
-                         const uint* restrict num_includes, const int* restrict lit_to_fid,
-                         const int* restrict literal_offsets) {
+void infer_batch(const uint* restrict global_ta_states, const float* restrict clause_weights, const int32_t* restrict X,
+                 int N, const int* restrict feat_mins, const int* restrict literal_offsets,
+                 const int* restrict lit_to_fid, float* restrict class_sums) {
+
+    int clause_positions[TOTAL_CLAUSES * 4];
+    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int n_lits_pos[TOTAL_CLAUSES];
+    int n_lits_neg[TOTAL_CLAUSES];
+    uint num_includes[TOTAL_CLAUSES];
+    int8_t clause_dirty[TOTAL_CLAUSES];
+    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
+    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
+                 n_lits_neg, num_includes, clause_dirty);
+
+    memset(class_sums, 0, sizeof(float) * N * CLASSES);
     for (int e = 0; e < N; e++) {
-        const int32_t* Xe = &X[e * HEIGHT * WIDTH * DEPTH];
-        int8_t* po = &patch_output[e * TOTAL_CLAUSES * N_PATCHES];
+        infer_sample(&X[e * HEIGHT * WIDTH * DEPTH], clause_weights, &class_sums[e * CLASSES], feat_mins,
+                     clause_positions, included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
+                     lit_to_fid, literal_offsets);
 
-        memset(po, 0, sizeof(int8_t) * TOTAL_CLAUSES * N_PATCHES);
+        if ((e+1) % 1000 == 0) {
+            printf("\x1b[2K\rInfer: %d/%d", e + 1, N);
+            fflush(stdout);
+        }
+    }
+    printf("\n");
 
-        OMP_PARALLEL_FOR
-        for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-            const int* pos = &clause_positions[clause * 4];
-            // Check if clause is valid (position bounds)
-            if (pos[0] >= pos[1] || pos[2] >= pos[3])
-                continue;
+}
 
-            if (num_includes[clause] == 0) {
-                // Clause is true for all patches
-                memset(&po[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
-                continue;
-            }
+void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_mins,
+                           const int* restrict literal_offsets, const int* restrict lit_to_fid,
+                           const int* restrict clause_positions, const int* restrict included_lits_pos,
+                           const int* included_lits_neg, const int* restrict n_lits_pos, const int* n_lits_neg,
+                           const uint* restrict num_includes, int8_t* restrict co_patchwise) {
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        if (num_includes[clause] == 0) {
+            // Empty clauses match all patches
+            memset(&co_patchwise[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
+        }
 
-            const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-            const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-            int clause_n_lits_pos = n_lits_pos[clause];
-            int clause_n_lits_neg = n_lits_neg[clause];
+        const int* pos = &clause_positions[clause * 4];
+        if (pos[0] >= pos[1] || pos[2] >= pos[3]) {
+            // Clause has contradiction, it doesn not match anything, so let the patchwise output be 0
+            continue;
+        }
 
-            // Early exit on first matching patch
-            for (int py = pos[0]; py < pos[1]; ++py) {
-                for (int px = pos[2]; px < pos[3]; ++px) {
-                    bool match = true;
+        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
+        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        const int clause_n_lits_pos = n_lits_pos[clause];
+        const int clause_n_lits_neg = n_lits_neg[clause];
 
-                    // Check positive literals
-                    for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-                        int lit_idx = lits_pos[i];
-                        int fid = lit_to_fid[lit_idx];
-                        int bit = lit_idx - literal_offsets[fid];
-                        int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                        if (shifted_val < bit + 1)
-                            match = false;
-                    }
+        for (int py = pos[0]; py < pos[1]; ++py) {
+            for (int px = pos[2]; px < pos[3]; ++px) {
+                bool match = true;
 
+                // Check positive literals
+                for (int i = 0; i < clause_n_lits_pos && match; ++i) {
+                    int lit_idx = lits_pos[i];
+                    int fid = lit_to_fid[lit_idx];
+                    int bit = lit_idx - literal_offsets[fid];
+                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    if (shifted_val < bit + 1)
+                        match = false;
+                }
 #if NEGATED_LITERALS
-                    // Check negated literals
-                    for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-                        int lit_idx = lits_neg[i];
-                        int fid = lit_to_fid[lit_idx];
-                        int bit = lit_idx - literal_offsets[fid];
-                        int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                        if (shifted_val > bit)
-                            match = false;
-                    }
+                // Check negated literals
+                for (int i = 0; i < clause_n_lits_neg && match; ++i) {
+                    int lit_idx = lits_neg[i];
+                    int fid = lit_to_fid[lit_idx];
+                    int bit = lit_idx - literal_offsets[fid];
+                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
+                    if (shifted_val > bit)
+                        match = false;
+                }
 #endif
-                    po[clause * N_PATCHES + py * N_PATCHES_X + px] = match;
+
+                if (match) {
+                    co_patchwise[clause * N_PATCHES + py * N_PATCHES_X + px] = 1;
                 }
             }
         }
     }
+}
+
+void transform_patchwise(const uint* restrict global_ta_states, const int32_t* restrict X, int N,
+                         const int* restrict feat_mins, const int* restrict literal_offsets,
+                         const int* restrict lit_to_fid, int8_t* restrict co_patchwise) {
+
+    int clause_positions[TOTAL_CLAUSES * 4];
+    int included_lits_pos[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int included_lits_neg[TOTAL_CLAUSES * N_PATCH_FEATS];
+    int n_lits_pos[TOTAL_CLAUSES];
+    int n_lits_neg[TOTAL_CLAUSES];
+    uint num_includes[TOTAL_CLAUSES];
+    int8_t clause_dirty[TOTAL_CLAUSES];
+    memset(clause_dirty, 1, sizeof(int8_t) * TOTAL_CLAUSES);
+    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
+                 n_lits_neg, num_includes, clause_dirty);
+
+    memset(co_patchwise, 0, sizeof(int8_t) * N * N_PATCHES);
+
+    for (int e = 0; e < N; e++) {
+        eval_sample_patchwise(&X[e * HEIGHT * WIDTH * DEPTH], feat_mins, literal_offsets, lit_to_fid, clause_positions,
+                              included_lits_pos, included_lits_neg, n_lits_pos, n_lits_neg, num_includes,
+                              &co_patchwise[e * N_PATCHES]);
+
+        if ((e+1) % 1000 == 0) {
+            printf("\x1b[2K\rTranform: %d/%d", e + 1, N);
+            fflush(stdout);
+        }
+    }
+    printf("\n");
 }

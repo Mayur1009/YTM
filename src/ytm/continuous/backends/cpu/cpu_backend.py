@@ -5,7 +5,6 @@ import tempfile
 from ctypes import CDLL, POINTER, c_bool, c_float, c_int, c_int8, c_int32, c_uint32
 
 import numpy as np
-from tqdm import tqdm
 
 from ..base import BaseDevice
 
@@ -120,9 +119,9 @@ class CPUDevice(BaseDevice):
         ]
         self.lib_pack_clauses.restype = None
 
-        # fit_batch signature
-        self.lib_fit_batch = self.lib.fit_batch
-        self.lib_fit_batch.argtypes = [
+        # fit_epoch signature
+        self.lib_fit_epoch = self.lib.fit_epoch
+        self.lib_fit_epoch.argtypes = [
             uint32_p,  # rng
             uint32_p,  # global_ta_states
             float_p,  # clause_weights
@@ -134,49 +133,31 @@ class CPUDevice(BaseDevice):
             int32_p,  # feat_mins
             int32_p,  # literal_offsets
             int32_p,  # lit_to_fid
-            int32_p,  # clause_positions
-            int32_p,  # included_lits_pos
-            int32_p,  # included_lits_neg
-            int32_p,  # n_lits_pos
-            int32_p,  # n_lits_neg
-            uint32_p,  # num_includes
-            int8_p,  # clause_dirty
         ]
-        self.lib_fit_batch.restype = None
 
         # infer_batch signature
         self.lib_infer_batch = self.lib.infer_batch
         self.lib_infer_batch.argtypes = [
-            int32_p,  # X
+            uint32_p,  # global_ta_states
             float_p,  # clause_weights
-            float_p,  # class_sums
+            int32_p,  # X
             c_int,  # N
             int32_p,  # feat_mins
-            int32_p,  # clause_positions
-            int32_p,  # included_lits_pos
-            int32_p,  # included_lits_neg
-            int32_p,  # n_lits_pos
-            int32_p,  # n_lits_neg
-            uint32_p,  # num_includes
-            int32_p,  # lit_to_fid
             int32_p,  # literal_offsets
+            int32_p,  # lit_to_fid
+            float_p,  # class_sums
         ]
         self.lib_infer_batch.restype = None
 
         self.lib_transform_patchwise = self.lib.transform_patchwise
         self.lib_transform_patchwise.argtypes = [
+            uint32_p,  # global_ta_states
             int32_p,  # X
-            int8_p,  # patch_output
             c_int,  # N
             int32_p,  # feat_mins
-            int32_p,  # clause_positions
-            int32_p,  # included_lits_pos
-            int32_p,  # included_lits_neg
-            int32_p,  # n_lits_pos
-            int32_p,  # n_lits_neg
-            uint32_p,  # num_includes
-            int32_p,  # lit_to_fid
             int32_p,  # literal_offsets
+            int32_p,  # lit_to_fid
+            int8_p,  # co_patchwise
         ]
         self.lib_transform_patchwise.restype = None
 
@@ -220,51 +201,28 @@ class CPUDevice(BaseDevice):
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
-        if batch_size == -1:
-            batch_size = N
 
         if clause_drop_p > 0.0:
             clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
-        p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
-        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
-        included_lits_pos = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        included_lits_neg = np.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        n_lits_pos = np.empty(self.total_clauses, dtype=np.int32)
-        n_lits_neg = np.empty(self.total_clauses, dtype=np.int32)
-        num_includes = np.empty(self.total_clauses, dtype=np.uint32)
-        clause_dirty = np.ones(self.total_clauses, dtype=np.int8)
+        X = X.astype(np.int32)
+        targets = targets.astype(np.int8)
 
-        for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
-            batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_targets = np.ascontiguousarray(targets[i:batch_end], dtype=np.int8)
-
-            p_X = batch_X.ctypes.data_as(int32_p)
-            p_targets = batch_targets.ctypes.data_as(int8_p)
-
-            self.lib_fit_batch(
-                self.p_rng,
-                self.p_ta_states,
-                self.p_clause_weights,
-                self.p_patch_weights,
-                p_clause_drop_mask,
-                p_X,
-                p_targets,
-                batch_end - i,
-                self.p_feat_mins,
-                self.p_literal_offsets,
-                self.p_lit_to_fid,
-                clause_positions.ctypes.data_as(int32_p),
-                included_lits_pos.ctypes.data_as(int32_p),
-                included_lits_neg.ctypes.data_as(int32_p),
-                n_lits_pos.ctypes.data_as(int32_p),
-                n_lits_neg.ctypes.data_as(int32_p),
-                num_includes.ctypes.data_as(uint32_p),
-                clause_dirty.ctypes.data_as(int8_p),
-            )
+        self.lib_fit_epoch(
+            self.p_rng,
+            self.p_ta_states,
+            self.p_clause_weights,
+            self.p_patch_weights,
+            clause_drop_mask.ctypes.data_as(int8_p),
+            X.ctypes.data_as(int32_p),
+            targets.ctypes.data_as(int8_p),
+            c_int(N),
+            self.p_feat_mins,
+            self.p_literal_offsets,
+            self.p_lit_to_fid,
+        )
 
     def pack_clauses(self):
         clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
@@ -296,88 +254,38 @@ class CPUDevice(BaseDevice):
 
     def infer(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
-        if batch_size == -1:
-            batch_size = N
+        X = X.astype(np.int32)
+        class_sums = np.empty((N, self.args.n_classes), dtype=np.float32)
 
-        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
-
-        bufs = self.pack_clauses()
-        p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
-        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
-        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
-        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
-        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
-        p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
-
-        for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
-            batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_class_sums = np.ascontiguousarray(class_sums[i:batch_end], dtype=np.float32)
-
-            p_X = batch_X.ctypes.data_as(int32_p)
-            p_class_sums = batch_class_sums.ctypes.data_as(float_p)
-
-            self.lib_infer_batch(
-                p_X,
-                self.p_clause_weights,
-                p_class_sums,
-                batch_end - i,
-                self.p_feat_mins,
-                p_clause_positions,
-                p_included_lits_pos,
-                p_included_lits_neg,
-                p_n_lits_pos,
-                p_n_lits_neg,
-                p_num_includes,
-                self.p_lit_to_fid,
-                self.p_literal_offsets,
-            )
-
-            class_sums[i:batch_end] = batch_class_sums
+        self.lib_infer_batch(
+            self.p_ta_states,
+            self.p_clause_weights,
+            X.ctypes.data_as(int32_p),
+            c_int(N),
+            self.p_feat_mins,
+            self.p_literal_offsets,
+            self.p_lit_to_fid,
+            class_sums.ctypes.data_as(float_p),
+        )
 
         return class_sums
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
-        if batch_size == -1:
-            batch_size = N
+        X = X.astype(np.int32)
+        patch_outputs = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
 
-        patch_outputs = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
+        self.lib_transform_patchwise(
+            self.p_ta_states,
+            X.ctypes.data_as(int32_p),
+            c_int(N),
+            self.p_feat_mins,
+            self.p_literal_offsets,
+            self.p_lit_to_fid,
+            patch_outputs.ctypes.data_as(int8_p),
+        )
 
-        bufs = self.pack_clauses()
-        p_clause_positions = bufs["clause_positions"].ctypes.data_as(int32_p)
-        p_included_lits_pos = bufs["included_lits_pos"].ctypes.data_as(int32_p)
-        p_included_lits_neg = bufs["included_lits_neg"].ctypes.data_as(int32_p)
-        p_n_lits_pos = bufs["n_lits_pos"].ctypes.data_as(int32_p)
-        p_n_lits_neg = bufs["n_lits_neg"].ctypes.data_as(int32_p)
-        p_num_includes = bufs["num_includes"].ctypes.data_as(uint32_p)
-
-        for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
-            batch_end = min(i + batch_size, N)
-            batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int32)
-            batch_po = np.ascontiguousarray(patch_outputs[i:batch_end], dtype=np.int8)
-
-            p_X = batch_X.ctypes.data_as(int32_p)
-            p_po = batch_po.ctypes.data_as(int8_p)
-
-            self.lib_transform_patchwise(
-                p_X,
-                p_po,
-                batch_end - i,
-                self.p_feat_mins,
-                p_clause_positions,
-                p_included_lits_pos,
-                p_included_lits_neg,
-                p_n_lits_pos,
-                p_n_lits_neg,
-                p_num_includes,
-                self.p_lit_to_fid,
-                self.p_literal_offsets,
-            )
-
-            patch_outputs[i:batch_end] = batch_po
-
-        return patch_outputs.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches))
+        return patch_outputs.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
 
     def get_weights(self):
         return self.clause_weights
