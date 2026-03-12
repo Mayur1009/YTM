@@ -28,13 +28,13 @@ class CPUDevice(BaseDevice):
 
         so_file = c_file.replace(".c", ".so")
 
+        compiler_flags = list(self.args.compile_flags)
+
         if shutil.which("clang"):
             compiler = "clang"
-            base_args = ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native"]
             omp_args = ["-fopenmp", "-lomp"]
         elif shutil.which("gcc"):
             compiler = "gcc"
-            base_args = ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native"]
             omp_args = ["-fopenmp", "-lgomp"]
         else:
             raise RuntimeError("No suitable C compiler found (clang or gcc)")
@@ -42,7 +42,7 @@ class CPUDevice(BaseDevice):
         if self.args.n_threads > 1:
             try:
                 subprocess.run(
-                    [compiler] + base_args + omp_args + [c_file, "-o", so_file],
+                    [compiler] + compiler_flags + omp_args + [c_file, "-o", so_file],
                     check=True,
                     capture_output=True,
                 )
@@ -53,7 +53,7 @@ class CPUDevice(BaseDevice):
         else:
             try:
                 subprocess.run(
-                    [compiler] + base_args + [c_file, "-o", so_file],
+                    [compiler] + compiler_flags + [c_file, "-o", so_file],
                     check=True,
                     capture_output=True,
                 )

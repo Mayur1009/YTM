@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Literal, TypedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass()
@@ -33,6 +33,7 @@ class TMArgs:
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
     n_threads: int = 1
+    compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native"])
     grid_size: int | None = None
     block_size: int = 128
 
@@ -91,5 +92,6 @@ class T_args(TypedDict, total=False):
     seed: int
     device: Literal["cpu", "cuda"]
     n_threads: int
+    compile_flags: list[str]
     grid_size: int | None
     block_size: int
