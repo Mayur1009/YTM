@@ -71,8 +71,8 @@ class TMArgs:
 
 
 class T_args(TypedDict, total=False):
-    feat_mins: int | np.ndarray | None
-    feat_maxs: int | np.ndarray | None
+    feat_mins: int | np.ndarray
+    feat_maxs: int | np.ndarray
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
     q: float

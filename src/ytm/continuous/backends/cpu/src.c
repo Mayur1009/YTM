@@ -70,14 +70,10 @@ void set_num_threads(int num_threads) { omp_set_num_threads(num_threads); }
 #define OMP_SIMD
 #define GET_THREAD_ID 0
 #endif
+#define UINT_MAX_INV (1.0f / UINT_MAX)
 
 typedef unsigned long long ull;
 typedef unsigned int uint;
-
-#define UINT_MAX_INV (1.0f / UINT_MAX)
-
-static inline void max(int* a, int b) { *a = (*a > b) ? *a : b; }
-static inline void min(int* a, int b) { *a = (*a < b) ? *a : b; }
 
 // Rng
 static inline float xorshift32(uint* state) {
@@ -171,14 +167,10 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
     for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
-
-        int32_t val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
-        int shifted_val = val - feat_mins[fid];
-
-        // Positive literals: bits [0, shifted_val) are 1, [shifted_val, n_bits) are 0
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
+        // Positive literals: bits [0, shifted_val) are 1, [shifted_val, lit_end) are 0
         literal_inc(ta_state, lit_start, lit_start + shifted_val, 0, MAX_TA_STATE);
         literal_dec_with_p(rng, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
-
 #if NEGATED_LITERALS
         // Negated: bits [0, shifted_val) are 0, [shifted_val, n_bits) are 1
         literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
@@ -238,180 +230,246 @@ static inline void type2_fb(uint* restrict ta_state, float* restrict weight, con
         int32_t val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
         int shifted_val = val - feat_mins[fid];
 
-        // Positive literals: increment where value is 0, i.e., [shifted_val, n_bits)
+        // Positive literals: increment where value is 0, i.e., [shifted_val, lit_end)
         literal_inc(ta_state, lit_start + shifted_val, lit_end, 0, INCLUDE_STATE);
 
 #if NEGATED_LITERALS
-        // Negated: increment where value is 0, i.e., [0, shifted_val)
+        // Negated: increment where value is 0, i.e., [lit_start, shifted_val)
         literal_inc(ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, INCLUDE_STATE);
 #endif
     }
 #endif
 }
 
-// ============================================================================
-// Clause evaluation and update
-// ============================================================================
+static inline bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
+static inline int min(int a, int b) { return (a < b) ? a : b; }
+static inline int max(int a, int b) { return (a > b) ? a : b; }
 
-void pack_clauses(const uint* restrict global_ta_states, const int* restrict literal_offsets,
-                  int* restrict clause_positions, int* restrict included_lits_pos, int* restrict included_lits_neg,
-                  int* restrict n_lits_pos, int* restrict n_lits_neg, uint* restrict num_includes,
-                  int8_t* restrict clause_dirty) {
-    OMP_PARALLEL_FOR
-    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        if (!clause_dirty[clause])
+static inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin, const int* cfmax,
+                               const int* feat_mins, const int8_t* is_feat_empty) {
+    for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
+        if (is_feat_empty[fid])
             continue;
 
-        const uint* ta_state = &global_ta_states[clause * N_LITERALS];
-        int* pos = &clause_positions[clause * 4];
-        int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
+        if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
+            return false;
+    }
+    return true;
+}
+
+void pack_clauses(const uint* restrict global_ta_states, const int* literal_offsets, int* restrict clause_positions,
+                  int* restrict clause_feat_min, int* restrict clause_feat_max, int8_t* restrict is_feat_empty,
+                  uint* restrict num_includes, int8_t* is_clause_valid, int8_t* restrict is_clause_synced) {
+    /*
+     * Create a sparse ranged representation for the clauses. This is possible since all the features in the clause are
+     * encoded using thermometer encoding.
+     *
+     * Inputs:
+     * - global_ta_states[TOTAL_CLAUSES * N_LITERALS]: the state of each TA for each clause
+     * - literal_offsets[N_RAW_PATCH_FEATS + 1]: Prefix sum array of the number of bins for each feature.
+     *
+     * Outputs:
+     * - clause_positions[TOTAL_CLAUSES * 4]: the postional bounds(inclusive) for the clause in the format [min_row,
+     * max_row, min_col, max_col]
+     * - clause_feat_min[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive lower bound for each feature in the clause
+     * - clause_feat_max[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive upper bound for each feature in the clause
+     * - is_feat_empty[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: Boolean indicating if the feature is empty for the clause
+     * - num_includes[TOTAL_CLAUSES]: The number of included literals in the clause.
+     * - is_clause_synced[TOTAL_CLAUSES]: Boolean indicating if the packed clause is in sync with the actual TA states.
+     * If not, it needs to be repacked.
+     */
+
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        // Skip if clause and packed clause is in sync
+        if (is_clause_synced[clause])
+            continue;
+
+        const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
+        uint* total_includes = &num_includes[clause];
+        int* pos = &clause_positions[clause * 4]; // [min_row, max_row, min_col, max_col]
+        is_clause_valid[clause] = 1;
 
         // Initialize position bounds
         pos[0] = 0;           // min_row
         pos[1] = N_PATCHES_Y; // max_row
         pos[2] = 0;           // min_col
         pos[3] = N_PATCHES_X; // max_col
+        (*total_includes) = 0;
 
-        int local_n_pos = 0;
-        int local_n_neg = 0;
-        uint total_includes = 0;
+        // Scaning of thermometer literals:
+        // Scan positive literals in reverse order to find the first included literal. The the bound for that feature is
+        // >= bit+1. Scan negative literals in normal order to find the first included literal. Then the bound for that
+        // feature is <= bit.
 
 #if POSITION_LITERALS
         // Scan Y position literals
         for (int lit = 0; lit < N_POSITION_FEATS_Y; ++lit) {
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                max(&pos[0], lit + 1);
-                total_includes++;
+            if (is_included(ta_state[lit])) {
+                pos[0] = max(pos[0], lit + 1);
+                (*total_includes)++;
             }
 #if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                min(&pos[1], lit + 1);
-                total_includes++;
+            if (is_included(ta_state[lit + N_LITERALS / 2])) {
+                pos[1] = min(pos[1], lit);
+                (*total_includes)++;
             }
 #endif
         }
 
         // Scan X position literals
-        for (int lit = N_POSITION_FEATS_Y; lit < N_POSITION_FEATS; ++lit) {
-            int x_lit = lit - N_POSITION_FEATS_Y;
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                max(&pos[2], x_lit + 1);
-                total_includes++;
+        int offset = N_POSITION_FEATS_Y;
+        for (int lit = 0; lit < N_POSITION_FEATS_X; ++lit) {
+            if (is_included(ta_state[offset + lit])) {
+                pos[2] = max(pos[2], lit + 1);
+                (*total_includes)++;
             }
 #if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                min(&pos[3], x_lit + 1);
-                total_includes++;
+            if (is_included(ta_state[offset + lit + N_LITERALS / 2])) {
+                pos[3] = min(pos[3], lit);
+                (*total_includes)++;
             }
 #endif
         }
 #endif
 
-        // Scan feature literals - store indices
-        for (int lit_idx = 0; lit_idx < N_PATCH_FEATS; ++lit_idx) {
-            int lit = N_POSITION_FEATS + lit_idx;
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                lits_pos[local_n_pos++] = lit_idx;
-                total_includes++;
-            }
-#if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                lits_neg[local_n_neg++] = lit_idx;
-                total_includes++;
-            }
-#endif
-        }
-
-        n_lits_pos[clause] = local_n_pos;
-        n_lits_neg[clause] = local_n_neg;
-        num_includes[clause] = total_includes;
-
-        clause_dirty[clause] = 0;
-    }
-}
-
-void eval_clauses(uint* restrict rng, const int32_t* restrict X, const int8_t* restrict clause_drop_mask,
-                  int* restrict selected_patch_ids, const uint* restrict num_includes, const int* restrict feat_mins,
-                  const int* restrict literal_offsets, const int* restrict clause_positions,
-                  const int* restrict included_lits_pos, const int* restrict n_lits_pos, const int* included_lits_neg,
-                  const int* restrict n_lits_neg, const int* restrict lit_to_fid) {
-    OMP_PARALLEL_FOR
-    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        // Skip dropped clauses
-        if (clause_drop_mask[clause] == 1) {
-            selected_patch_ids[clause] = -1;
+        if (pos[0] > pos[1] || pos[2] > pos[3]) {
+            // Clause has contradiction
+            is_clause_valid[clause] = 0;
+            is_clause_synced[clause] = 1;
             continue;
         }
 
-        const int* pos = &clause_positions[clause * 4];
+        // Scan features literals
+        int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
+        int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
+            int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
+            int lstart = N_POSITION_FEATS + literal_offsets[fid];
+            int fempty = 1;
 
-        if (pos[0] >= pos[1] || pos[2] >= pos[3]) {
-            // Clause has contradiction
-            selected_patch_ids[clause] = -1;
+            // Init the bounds to max
+            cfmin[fid] = 0;
+            cfmax[fid] = n_bits;
+
+            for (int bit = 0; bit < n_bits; ++bit) {
+                if (is_included(ta_state[lstart + bit])) {
+                    cfmin[fid] = max(cfmin[fid], bit + 1);
+                    (*total_includes)++;
+                    fempty = 0;
+                }
+#if NEGATED_LITERALS
+                if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
+                    cfmax[fid] = min(cfmax[fid], bit);
+                    (*total_includes)++;
+                    fempty = 0;
+                }
+#endif
+            }
+            if (cfmin[fid] > cfmax[fid]) {
+                is_clause_valid[clause] = 0;
+            }
+            is_feat_empty[clause * N_RAW_PATCH_FEATS + fid] = fempty;
+        }
+
+        // Syncing complete
+        is_clause_synced[clause] = 1;
+    }
+}
+
+void eval_clauses(uint* restrict rng, const int* restrict clause_positions, const int* restrict clause_feat_min,
+                  const int* restrict clause_feat_max, const int8_t* restrict is_feat_empty,
+                  const uint* restrict num_includes, const int8_t* restrict is_clause_valid,
+                  const int8_t* restrict clause_drop_mask, const int* restrict feat_mins, const int* restrict X,
+                  const int e, int* selected_pids) {
+    /*
+     * Evaluate clauses on a input, and randomly select a patch which is matching.
+     * Inputs:
+     * - rng: RNG states for each thread
+     * - clause_positions[TOTAL_CLAUSES * 4]: the postional bounds(inclusive) of the clause.
+     * - clause_feat_min[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive lower bound for each feature in the clause.
+     * - clause_feat_max[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive upper bound for each feature in the clause.
+     * - is_feat_empty[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: Is the feature empty, meaning it will match all the bins.
+     * - num_includes[TOTAL_CLAUSES]: The number of included literals in the clause.
+     * - is_clause_valid[TOTAL_CLAUSES]: invalid if clause has contradiction, and can never be true.
+     * - clause_drop_mask[TOTAL_CLAUSES]: 1 if the clause is dropped.
+     * - feat_mins[N_RAW_PATCH_FEATS]: The minimum value for each feature across the dataset.
+     * - X[Samples * HEIGHT * WIDTH * DEPTH]: The input samples.
+     * - e: the index of the sample to evaluate on.
+     * Outputs:
+     * - selected_pids[TOTAL_CLAUSES]: the selected patch id for each clause.
+     */
+    OMP_PARALLEL_FOR
+    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
+        // Skip dropped clauses and invalid clauses
+        if (clause_drop_mask[clause] == 1 && is_clause_valid[clause] == 0) {
+            selected_pids[clause] = -1;
             continue;
         }
 
         if (num_includes[clause] == 0) {
             // Empty clause: randomly select a patch
-            selected_patch_ids[clause] = (int)(xorshift32(&rng[GET_THREAD_ID]) * N_PATCHES);
+            selected_pids[clause] = (int)(xorshift32(&rng[GET_THREAD_ID]) * (ull)N_PATCHES);
             continue;
         }
 
-        int selected_patch = -1;
+        const int* Xe = &X[(ull)e * (ull)HEIGHT * (ull)WIDTH * (ull)DEPTH];
+        const int* pos = &clause_positions[clause * 4];
+        const int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        const int8_t* fempty = &is_feat_empty[clause * N_RAW_PATCH_FEATS];
+        int* selected_patch = &selected_pids[clause];
         int active_patch_count = 0;
+        selected_patch[0] = -1; // -1 means no patch matches the clause
 
+        // Check only the postions where clause can be true.
         for (int patch_idx_y = pos[0]; patch_idx_y < pos[1]; patch_idx_y++) {
             for (int patch_idx_x = pos[2]; patch_idx_x < pos[3]; patch_idx_x++) {
-                const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-                const int clause_n_lits_pos = n_lits_pos[clause];
-                bool matches = true;
-
-                for (int i = 0; matches && i < clause_n_lits_pos; ++i) {
-                    int lit_idx = lits_pos[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
-                    if (shifted_val < bit + 1)
-                        matches = false;
-                }
-#if NEGATED_LITERALS
-                const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-                const int clause_n_lits_neg = n_lits_neg[clause];
-                for (int i = 0; matches && i < clause_n_lits_neg; ++i) {
-                    int lit_idx = lits_neg[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
-                    if (shifted_val > bit)
-                        matches = false;
-                }
-#endif
-
-                if (matches) {
+                bool patch_matches = match_patch(Xe, patch_idx_y, patch_idx_x, cfmin, cfmax, feat_mins, fempty);
+                if (patch_matches) {
+                    // Reservoir sampling to select a patch.
                     active_patch_count++;
                     if (xorshift32(&rng[GET_THREAD_ID]) < 1.0f / active_patch_count) {
-                        selected_patch = patch_idx_y * N_PATCHES_X + patch_idx_x;
+                        *selected_patch = patch_idx_y * N_PATCHES_X + patch_idx_x;
                     }
                 }
             }
         }
-
-        selected_patch_ids[clause] = selected_patch;
     }
 }
 
-void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids,
-                    const uint* restrict clause_num_includes, uint* restrict global_ta_states,
-                    float* restrict clause_weights, const int8_t* restrict clause_drop_mask, const int32_t* restrict X,
-                    const int8_t* restrict targets, const float* restrict prob, const int* restrict feat_mins,
-                    const int* restrict literal_offsets, int8_t* restrict clause_dirty) {
+void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, const uint* restrict num_includes,
+                    const int8_t* restrict clause_drop_mask, const int* restrict X, const int8_t* restrict targets,
+                    const int e, const float* restrict prob, const int* restrict feat_mins,
+                    const int* restrict literal_offsets, int8_t* restrict is_clause_synced,
+                    uint* restrict global_ta_states, float* restrict clause_weights) {
+    /*
+     * Update clauses.
+     * Inputs:
+     *   - rng: RNG states for each thread
+     *   - selected_patch_ids[TOTAL_CLAUSES]: the selected patch id for each clause. -1 if no patch matches the clause.
+     *   - num_includes[TOTAL_CLAUSES]: The number of included literals in the clause.
+     *   - clause_drop_mask[TOTAL_CLAUSES]: 1 if the clause is dropped.
+     *   - X[Samples * HEIGHT * WIDTH * DEPTH]: The input samples.
+     *   - targets[Samples * CLASSES]: The target labels for each sample and class
+     *   - e: the index of the sample to evaluate on.
+     *   - prob[CLASSES]: The probability to update for each class.
+     *   - feat_mins[N_RAW_PATCH_FEATS]: The minimum value for each feature across the dataset.
+     *   - literal_offsets[N_RAW_PATCH_FEATS + 1]: Prefix sum array of the number of bins for each feature.
+     *   - is_clause_synced[TOTAL_CLAUSES]: Boolean array indicating if the packed clause is in sync with the actual TA
+     * states.
+     *   - global_ta_states[TOTAL_CLAUSES * N_LITERALS]: the state of each TA for each clause
+     *   - clause_weights[CLAUSES_PER_CLASS * CLASSES]: the weight for each clause and class.
+     */
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         // Skip dropped clauses
         if (clause_drop_mask[clause] == 1)
             continue;
 
+        const int* Xe = &X[(ull)e * (ull)HEIGHT * (ull)WIDTH * (ull)DEPTH];
         uint* ta_state = &global_ta_states[clause * N_LITERALS];
+        bool clause_has_space = num_includes[clause] <= (uint)MAX_INCLUDED_LITERALS;
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
 
         // Get patch coordinates if clause was active
@@ -421,76 +479,72 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids,
             patch_idx_x = selected_patch_ids[clause] % N_PATCHES_X;
         }
 
-        uint num_includes = clause_num_includes[clause];
-
         ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
-            int local_target = targets[class_id];
+            int local_target = targets[e * CLASSES + class_id];
             if (local_target == 0)
                 continue;
 
             float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
 
-            float update_prob = prob[class_id];
-            bool should_update = (xorshift32(&rng[GET_THREAD_ID]) <= update_prob);
-            bool clause_has_space = (num_includes <= (uint)MAX_INCLUDED_LITERALS);
+            bool should_update = (xorshift32(&rng[GET_THREAD_ID]) <= prob[class_id]);
             bool t1 = (local_target * sign) > 0;
+            bool t2 = (local_target * sign) < 0;
 
             // Type 1a feedback - TP - clause is active with correct polarity and has space
             if (should_update && t1 && local_clause_output && clause_has_space) {
-                type1a_fb(&rng[GET_THREAD_ID], ta_state, local_weight, X, patch_idx_y, patch_idx_x, sign, feat_mins,
+                type1a_fb(&rng[GET_THREAD_ID], ta_state, local_weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins,
                           literal_offsets);
-                clause_dirty[clause] = 1;
+                is_clause_synced[clause] = 0;
             }
 
             // Type 1b feedback - FN - clause is inactive or overflowing, but should have been active
             if (should_update && t1 && !(local_clause_output && clause_has_space)) {
                 type1b_fb(&rng[GET_THREAD_ID], ta_state, sign);
-                clause_dirty[clause] = 1;
+                is_clause_synced[clause] = 0;
             }
 
             // Type 2 feedback - FP - clause is active but has wrong polarity
-            if (should_update && (local_target * sign) < 0 && local_clause_output) {
-                type2_fb(ta_state, local_weight, X, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
-                clause_dirty[clause] = 1;
+            if (should_update && t2 && local_clause_output) {
+                type2_fb(ta_state, local_weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
+                is_clause_synced[clause] = 0;
             }
         }
     }
 }
 
 void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
-                int* restrict patch_weights, const int8_t* restrict clause_drop_mask, const int32_t* restrict X,
-                const int8_t* restrict targets, int e, const int* restrict feat_mins,
-                const int* restrict literal_offsets, const int* restrict lit_to_fid, int* restrict clause_positions,
-                int* restrict included_lits_pos, int* restrict included_lits_neg, int* restrict n_lits_pos,
-                int* restrict n_lits_neg, uint* restrict num_includes, int8_t* restrict clause_dirty,
-                int* restrict selected_patch_ids, float* restrict votes, float* restrict prob) {
+                int* restrict patch_weights, const int* restrict feat_mins, const int* restrict literal_offsets,
+                const int8_t* restrict clause_drop_mask, const int32_t* restrict X, const int8_t* restrict targets,
+                const int e,
+                // Array allocations
+                int* restrict clause_positions, int* restrict clause_feat_min, int* restrict clause_feat_max,
+                int8_t* restrict is_feat_empty, uint* restrict num_includes, int8_t* restrict is_clause_valid,
+                int8_t* restrict is_clause_synced, int* restrict selected_pids, float* restrict votes,
+                float* restrict prob) {
 
-    const int32_t* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    const int8_t* targets_sample = &targets[(ull)e * CLASSES];
+    pack_clauses(global_ta_states, literal_offsets, clause_positions, clause_feat_min, clause_feat_max, is_feat_empty,
+                 num_includes, is_clause_valid, is_clause_synced);
 
-    pack_clauses(global_ta_states, literal_offsets, clause_positions, included_lits_pos, included_lits_neg, n_lits_pos,
-                 n_lits_neg, num_includes, clause_dirty);
-
-    eval_clauses(rng, Xe, clause_drop_mask, selected_patch_ids, num_includes, feat_mins, literal_offsets,
-                 clause_positions, included_lits_pos, n_lits_pos, included_lits_neg, n_lits_neg, lit_to_fid);
+    eval_clauses(rng, clause_positions, clause_feat_min, clause_feat_max, is_feat_empty, num_includes, is_clause_valid,
+                 clause_drop_mask, feat_mins, X, e, selected_pids);
 
     memset(votes, 0, sizeof(float) * CLASSES);
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        if (selected_patch_ids[clause] != -1) {
+        if (selected_pids[clause] != -1) {
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
                 OMP_ATOMIC
                 votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
-            patch_weights[clause * N_PATCHES + selected_patch_ids[clause]]++;
+            patch_weights[clause * N_PATCHES + selected_pids[clause]]++;
         }
     }
 
     OMP_PARALLEL_FOR
     for (ull class_id = 0; class_id < CLASSES; class_id++) {
-        int local_target = targets_sample[class_id];
+        int local_target = targets[e * CLASSES + class_id];
         if (local_target == 0) {
             prob[class_id] = 0.0f;
             continue;
@@ -501,135 +555,84 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
         prob[class_id] = uprob_fun(class_sum, y);
     }
 
-    update_clauses(rng, selected_patch_ids, num_includes, global_ta_states, clause_weights, clause_drop_mask, Xe,
-                   targets_sample, prob, feat_mins, literal_offsets, clause_dirty);
+    update_clauses(rng, selected_pids, num_includes, clause_drop_mask, X, targets, e, prob, feat_mins, literal_offsets,
+                   is_clause_synced, global_ta_states, clause_weights);
 }
 
-void infer_sample(const int32_t* restrict X, const float* restrict clause_weights, float* restrict class_sums, int e,
-                  const int* restrict feat_mins, const int* restrict clause_positions, const int* included_lits_pos,
-                  const int* included_lits_neg, const int* n_lits_pos, const int* n_lits_neg,
-                  const uint* restrict num_includes, const int* restrict lit_to_fid,
-                  const int* restrict literal_offsets) {
+void infer_sample(const float* restrict clause_weights, const int* restrict clause_positions,
+                  const int* restrict clause_feat_min, const int* restrict clause_feat_max,
+                  const int8_t* restrict is_feat_empty, const uint* restrict num_includes,
+                  const int8_t* restrict is_clause_valid, const int* restrict literal_offsets,
+                  const int* restrict feat_mins, const int* restrict X, const int e, float* restrict class_sums) {
 
-    float* class_sums_e = &class_sums[(ull)e * CLASSES];
-    const int32_t* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    memset(class_sums_e, 0, sizeof(float) * CLASSES);
+    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    float* cse = &class_sums[(ull)e * CLASSES];
+    memset(cse, 0, sizeof(float) * CLASSES);
 
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        if (num_includes[clause] == 0) {
-            // Skip empty clauses during inference
+        // Skip empty and invalid clauses
+        if (num_includes[clause] == 0 || is_clause_valid[clause] == 0) {
             continue;
         }
+
         const int* pos = &clause_positions[clause * 4];
-
-        // Check if clause is valid (position bounds)
-        if (pos[0] >= pos[1] || pos[2] >= pos[3])
-            continue;
-
-        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-        const int clause_n_lits_pos = n_lits_pos[clause];
-        const int clause_n_lits_neg = n_lits_neg[clause];
-
-        bool matched = false;
+        const int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        const int8_t* fempty = &is_feat_empty[clause * N_RAW_PATCH_FEATS];
+        bool matching_patch_found = false;
 
         // Early exit on first matching patch
-        for (int py = pos[0]; py < pos[1] && !matched; ++py) {
-            for (int px = pos[2]; px < pos[3] && !matched; ++px) {
-                bool match = true;
-
-                // Check positive literals
-                for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-                    int lit_idx = lits_pos[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                    if (shifted_val < bit + 1)
-                        match = false;
-                }
-#if NEGATED_LITERALS
-                // Check negated literals
-                for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-                    int lit_idx = lits_neg[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                    if (shifted_val > bit)
-                        match = false;
-                }
-#endif
-
-                if (match)
-                    matched = true;
+        for (int py = pos[0]; !matching_patch_found && py < pos[1]; ++py) {
+            for (int px = pos[2]; !matching_patch_found && px < pos[3]; ++px) {
+                matching_patch_found = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, fempty);
             }
         }
 
-        if (matched) {
+        // If a matching patch is found, add the clause weight to the class sum.
+        if (matching_patch_found) {
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
                 OMP_ATOMIC
-                class_sums_e[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
+                cse[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
         }
     }
 }
 
-void eval_sample_patchwise(const int32_t* restrict X, const int* restrict feat_mins,
-                           const int* restrict literal_offsets, const int* restrict lit_to_fid,
-                           const int* restrict clause_positions, const int* restrict included_lits_pos,
-                           const int* included_lits_neg, const int* restrict n_lits_pos, const int* n_lits_neg,
-                           const uint* restrict num_includes, int8_t* restrict co_patchwise, int e) {
+void eval_sample_patchwise(const float* restrict clause_weights, const int* restrict clause_positions,
+                           const int* restrict clause_feat_min, const int* restrict clause_feat_max,
+                           const int8_t* restrict is_feat_empty, const uint* restrict num_includes,
+                           const int8_t* restrict is_clause_valid, const int* restrict literal_offsets,
+                           const int* restrict feat_mins, const int* restrict X, const int e,
+                           int8_t* restrict co_patchwise) {
 
-    int8_t* co_patchwise_e = &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES];
+    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    int8_t* copwe = &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES];
+    memset(copwe, 0, sizeof(int8_t) * TOTAL_CLAUSES * N_PATCHES); // Initialize with 0
 
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         if (num_includes[clause] == 0) {
-            // Empty clauses match all patches
-            memset(&co_patchwise_e[clause * N_PATCHES], 1, sizeof(int8_t) * N_PATCHES);
+            // Empty clause: matches all patches
+            memset(&copwe[clause * (ull)N_PATCHES], 1, sizeof(int8_t) * (ull)N_PATCHES);
+            continue;
+        }
+
+        if (is_clause_valid[clause] == 0) {
+            // Invalid clause: matches no patches
             continue;
         }
 
         const int* pos = &clause_positions[clause * 4];
-        if (pos[0] >= pos[1] || pos[2] >= pos[3]) {
-            // Clause has contradiction, it doesn not match anything, so let the patchwise output be 0
-            continue;
-        }
-
-        const int* lits_pos = &included_lits_pos[clause * N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * N_PATCH_FEATS];
-        const int clause_n_lits_pos = n_lits_pos[clause];
-        const int clause_n_lits_neg = n_lits_neg[clause];
+        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int8_t* fempty = &is_feat_empty[clause * N_RAW_PATCH_FEATS];
 
         for (int py = pos[0]; py < pos[1]; ++py) {
             for (int px = pos[2]; px < pos[3]; ++px) {
-                bool match = true;
-
-                // Check positive literals
-                for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-                    int lit_idx = lits_pos[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
-                    if (shifted_val < bit + 1)
-                        match = false;
-                }
-#if NEGATED_LITERALS
-                // Check negated literals
-                for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-                    int lit_idx = lits_neg[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(X, py, px, fid) - feat_mins[fid];
-                    if (shifted_val > bit)
-                        match = false;
-                }
-#endif
-
-                if (match) {
-                    co_patchwise_e[clause * N_PATCHES + py * N_PATCHES_X + px] = 1;
-                }
+                copwe[clause * (ull)N_PATCHES + py * (ull)N_PATCHES_X + px] =
+                    match_patch(Xe, py, px, cfmin, cfmax, feat_mins, fempty);
             }
         }
     }
