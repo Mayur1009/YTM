@@ -156,7 +156,8 @@ class CPUDevice(BaseDevice):
         clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
         clause_feat_min = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         clause_feat_max = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        is_feat_empty = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int8)
+        constrained_fids = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        n_constrained = np.empty(self.total_clauses, dtype=np.int32)
         num_includes = np.empty(self.total_clauses, dtype=np.uint32)
         is_clause_valid = np.empty(self.total_clauses, dtype=np.int8)
         is_clause_synced = np.zeros(self.total_clauses, dtype=np.int8)  # Make sure this is initialized to 0
@@ -179,7 +180,8 @@ class CPUDevice(BaseDevice):
                 clause_positions.ctypes.data_as(int32_p),
                 clause_feat_min.ctypes.data_as(int32_p),
                 clause_feat_max.ctypes.data_as(int32_p),
-                is_feat_empty.ctypes.data_as(int8_p),
+                constrained_fids.ctypes.data_as(int32_p),
+                n_constrained.ctypes.data_as(int32_p),
                 num_includes.ctypes.data_as(uint32_p),
                 is_clause_valid.ctypes.data_as(int8_p),
                 is_clause_synced.ctypes.data_as(int8_p),
@@ -192,7 +194,8 @@ class CPUDevice(BaseDevice):
         clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
         clause_feat_min = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         clause_feat_max = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        is_feat_empty = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int8)
+        constrained_fids = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        n_constrained = np.empty(self.total_clauses, dtype=np.int32)
         num_includes = np.empty(self.total_clauses, dtype=np.uint32)
         is_clause_valid = np.empty(self.total_clauses, dtype=np.int8)
         is_clause_synced = np.zeros(self.total_clauses, dtype=np.int8)
@@ -203,7 +206,8 @@ class CPUDevice(BaseDevice):
             clause_positions.ctypes.data_as(int32_p),
             clause_feat_min.ctypes.data_as(int32_p),
             clause_feat_max.ctypes.data_as(int32_p),
-            is_feat_empty.ctypes.data_as(int8_p),
+            constrained_fids.ctypes.data_as(int32_p),
+            n_constrained.ctypes.data_as(int32_p),
             num_includes.ctypes.data_as(uint32_p),
             is_clause_valid.ctypes.data_as(int8_p),
             is_clause_synced.ctypes.data_as(int8_p),
@@ -212,7 +216,8 @@ class CPUDevice(BaseDevice):
             "clause_positions": clause_positions,
             "clause_feat_min": clause_feat_min,
             "clause_feat_max": clause_feat_max,
-            "is_feat_empty": is_feat_empty,
+            "constrained_fids": constrained_fids,
+            "n_constrained": n_constrained,
             "num_includes": num_includes,
             "is_clause_valid": is_clause_valid,
             "is_clause_synced": is_clause_synced,
@@ -223,8 +228,12 @@ class CPUDevice(BaseDevice):
         X = X.astype(np.int32)
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
 
+        from time import time
+        pack_start = time()
         # Pack clauses once for all samples
         bufs = self.pack_clauses()
+        pack_time = time() - pack_start
+        print(f"Clause packing time: {pack_time:.4f} seconds")
 
         for e in tqdm(range(N), desc="Infer", leave=False):
             self.lib.infer_sample(
@@ -232,10 +241,10 @@ class CPUDevice(BaseDevice):
                 bufs["clause_positions"].ctypes.data_as(int32_p),
                 bufs["clause_feat_min"].ctypes.data_as(int32_p),
                 bufs["clause_feat_max"].ctypes.data_as(int32_p),
-                bufs["is_feat_empty"].ctypes.data_as(int8_p),
+                bufs["constrained_fids"].ctypes.data_as(int32_p),
+                bufs["n_constrained"].ctypes.data_as(int32_p),
                 bufs["num_includes"].ctypes.data_as(uint32_p),
                 bufs["is_clause_valid"].ctypes.data_as(int8_p),
-                self.p_literal_offsets,
                 self.p_feat_mins,
                 X.ctypes.data_as(int32_p),
                 c_int(e),
@@ -258,10 +267,10 @@ class CPUDevice(BaseDevice):
                 bufs["clause_positions"].ctypes.data_as(int32_p),
                 bufs["clause_feat_min"].ctypes.data_as(int32_p),
                 bufs["clause_feat_max"].ctypes.data_as(int32_p),
-                bufs["is_feat_empty"].ctypes.data_as(int8_p),
+                bufs["constrained_fids"].ctypes.data_as(int32_p),
+                bufs["n_constrained"].ctypes.data_as(int32_p),
                 bufs["num_includes"].ctypes.data_as(uint32_p),
                 bufs["is_clause_valid"].ctypes.data_as(int8_p),
-                self.p_literal_offsets,
                 self.p_feat_mins,
                 X.ctypes.data_as(int32_p),
                 c_int(e),
@@ -294,33 +303,11 @@ class CPUDevice(BaseDevice):
         feat_mins = self.args.feat_mins
         feat_maxs = self.args.feat_maxs
 
-        # Initialize bounds: lower=feat_min, upper=feat_max (no constraint)
+        # Convert from shifted bounds to original feature space
+        # clause_feat_min/max are in shifted space (value - feat_min)
         feature_bounds = np.zeros((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
-        feature_bounds[:, :, 0] = feat_mins  # lower bounds
-        feature_bounds[:, :, 1] = feat_maxs  # upper bounds
-
-        # Process positive literals (define lower bounds)
-        for clause in range(self.total_clauses):
-            n_pos = bufs["n_lits_pos"][clause]
-            for i in range(n_pos):
-                lit_idx = bufs["included_lits_pos"][clause, i]
-                fid = self.lit_to_fid[lit_idx]
-                bit = lit_idx - self.literal_offsets[fid]
-                # Positive literal k means value >= (k + 1 + feat_min)
-                lower = bit + 1 + feat_mins[fid]
-                feature_bounds[clause, fid, 0] = max(feature_bounds[clause, fid, 0], lower)
-
-        # Process negated literals (define upper bounds)
-        if self.args.negated_literals:
-            for clause in range(self.total_clauses):
-                n_neg = bufs["n_lits_neg"][clause]
-                for i in range(n_neg):
-                    lit_idx = bufs["included_lits_neg"][clause, i]
-                    fid = self.lit_to_fid[lit_idx]
-                    bit = lit_idx - self.literal_offsets[fid]
-                    # Negated literal k means value < (k + 1 + feat_min), i.e., value <= k + feat_min
-                    upper = bit + feat_mins[fid]
-                    feature_bounds[clause, fid, 1] = min(feature_bounds[clause, fid, 1], upper)
+        feature_bounds[:, :, 0] = bufs["clause_feat_min"] + feat_mins  # lower bounds
+        feature_bounds[:, :, 1] = bufs["clause_feat_max"] + feat_mins  # upper bounds
 
         # Position bounds (convert from exclusive max to inclusive)
         position_bounds = None
@@ -330,13 +317,8 @@ class CPUDevice(BaseDevice):
             position_bounds[:, 1] -= 1  # max_y
             position_bounds[:, 3] -= 1  # max_x
 
-        # Check validity: lower <= upper for all features, and position bounds valid
-        is_valid = np.all(feature_bounds[:, :, 0] <= feature_bounds[:, :, 1], axis=1)
-        if position_bounds is not None:
-            pos_valid = (position_bounds[:, 0] <= position_bounds[:, 1]) & (
-                position_bounds[:, 2] <= position_bounds[:, 3]
-            )
-            is_valid = is_valid & pos_valid
+        # Check validity from packed buffer
+        is_valid = bufs["is_clause_valid"].astype(bool)
 
         return {
             "feature_bounds": feature_bounds,
