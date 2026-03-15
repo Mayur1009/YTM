@@ -53,21 +53,14 @@ typedef unsigned int uint;
 
 extern "C" {
 
-// ============================================================================
-// Device helper functions
-// ============================================================================
-
-__device__ void d_max(int* a, int b) { *a = (*a > b) ? *a : b; }
-__device__ void d_min(int* a, int b) { *a = (*a < b) ? *a : b; }
-
-__device__ int geometric_sample(curandState* rng, float p) {
+__device__ inline int geometric_sample(curandState* rng, float p) {
     float u = curand_uniform(rng);
     if (u >= 1.0f)
         u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
-__device__ void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
+__device__ inline  void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
     int li = start + geometric_sample(rng, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] > 0)
@@ -76,15 +69,16 @@ __device__ void literal_dec_with_p(curandState* rng, uint* ta_state, int start, 
     }
 }
 
-__device__ void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+__device__ inline void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
     for (int li = start; li < end; ++li) {
         ta_state[li + offset] += (ta_state[li + offset] < max_val);
     }
 }
 
-__device__ float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+__device__ inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+__device__ inline bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
-__device__ int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+__device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -93,9 +87,17 @@ __device__ int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x,
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-// ============================================================================
-// Feedback functions
-// ============================================================================
+// Check if a patch matches a clause using sparse range representation
+__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin,
+                                       const int* cfmax, const int* feat_mins, const int* cfids, int n_cfids) {
+    for (int i = 0; i < n_cfids; ++i) {
+        int fid = cfids[i];
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
+        if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
+            return false;
+    }
+    return true;
+}
 
 __device__ void type1a_fb(curandState* rng, uint* ta_state, float* weight, const int* X, int patch_idx_y,
                           int patch_idx_x, int sign, const int* feat_mins, const int* literal_offsets) {
@@ -201,99 +203,114 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 #endif
 }
 
-// ============================================================================
-// K1: pack_clauses - Scan TA states into sparse representation
-// ============================================================================
-
 __global__ void pack_clauses(const uint* global_ta_states, const int* literal_offsets, int* clause_positions,
-                             int* included_lits_pos, int* included_lits_neg, int* n_lits_pos, int* n_lits_neg,
-                             uint* num_includes, int8_t* clause_dirty) {
+                             int* clause_feat_min, int* clause_feat_max, int* constrained_fids, int* n_constrained,
+                             uint* num_includes, int8_t* is_clause_valid, int8_t* is_clause_synced) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
     for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        // Skip clauses that weren't updated since last pack
-        if (clause_dirty[clause] == 0)
+        // Skip if clause is already synced
+        if (is_clause_synced[clause])
             continue;
 
         const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_positions[clause * 4];
-        int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
-        int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
+        is_clause_valid[clause] = 1;
 
         // Initialize position bounds
         pos[0] = 0;           // min_row
         pos[1] = N_PATCHES_Y; // max_row
         pos[2] = 0;           // min_col
         pos[3] = N_PATCHES_X; // max_col
-
-        int local_n_pos = 0;
-        int local_n_neg = 0;
         uint total_includes = 0;
 
 #if POSITION_LITERALS
         // Scan Y position literals
         for (int lit = 0; lit < N_POSITION_FEATS_Y; ++lit) {
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                d_max(&pos[0], lit + 1);
+            if (is_included(ta_state[lit])) {
+                pos[0] = max(pos[0], lit + 1);
                 total_includes++;
             }
 #if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                d_min(&pos[1], lit + 1);
+            if (is_included(ta_state[lit + N_LITERALS / 2])) {
+                pos[1] = min(pos[1], lit);
                 total_includes++;
             }
 #endif
         }
 
         // Scan X position literals
-        for (int lit = N_POSITION_FEATS_Y; lit < N_POSITION_FEATS; ++lit) {
-            int x_lit = lit - N_POSITION_FEATS_Y;
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                d_max(&pos[2], x_lit + 1);
+        for (int lit = 0; lit < N_POSITION_FEATS_X; ++lit) {
+            if (is_included(ta_state[N_POSITION_FEATS_Y + lit])) {
+                pos[2] = max(pos[2], lit + 1);
                 total_includes++;
             }
 #if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                d_min(&pos[3], x_lit + 1);
+            if (is_included(ta_state[N_POSITION_FEATS_Y + lit + N_LITERALS / 2])) {
+                pos[3] = min(pos[3], lit);
                 total_includes++;
             }
 #endif
         }
 #endif
 
-        // Scan feature literals - store indices
-        for (int lit_idx = 0; lit_idx < N_PATCH_FEATS; ++lit_idx) {
-            int lit = N_POSITION_FEATS + lit_idx;
-            if (ta_state[lit] >= INCLUDE_STATE) {
-                lits_pos[local_n_pos++] = lit_idx;
-                total_includes++;
-            }
-#if NEGATED_LITERALS
-            if (ta_state[lit + N_LITERALS / 2] >= INCLUDE_STATE) {
-                lits_neg[local_n_neg++] = lit_idx;
-                total_includes++;
-            }
-#endif
+        // Early exit if position contradiction
+        if (pos[0] > pos[1] || pos[2] > pos[3]) {
+            is_clause_valid[clause] = 0;
+            is_clause_synced[clause] = 1;
+            num_includes[clause] = total_includes;
+            continue;
         }
 
-        n_lits_pos[clause] = local_n_pos;
-        n_lits_neg[clause] = local_n_neg;
+        // Scan feature literals - compute cfmin/cfmax bounds
+        int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
+        int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
+        int local_n_constrained = 0;
+
+        for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
+            int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
+            int lstart = N_POSITION_FEATS + literal_offsets[fid];
+            bool has_constraint = false;
+
+            // Init bounds to full range
+            cfmin[fid] = 0;
+            cfmax[fid] = n_bits;
+
+            for (int bit = 0; bit < n_bits; ++bit) {
+                if (is_included(ta_state[lstart + bit])) {
+                    cfmin[fid] = max(cfmin[fid], bit + 1);
+                    total_includes++;
+                    has_constraint = true;
+                }
+#if NEGATED_LITERALS
+                if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
+                    cfmax[fid] = min(cfmax[fid], bit);
+                    total_includes++;
+                    has_constraint = true;
+                }
+#endif
+            }
+
+            if (cfmin[fid] > cfmax[fid]) {
+                is_clause_valid[clause] = 0;
+            }
+            if (has_constraint) {
+                cfids[local_n_constrained++] = fid;
+            }
+        }
+
+        n_constrained[clause] = local_n_constrained;
         num_includes[clause] = total_includes;
-
-        // Clear dirty flag after packing
-        clause_dirty[clause] = 0;
+        is_clause_synced[clause] = 1;
     }
 }
 
-// ============================================================================
-// K2: eval_clauses - Parallel evaluation over (clause, patch) pairs
-// ============================================================================
-
 __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask, const int* feat_mins,
-                             const int* literal_offsets, const int* lit_to_fid, const int* clause_positions,
-                             const int* included_lits_pos, const int* included_lits_neg, const int* n_lits_pos,
-                             const int* n_lits_neg, const uint* num_includes, int8_t* clause_outputs) {
+                             const int* clause_positions, const int* clause_feat_min, const int* clause_feat_max,
+                             const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                             const int8_t* is_clause_valid, int8_t* clause_outputs) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -317,7 +334,13 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
             continue;
         }
 
-        // Check position bounds (also handles invalid clauses where min >= max)
+        // Skip invalid clauses (contradictions)
+        if (is_clause_valid[clause] == 0) {
+            *output = 0;
+            continue;
+        }
+
+        // Check position bounds
         const int* pos = &clause_positions[clause * 4];
         int patch_row = patch / N_PATCHES_X;
         int patch_col = patch % N_PATCHES_X;
@@ -327,42 +350,16 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
             continue;
         }
 
-        // Check positive literals
-        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
-        int clause_n_lits_pos = n_lits_pos[clause];
-        bool matches = true;
+        // Use match_patch with sparse range representation
+        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_cfids = n_constrained[clause];
 
-        for (int i = 0; i < clause_n_lits_pos && matches; ++i) {
-            int lit_idx = lits_pos[i];
-            int fid = lit_to_fid[lit_idx];
-            int bit = lit_idx - literal_offsets[fid];
-            int shifted_val = get_feature_value(Xe, patch_row, patch_col, fid) - feat_mins[fid];
-            if (shifted_val < bit + 1)
-                matches = false;
-        }
-
-#if NEGATED_LITERALS
-        // Check negated literals
-        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
-        int clause_n_lits_neg = n_lits_neg[clause];
-
-        for (int i = 0; i < clause_n_lits_neg && matches; ++i) {
-            int lit_idx = lits_neg[i];
-            int fid = lit_to_fid[lit_idx];
-            int bit = lit_idx - literal_offsets[fid];
-            int shifted_val = get_feature_value(Xe, patch_row, patch_col, fid) - feat_mins[fid];
-            if (shifted_val > bit)
-                matches = false;
-        }
-#endif
-
+        bool matches = match_patch(Xe, patch_row, patch_col, cfmin, cfmax, feat_mins, cfids, n_cfids);
         *output = matches ? 1 : 0;
     }
 }
-
-// ============================================================================
-// K3: select_patch_and_count_votes - Reservoir sampling + vote counting
-// ============================================================================
 
 __global__ void select_patch_and_count_votes(curandState* rng, const int8_t* clause_outputs,
                                              const float* clause_weights, int* selected_patch_ids, int* patch_weights,
@@ -410,10 +407,6 @@ __global__ void select_patch_and_count_votes(curandState* rng, const int8_t* cla
     rng[tid] = local_rng;
 }
 
-// ============================================================================
-// K4: calc_update_prob - Compute update probability per class
-// ============================================================================
-
 __global__ void calc_update_prob(const float* votes, const int8_t* targets, const int e, float* prob) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
@@ -429,14 +422,10 @@ __global__ void calc_update_prob(const float* votes, const int8_t* targets, cons
     }
 }
 
-// ============================================================================
-// K5: update_clauses - Apply Type 1a/1b/2 feedback
-// ============================================================================
-
 __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, const uint* num_includes,
                                const int8_t* clause_drop_mask, const int* X, const int8_t* targets, const int e,
                                const float* prob, uint* ta_states, float* clause_weights, const int* feat_mins,
-                               const int* literal_offsets, int8_t* clause_dirty) {
+                               const int* literal_offsets, int8_t* is_clause_synced) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -477,19 +466,19 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
             // Type 1a: clause active, correct polarity, has space
             if (should_update && t1 && clause_output && has_space) {
                 type1a_fb(&local_rng, ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
-                clause_dirty[clause] = 1;
+                is_clause_synced[clause] = 0; // Mark as needing re-pack
             }
 
             // Type 1b: should have been active but wasn't (or overflowed)
             if (should_update && t1 && !(clause_output && has_space)) {
                 type1b_fb(&local_rng, ta_state);
-                clause_dirty[clause] = 1;
+                is_clause_synced[clause] = 0; // Mark as needing re-pack
             }
 
             // Type 2: clause active but wrong polarity
             if (should_update && (target * sign) < 0 && clause_output) {
                 type2_fb(ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins, literal_offsets);
-                clause_dirty[clause] = 1;
+                is_clause_synced[clause] = 0; // Mark as needing re-pack
             }
         }
     }
@@ -497,14 +486,10 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
     rng[tid] = local_rng;
 }
 
-// ============================================================================
-// Inference Kernels
-// ============================================================================
-
 __global__ void infer_batch(const int* X, const float* clause_weights, float* class_sums, const int N,
-                            const int* feat_mins, const int* literal_offsets, const int* lit_to_fid,
-                            const int* clause_positions, const int* included_lits_pos, const int* included_lits_neg,
-                            const int* n_lits_pos, const int* n_lits_neg, const uint* num_includes) {
+                            const int* feat_mins, const int* clause_positions, const int* clause_feat_min,
+                            const int* clause_feat_max, const int* constrained_fids, const int* n_constrained,
+                            const uint* num_includes, const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -516,49 +501,25 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
         if (num_includes[clause] == 0)
             continue;
 
+        // Skip invalid clauses (contradictions)
+        if (is_clause_valid[clause] == 0)
+            continue;
+
         const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
         const int* pos = &clause_positions[clause * 4];
 
-        // Check if clause is valid (position bounds)
-        if (pos[0] >= pos[1] || pos[2] >= pos[3])
-            continue;
-
-        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
-        int clause_n_lits_pos = n_lits_pos[clause];
-        int clause_n_lits_neg = n_lits_neg[clause];
+        // Get sparse range representation for this clause
+        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_cfids = n_constrained[clause];
 
         bool matched = false;
 
         // Early exit on first matching patch
         for (int py = pos[0]; py < pos[1] && !matched; ++py) {
             for (int px = pos[2]; px < pos[3] && !matched; ++px) {
-                bool match = true;
-
-                // Check positive literals
-                for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-                    int lit_idx = lits_pos[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                    if (shifted_val < bit + 1)
-                        match = false;
-                }
-
-#if NEGATED_LITERALS
-                // Check negated literals
-                for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-                    int lit_idx = lits_neg[i];
-                    int fid = lit_to_fid[lit_idx];
-                    int bit = lit_idx - literal_offsets[fid];
-                    int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-                    if (shifted_val > bit)
-                        match = false;
-                }
-#endif
-
-                if (match)
-                    matched = true;
+                matched = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids);
             }
         }
 
@@ -572,14 +533,10 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
     }
 }
 
-/**
- * Transform: compute clause output for each patch.
- * Uses precomputed sparse representation.
- */
 __global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* feat_mins,
-                                    const int* literal_offsets, const int* lit_to_fid, const int* clause_positions,
-                                    const int* included_lits_pos, const int* included_lits_neg, const int* n_lits_pos,
-                                    const int* n_lits_neg, const uint* num_includes) {
+                                    const int* clause_positions, const int* clause_feat_min, const int* clause_feat_max,
+                                    const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                                    const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -597,48 +554,30 @@ __global__ void transform_patchwise(const int* X, int8_t* patch_output, const in
             continue;
         }
 
+        // Skip invalid clauses (contradictions)
+        if (is_clause_valid[clause] == 0) {
+            *output = 0;
+            continue;
+        }
+
         // Check position bounds
         const int* pos = &clause_positions[clause * 4];
         int py = patch / N_PATCHES_X;
         int px = patch % N_PATCHES_X;
 
-        // Invalid clause or out of bounds
-        if (pos[0] >= pos[1] || pos[2] >= pos[3] || py < pos[0] || py >= pos[1] || px < pos[2] || px >= pos[3]) {
+        if (py < pos[0] || py >= pos[1] || px < pos[2] || px >= pos[3]) {
             *output = 0;
             continue;
         }
 
+        // Use match_patch with sparse range representation
         const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* lits_pos = &included_lits_pos[clause * (ull)N_PATCH_FEATS];
-        const int* lits_neg = &included_lits_neg[clause * (ull)N_PATCH_FEATS];
-        int clause_n_lits_pos = n_lits_pos[clause];
-        int clause_n_lits_neg = n_lits_neg[clause];
+        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_cfids = n_constrained[clause];
 
-        bool match = true;
-
-        // Check positive literals
-        for (int i = 0; i < clause_n_lits_pos && match; ++i) {
-            int lit_idx = lits_pos[i];
-            int fid = lit_to_fid[lit_idx];
-            int bit = lit_idx - literal_offsets[fid];
-            int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-            if (shifted_val < bit + 1)
-                match = false;
-        }
-
-#if NEGATED_LITERALS
-        // Check negated literals
-        for (int i = 0; i < clause_n_lits_neg && match; ++i) {
-            int lit_idx = lits_neg[i];
-            int fid = lit_to_fid[lit_idx];
-            int bit = lit_idx - literal_offsets[fid];
-            int shifted_val = get_feature_value(Xe, py, px, fid) - feat_mins[fid];
-            if (shifted_val > bit)
-                match = false;
-        }
-#endif
-
-        *output = match ? 1 : 0;
+        *output = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids) ? 1 : 0;
     }
 }
 

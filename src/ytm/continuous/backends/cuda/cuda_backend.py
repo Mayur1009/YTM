@@ -60,30 +60,27 @@ class CUDADevice(BaseDevice):
             no_extern_c=True,
         )
 
-        # Training kernels (5-kernel approach)
         self.k_pack_clauses = mod.get_function("pack_clauses")
-        self.k_pack_clauses.prepare("PPPPPPPPP")  # 9 args (+clause_dirty)
+        self.k_pack_clauses.prepare("PPPPPPPPPP")
 
         self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_eval_clauses.prepare("PiPPPPPPPPPPP")  # 13 args (+lit_to_fid)
+        self.k_eval_clauses.prepare("PiPPPPPPPPPP")
 
         self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
-        self.k_select_patch_and_count_votes.prepare("PPPPPP")  # 6 args
+        self.k_select_patch_and_count_votes.prepare("PPPPPP")
 
         self.k_calc_update_prob = mod.get_function("calc_update_prob")
-        self.k_calc_update_prob.prepare("PPiP")  # 4 args
+        self.k_calc_update_prob.prepare("PPiP")
 
         self.k_update_clauses = mod.get_function("update_clauses")
-        self.k_update_clauses.prepare("PPPPPPPPPPPPP")  # 13 args (+clause_dirty)
+        self.k_update_clauses.prepare("PPPPPPPPPPPPP")
 
-        # Inference kernels
         self.k_infer_batch = mod.get_function("infer_batch")
-        self.k_infer_batch.prepare("PPPiPPPPPPPPP")  # 13 args (+lit_to_fid)
+        self.k_infer_batch.prepare("PPPiPPPPPPPP")
 
         self.k_transform_patchwise = mod.get_function("transform_patchwise")
-        self.k_transform_patchwise.prepare("PPiPPPPPPPPP")  # 12 args (+lit_to_fid)
+        self.k_transform_patchwise.prepare("PPiPPPPPPPP")
 
-        # Kernel configs
         self.kconf_clauses = self._kernel_config(self.total_clauses)
         self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
         self.kconf_classes = self._kernel_config(self.args.n_classes)
@@ -141,9 +138,8 @@ class CUDADevice(BaseDevice):
         self._init_clauses()
         self._init_weights()
         self._init_kernels()
-        self.feat_mins_gpu = ga.to_gpu(self.args.feat_mins.astype(np.int32))
+        self.feat_mins_gpu = ga.to_gpu(np.asarray(self.args.feat_mins, dtype=np.int32))
         self.literal_offsets_gpu = ga.to_gpu(self.literal_offsets.astype(np.int32))
-        self.lit_to_fid_gpu = ga.to_gpu(self.lit_to_fid)
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
@@ -157,18 +153,19 @@ class CUDADevice(BaseDevice):
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
         clause_drop_mask_gpu = ga.to_gpu(clause_drop_mask)
 
-        # Persistent buffers for training
+        # Persistent buffers for training (sparse range representation matching CPU)
         clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
-        included_lits_pos = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        included_lits_neg = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        n_lits_pos = ga.empty(self.total_clauses, dtype=np.int32)
-        n_lits_neg = ga.empty(self.total_clauses, dtype=np.int32)
+        clause_feat_min = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_feat_max = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        constrained_fids = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        n_constrained = ga.empty(self.total_clauses, dtype=np.int32)
         num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
+        is_clause_valid = ga.empty(self.total_clauses, dtype=np.int8)
+        is_clause_synced = ga.to_gpu(np.zeros(self.total_clauses, dtype=np.int8))  # Start unsynced
         clause_outputs = ga.empty((self.total_clauses, self.n_patches), dtype=np.int8)
         selected_patch_ids = ga.empty(self.total_clauses, dtype=np.int32)
-        votes = ga.zeros(self.args.n_classes, dtype=np.float32)
+        votes = ga.to_gpu(np.zeros(self.args.n_classes, dtype=np.float32))
         prob = ga.empty(self.args.n_classes, dtype=np.float32)
-        clause_dirty = ga.to_gpu(np.ones(self.total_clauses, dtype=np.int8))
 
         for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
@@ -177,39 +174,36 @@ class CUDADevice(BaseDevice):
             bs = batch_end - i
 
             for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):
-                # K1: Pack clauses - scan TA states into sparse representation (skip unchanged)
                 self.k_pack_clauses.prepared_call(
                     *self.kconf_clauses,
                     self.ta_states.gpudata,
                     self.literal_offsets_gpu.gpudata,
                     clause_positions.gpudata,
-                    included_lits_pos.gpudata,
-                    included_lits_neg.gpudata,
-                    n_lits_pos.gpudata,
-                    n_lits_neg.gpudata,
+                    clause_feat_min.gpudata,
+                    clause_feat_max.gpudata,
+                    constrained_fids.gpudata,
+                    n_constrained.gpudata,
                     num_includes.gpudata,
-                    clause_dirty.gpudata,
+                    is_clause_valid.gpudata,
+                    is_clause_synced.gpudata,
                 )
 
-                # K2: Eval clauses - parallel over (clause, patch) pairs
                 self.k_eval_clauses.prepared_call(
                     *self.kconf_clause_patches,
                     X_batch.gpudata,
                     np.int32(e),
                     clause_drop_mask_gpu.gpudata,
                     self.feat_mins_gpu.gpudata,
-                    self.literal_offsets_gpu.gpudata,
-                    self.lit_to_fid_gpu.gpudata,
                     clause_positions.gpudata,
-                    included_lits_pos.gpudata,
-                    included_lits_neg.gpudata,
-                    n_lits_pos.gpudata,
-                    n_lits_neg.gpudata,
+                    clause_feat_min.gpudata,
+                    clause_feat_max.gpudata,
+                    constrained_fids.gpudata,
+                    n_constrained.gpudata,
                     num_includes.gpudata,
+                    is_clause_valid.gpudata,
                     clause_outputs.gpudata,
                 )
 
-                # K3: Select patch and count votes
                 memset_d32_async(votes.gpudata, 0, self.args.n_classes)
                 self.k_select_patch_and_count_votes.prepared_call(
                     *self.kconf_clauses,
@@ -221,7 +215,6 @@ class CUDADevice(BaseDevice):
                     votes.gpudata,
                 )
 
-                # K4: Calculate update probability
                 self.k_calc_update_prob.prepared_call(
                     *self.kconf_classes,
                     votes.gpudata,
@@ -230,7 +223,6 @@ class CUDADevice(BaseDevice):
                     prob.gpudata,
                 )
 
-                # K5: Update clauses (marks dirty clauses for re-packing)
                 self.k_update_clauses.prepared_call(
                     *self.kconf_clauses,
                     self.rng.state,
@@ -245,41 +237,43 @@ class CUDADevice(BaseDevice):
                     self.clause_weights.gpudata,
                     self.feat_mins_gpu.gpudata,
                     self.literal_offsets_gpu.gpudata,
-                    clause_dirty.gpudata,
+                    is_clause_synced.gpudata,
                 )
 
             self.ctx.synchronize()
 
-    def _pack_clauses_for_inference(self):
-        """Precompute sparse representation for all clauses (called once before inference)."""
+    def pack_clauses(self):
         clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
-        included_lits_pos = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        included_lits_neg = ga.empty((self.total_clauses, self.n_patch_feats), dtype=np.int32)
-        n_lits_pos = ga.empty(self.total_clauses, dtype=np.int32)
-        n_lits_neg = ga.empty(self.total_clauses, dtype=np.int32)
+        clause_feat_min = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_feat_max = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        constrained_fids = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        n_constrained = ga.empty(self.total_clauses, dtype=np.int32)
         num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
-        clause_dirty = ga.to_gpu(np.ones(self.total_clauses, dtype=np.int8))
+        is_clause_valid = ga.empty(self.total_clauses, dtype=np.int8)
+        is_clause_synced = ga.to_gpu(np.zeros(self.total_clauses, dtype=np.int8))  # Start unsynced
 
         self.k_pack_clauses.prepared_call(
             *self.kconf_clauses,
             self.ta_states.gpudata,
             self.literal_offsets_gpu.gpudata,
             clause_positions.gpudata,
-            included_lits_pos.gpudata,
-            included_lits_neg.gpudata,
-            n_lits_pos.gpudata,
-            n_lits_neg.gpudata,
+            clause_feat_min.gpudata,
+            clause_feat_max.gpudata,
+            constrained_fids.gpudata,
+            n_constrained.gpudata,
             num_includes.gpudata,
-            clause_dirty.gpudata,
+            is_clause_valid.gpudata,
+            is_clause_synced.gpudata,
         )
 
         return {
             "clause_positions": clause_positions,
-            "included_lits_pos": included_lits_pos,
-            "included_lits_neg": included_lits_neg,
-            "n_lits_pos": n_lits_pos,
-            "n_lits_neg": n_lits_neg,
+            "clause_feat_min": clause_feat_min,
+            "clause_feat_max": clause_feat_max,
+            "constrained_fids": constrained_fids,
+            "n_constrained": n_constrained,
             "num_includes": num_includes,
+            "is_clause_valid": is_clause_valid,
         }
 
     def infer(self, X: np.ndarray, batch_size: int):
@@ -288,14 +282,14 @@ class CUDADevice(BaseDevice):
             batch_size = N
 
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
-        bufs = self._pack_clauses_for_inference()
+        bufs = self.pack_clauses()
 
         for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             batch_X = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
             bs = batch_end - i
 
-            cs_batch = ga.zeros((bs, self.args.n_classes), dtype=np.float32)
+            cs_batch = ga.to_gpu(np.zeros((bs, self.args.n_classes), dtype=np.float32))
 
             self.k_infer_batch.prepared_call(
                 *self._kernel_config(bs * self.total_clauses),
@@ -304,14 +298,13 @@ class CUDADevice(BaseDevice):
                 cs_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
-                self.literal_offsets_gpu.gpudata,
-                self.lit_to_fid_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
-                bufs["included_lits_pos"].gpudata,
-                bufs["included_lits_neg"].gpudata,
-                bufs["n_lits_pos"].gpudata,
-                bufs["n_lits_neg"].gpudata,
+                bufs["clause_feat_min"].gpudata,
+                bufs["clause_feat_max"].gpudata,
+                bufs["constrained_fids"].gpudata,
+                bufs["n_constrained"].gpudata,
                 bufs["num_includes"].gpudata,
+                bufs["is_clause_valid"].gpudata,
             )
 
             class_sums[i:batch_end] = cs_batch.get()
@@ -324,13 +317,13 @@ class CUDADevice(BaseDevice):
             batch_size = N
 
         patch_output = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
-        bufs = self._pack_clauses_for_inference()
+        bufs = self.pack_clauses()
 
         for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             batch_X = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
             bs = batch_end - i
-            po_batch = ga.zeros((bs, self.total_clauses, self.n_patches), dtype=np.int8)
+            po_batch = ga.to_gpu(np.zeros((bs, self.total_clauses, self.n_patches), dtype=np.int8))
 
             self.k_transform_patchwise.prepared_call(
                 *self._kernel_config(bs * self.total_clauses * self.n_patches),
@@ -338,14 +331,13 @@ class CUDADevice(BaseDevice):
                 po_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
-                self.literal_offsets_gpu.gpudata,
-                self.lit_to_fid_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
-                bufs["included_lits_pos"].gpudata,
-                bufs["included_lits_neg"].gpudata,
-                bufs["n_lits_pos"].gpudata,
-                bufs["n_lits_neg"].gpudata,
+                bufs["clause_feat_min"].gpudata,
+                bufs["clause_feat_max"].gpudata,
+                bufs["constrained_fids"].gpudata,
+                bufs["n_constrained"].gpudata,
                 bufs["num_includes"].gpudata,
+                bufs["is_clause_valid"].gpudata,
             )
 
             patch_output[i:batch_end] = po_batch.get()
@@ -359,6 +351,7 @@ class CUDADevice(BaseDevice):
         return self.ta_states.get().reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
 
     def get_clauses(self):
+        # WARN: Needs testing. Probably wrong.
         """
         Returns human-interpretable clause constraints.
 
@@ -371,45 +364,21 @@ class CUDADevice(BaseDevice):
                [min_patch_y, max_patch_y, min_patch_x, max_patch_x], inclusive bounds
             - "is_valid": (total_clauses,) bool - False if clause has contradictory constraints
         """
-        bufs = self._pack_clauses_for_inference()
+        bufs = self.pack_clauses()
 
         # Transfer to CPU for processing
-        included_lits_pos = bufs["included_lits_pos"].get()
-        included_lits_neg = bufs["included_lits_neg"].get()
-        n_lits_pos = bufs["n_lits_pos"].get()
-        n_lits_neg = bufs["n_lits_neg"].get()
+        clause_feat_min = bufs["clause_feat_min"].get()
+        clause_feat_max = bufs["clause_feat_max"].get()
         clause_positions = bufs["clause_positions"].get()
+        is_clause_valid = bufs["is_clause_valid"].get()
 
         feat_mins = self.args.feat_mins
-        feat_maxs = self.args.feat_maxs
 
-        # Initialize bounds: lower=feat_min, upper=feat_max (no constraint)
+        # Convert from shifted bounds to original feature space
+        # clause_feat_min/max are in shifted space (value - feat_min)
         feature_bounds = np.zeros((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
-        feature_bounds[:, :, 0] = feat_mins  # lower bounds
-        feature_bounds[:, :, 1] = feat_maxs  # upper bounds
-
-        # Process positive literals (define lower bounds)
-        for clause in range(self.total_clauses):
-            n_pos = n_lits_pos[clause]
-            for i in range(n_pos):
-                lit_idx = included_lits_pos[clause, i]
-                fid = self.lit_to_fid[lit_idx]
-                bit = lit_idx - self.literal_offsets[fid]
-                # Positive literal k means value >= (k + 1 + feat_min)
-                lower = bit + 1 + feat_mins[fid]
-                feature_bounds[clause, fid, 0] = max(feature_bounds[clause, fid, 0], lower)
-
-        # Process negated literals (define upper bounds)
-        if self.args.negated_literals:
-            for clause in range(self.total_clauses):
-                n_neg = n_lits_neg[clause]
-                for i in range(n_neg):
-                    lit_idx = included_lits_neg[clause, i]
-                    fid = self.lit_to_fid[lit_idx]
-                    bit = lit_idx - self.literal_offsets[fid]
-                    # Negated literal k means value < (k + 1 + feat_min), i.e., value <= k + feat_min
-                    upper = bit + feat_mins[fid]
-                    feature_bounds[clause, fid, 1] = min(feature_bounds[clause, fid, 1], upper)
+        feature_bounds[:, :, 0] = clause_feat_min + feat_mins  # lower bounds
+        feature_bounds[:, :, 1] = clause_feat_max + feat_mins  # upper bounds
 
         # Position bounds (convert from exclusive max to inclusive)
         position_bounds = None
@@ -419,18 +388,10 @@ class CUDADevice(BaseDevice):
             position_bounds[:, 1] -= 1  # max_y
             position_bounds[:, 3] -= 1  # max_x
 
-        # Check validity: lower <= upper for all features, and position bounds valid
-        is_valid = np.all(feature_bounds[:, :, 0] <= feature_bounds[:, :, 1], axis=1)
-        if position_bounds is not None:
-            pos_valid = (position_bounds[:, 0] <= position_bounds[:, 1]) & (
-                position_bounds[:, 2] <= position_bounds[:, 3]
-            )
-            is_valid = is_valid & pos_valid
-
         return {
             "feature_bounds": feature_bounds,
             "position_bounds": position_bounds,
-            "is_valid": is_valid,
+            "is_valid": is_clause_valid.astype(bool),
         }
 
     def get_state_dict(self):
