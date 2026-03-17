@@ -33,7 +33,7 @@ class TMArgs:
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
     n_threads: int = 1
-    compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native", "-lm", "-mtune=native", "-flto"])
+    compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native", "-lm", "-mtune=native"])
     grid_size: int | None = None
     block_size: int = 128
 

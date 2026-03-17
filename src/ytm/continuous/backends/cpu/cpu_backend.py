@@ -227,13 +227,7 @@ class CPUDevice(BaseDevice):
         N = X.shape[0]
         X = X.astype(np.int32)
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
-
-        from time import time
-        pack_start = time()
-        # Pack clauses once for all samples
         bufs = self.pack_clauses()
-        pack_time = time() - pack_start
-        print(f"Clause packing time: {pack_time:.4f} seconds")
 
         for e in tqdm(range(N), desc="Infer", leave=False):
             self.lib.infer_sample(

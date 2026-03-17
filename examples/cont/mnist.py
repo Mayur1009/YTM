@@ -1,27 +1,23 @@
 import numpy as np
-from ytm.utils import Timer
-from ytm.tm import MultiClassTM
 from keras.datasets import mnist
+
+from ytm.continuous.multiclass import MultiClassTM
+from ytm.utils import Timer
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
-    # encoded_X_train = tm.encode(X_train)
-    # encoded_X_test = tm.encode(X_test)
     for epoch in range(epochs):
         train_fit_timer = Timer()
         with train_fit_timer:
-            # tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
-            tm.fit2(X_train, Y_train)
+            tm.fit(X_train, Y_train)
 
         test_timer = Timer()
         with test_timer:
-            # test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
-            test_pred, _ = tm.predict2(X_test)
+            test_pred, _ = tm.predict(X_test)
 
         train_timer = Timer()
         with train_timer:
-            # train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True)
-            train_pred, _ = tm.predict2(X_train)
+            train_pred, _ = tm.predict(X_train)
 
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
@@ -33,6 +29,7 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
 if __name__ == "__main__":
     (X_train, Y_train_org), (X_test, Y_test_org) = mnist.load_data()
 
+    # Convert pixel values to binary (0 or 1) based on a threshold of 75
     X_train = np.where(X_train.reshape((X_train.shape[0], 28 * 28)) > 75, 1, 0)
     X_test = np.where(X_test.reshape((X_test.shape[0], 28 * 28)) > 75, 1, 0)
     X_train = np.asarray(X_train, dtype=np.int8)
@@ -45,7 +42,10 @@ if __name__ == "__main__":
         s=10,
         dim=(28, 28, 1),
         n_classes=10,
-        patch_dim=(10,10),
+        patch_dim=(10, 10),
+        stride=(1, 1),
+        feat_mins=X_train.min(), # Since all the features have a min of 0.
+        feat_maxs=X_train.max(), # Since all the features have a max of 1.
         seed=10,
         device="cpu",
         n_threads=8,
