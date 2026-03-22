@@ -73,7 +73,7 @@ def train(tm: BinaryTM, xtrain, ytrain, xval, yval, xtest, ytest, epochs=1):
         auc_test = roc_auc_score(ytest, prob_test)
 
         print(
-            f"Epoch {epoch + 1} | Time: {train_timer.elapsed():.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
+            f"Epoch {epoch + 1} | Time: {train_timer.elapsed:.4f}s | Train Acc: {train_acc}| Train AUC: {auc_train} | Val Acc: {acc_val} | Val AUC: {auc_val} | Test Acc: {acc_test} | AUC: {auc_test}"
         )
         print(f"Confusion Matrix:\n{cm_test}")
 

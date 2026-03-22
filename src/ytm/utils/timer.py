@@ -15,7 +15,8 @@ class Timer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.end_time = time()
 
+    @property
     def elapsed(self):
         if self.end_time is None:
-            raise RuntimeError("elapsed() must be called after context is ended.")
+            raise RuntimeError("elapsed must be accessed after context is ended.")
         return self.end_time - self.start_time
