@@ -65,6 +65,9 @@ cuda = "12"
 [tool.pixi.feature.cuda.dependencies]
 cuda = "*"
 openmp = "*"
+wandb = "*"
+seaborn = "*"
+jupyterlab = "*"
 
 [tool.pixi.feature.cuda.pypi-dependencies]
 ytm = { path = ".", editable = true, extras = ["examples", "cuda"] }
