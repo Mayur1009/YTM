@@ -1,0 +1,11 @@
+program: run.py
+method: grid
+parameters:
+  approach:
+    values: ["standard", "discrete"]
+  bins:
+    values: [8, 16, 32, 64]
+  seed:
+    values: [1, 2, 3]
+  device:
+    values: ["cuda", "cpu"]
