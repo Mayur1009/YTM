@@ -1,3 +1,4 @@
+name: octmnist
 program: run.py
 method: grid
 parameters:
