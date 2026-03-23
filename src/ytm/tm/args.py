@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass()
@@ -30,6 +30,7 @@ class TMArgs:
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
     n_threads: int = 1
+    compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native", "-lm", "-mtune=native"])
     grid_size: int | None = None
     block_size: int = 128
 
