@@ -5,23 +5,23 @@ from keras.datasets import mnist
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
-    # encoded_X_train = tm.encode(X_train)
-    # encoded_X_test = tm.encode(X_test)
+    encoded_X_train = tm.encode(X_train)
+    encoded_X_test = tm.encode(X_test)
     for epoch in range(epochs):
         train_fit_timer = Timer()
         with train_fit_timer:
-            # tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
-            tm.fit2(X_train, Y_train)
+            tm.fit(encoded_X_train, Y_train, is_X_encoded=True)
+            # tm.fit2(X_train, Y_train)
 
         test_timer = Timer()
         with test_timer:
-            # test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
-            test_pred, _ = tm.predict2(X_test)
+            test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
+            # test_pred, _ = tm.predict2(X_test)
 
         train_timer = Timer()
         with train_timer:
-            # train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True)
-            train_pred, _ = tm.predict2(X_train)
+            train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True)
+            # train_pred, _ = tm.predict2(X_train)
 
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
         n_classes=10,
         patch_dim=(10,10),
         seed=10,
-        device="cpu",
+        device="cuda",
         n_threads=8,
     )
 
