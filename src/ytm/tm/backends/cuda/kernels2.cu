@@ -508,7 +508,9 @@ extern "C" {
                 int selected_id = (int)(curand_uniform(&localRNG) * PATCHES);
                 selected_patch_ids[clause] = selected_id;
 
+#if TRACK_PATCH_WEIGHTS
                 patch_weights[clause * PATCHES + selected_id]++;
+#endif
                 ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
                     float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
@@ -556,7 +558,9 @@ extern "C" {
             selected_patch_ids[clause] = selected_patch;
 
             if (selected_patch != -1) {
+#if TRACK_PATCH_WEIGHTS
                 patch_weights[clause * PATCHES + selected_patch]++;
+#endif
                 ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
                     float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];

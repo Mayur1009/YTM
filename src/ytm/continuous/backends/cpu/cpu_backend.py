@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import warnings
 from ctypes import CDLL, POINTER, c_bool, c_float, c_int, c_int8, c_int32, c_uint32
 
 import numpy as np
@@ -91,6 +92,7 @@ class CPUDevice(BaseDevice):
 #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
 #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
+#define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define N_RAW_PATCH_FEATS {self.n_raw_patch_feats}
 #define N_PATCH_FEATS {self.n_patch_feats}
 #define N_POSITION_FEATS {self.n_position_feats}
@@ -124,7 +126,10 @@ class CPUDevice(BaseDevice):
             wt[n_neg_polarity:] *= -1.0
             self.clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
-        self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
+        if self.args.track_patch_weights:
+            self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
+        else:
+            self.patch_weights = np.zeros((1, 1), dtype=np.int32)
 
     def dev_init(self):
         self.rng = np.array([self.args.seed + i for i in range(self.args.n_threads)], dtype=np.uint32)
@@ -278,6 +283,12 @@ class CPUDevice(BaseDevice):
 
     def get_ta_states(self):
         return self.ta_states.reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def get_patch_weights(self):
+        if not self.args.track_patch_weights:
+            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
+            return self.patch_weights
+        return self.patch_weights.reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
 
     def get_clauses(self):
         """

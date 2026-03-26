@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import numpy as np
 import pycuda.gpuarray as ga
@@ -59,7 +60,10 @@ class CUDADevice(BaseDevice):
             clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
         self.clause_weights = ga.to_gpu(clause_weights)
-        self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        if self.args.track_patch_weights:
+            self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        else:
+            self.patch_weights = ga.to_gpu(np.zeros((1, 1), dtype=np.int32))
 
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,6 +91,7 @@ class CUDADevice(BaseDevice):
             #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
             #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
             #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
+            #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
         """
 
         mod_kernels = self._load_kernel(os.path.join(cur_dir, "kernels.cu"), self.header)
@@ -342,6 +347,12 @@ class CUDADevice(BaseDevice):
     def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
         return self.ta_states.get().reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def get_patch_weights(self) -> np.ndarray:
+        if not self.args.track_patch_weights:
+            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
+            return self.patch_weights.get()
+        return self.patch_weights.get().reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
 
     def transform_patchwise(
         self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]

@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int32, c_uint32, c_int8
 
 import numpy as np
@@ -48,6 +49,7 @@ class CPUDevice(BaseDevice):
             #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
             #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
             #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
+            #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
         """
 
         cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -100,7 +102,10 @@ class CPUDevice(BaseDevice):
             wt[n_neg_polarity:] *= -1.0
             self.clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
-        self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
+        if self.args.track_patch_weights:
+            self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
+        else:
+            self.patch_weights = np.zeros((1, 1), dtype=np.int32)
 
     def _compile_code(self, fname, header: str):
         with open(fname, "r") as f:
@@ -467,6 +472,12 @@ class CPUDevice(BaseDevice):
     def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
         return self.ta_states.reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def get_patch_weights(self) -> np.ndarray:
+        if not self.args.track_patch_weights:
+            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
+            return self.patch_weights
+        return self.patch_weights.reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
 
     def transform_patchwise(
         self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]

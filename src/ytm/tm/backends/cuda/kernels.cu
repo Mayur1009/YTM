@@ -338,7 +338,9 @@ extern "C" {
 #endif
             selected_patch_ids[clause] = selected_id;
             if (selected_id != -1) {
+#if TRACK_PATCH_WEIGHTS
                 patch_weights[clause * PATCHES + selected_id]++;
+#endif
                 ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
                     float w = clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];

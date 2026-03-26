@@ -448,7 +448,9 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
         }
 
         if (*selected_patch != -1) {
+#if TRACK_PATCH_WEIGHTS
             patch_weights[clause * N_PATCHES + *selected_patch]++;
+#endif
         }
     }
 }

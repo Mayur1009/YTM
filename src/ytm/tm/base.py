@@ -110,6 +110,9 @@ class BaseTM:
     def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         return self.dev.get_ta_states()
 
+    def get_patch_weights(self) -> np.ndarray:
+        return self.dev.get_patch_weights()
+
     def transform(
         self, X: np.ndarray, is_X_encoded: bool = False
     ) -> np.ndarray[tuple[int, int, int], np.dtype[np.bool]]:

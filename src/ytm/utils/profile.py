@@ -1,4 +1,3 @@
-import os
 import threading
 import warnings
 from dataclasses import dataclass
@@ -41,7 +40,6 @@ class _Sampler(threading.Thread):
             for proc in pynvml.nvmlDeviceGetComputeRunningProcesses(handle):
                 if proc.pid == self._pid:
                     return handle
-        warnings.warn("Process not found on any GPU. GPU metrics disabled.")
         return None
 
     def _sample_gpu(self) -> int:

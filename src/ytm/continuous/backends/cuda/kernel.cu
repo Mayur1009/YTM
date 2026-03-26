@@ -394,7 +394,9 @@ __global__ void select_patch_and_count_votes(curandState* rng, const int8_t* cla
 
         if (selected_id >= 0) {
             // Update patch weights (no race - each clause has unique row)
+#if TRACK_PATCH_WEIGHTS
             patch_weights[clause * (ull)N_PATCHES + selected_id]++;
+#endif
 
             // Accumulate votes (atomic needed)
             ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;

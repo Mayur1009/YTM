@@ -28,6 +28,7 @@ class TMArgs:
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
     skip_t2_fb: bool = False
+    track_patch_weights: bool = True
     seed: int = -1
 
     # Device specific arguments
@@ -89,6 +90,7 @@ class T_args(TypedDict, total=False):
     skip_t1a_fb: bool
     skip_t1b_fb: bool
     skip_t2_fb: bool
+    track_patch_weights: bool
     seed: int
     device: Literal["cpu", "cuda"]
     n_threads: int

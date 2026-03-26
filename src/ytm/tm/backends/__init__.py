@@ -41,9 +41,9 @@ class BaseDevice(abc.ABC):
         if self.args.negated_literals:
             self.n_literals *= 2
 
-        self.n_patches = (self.args.dim[0] - self.args.patch_dim[0] + 1) * (
-            self.args.dim[1] - self.args.patch_dim[1] + 1
-        )
+        self.n_patches_y = self.args.dim[0] - self.args.patch_dim[0] + 1
+        self.n_patches_x = self.args.dim[1] - self.args.patch_dim[1] + 1
+        self.n_patches = self.n_patches_y * self.n_patches_x
         self.n_literal_chunks = (self.n_literals + 31) // 32
 
         if self.args.max_included_literals <= 0 or self.args.max_included_literals > self.n_literals:
@@ -106,6 +106,9 @@ class BaseDevice(abc.ABC):
 
     def get_ta_states(self) -> np.ndarray:
         raise NotImplementedError("get_ta_states() not implemented for this device")
+
+    def get_patch_weights(self) -> np.ndarray:
+        raise NotImplementedError("get_patch_weights() not implemented for this device")
 
     def transform_patchwise(self, encoded_X: np.ndarray) -> np.ndarray:
         raise NotImplementedError("transform_patchwise() not implemented for this device")

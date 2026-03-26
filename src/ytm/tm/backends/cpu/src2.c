@@ -485,7 +485,9 @@ void fit_sample(uint* restrict rng, uint* global_ta_states, float* restrict clau
             LOOP_CLASS_ID(class_id, clause) {
                 votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             }
+#if TRACK_PATCH_WEIGHTS
             patch_weights[clause * PATCHES + selected_patch_ids[clause]]++;
+#endif
         }
     }
 

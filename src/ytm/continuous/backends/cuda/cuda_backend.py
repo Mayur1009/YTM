@@ -1,5 +1,7 @@
-import numpy as np
 import os
+import warnings
+
+import numpy as np
 from tqdm import tqdm
 import pycuda.gpuarray as ga
 from pycuda.compiler import SourceModule
@@ -40,6 +42,7 @@ class CUDADevice(BaseDevice):
 #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
 #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
+#define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define N_RAW_PATCH_FEATS {self.n_raw_patch_feats}
 #define N_PATCH_FEATS {self.n_patch_feats}
 #define N_POSITION_FEATS {self.n_position_feats}
@@ -103,7 +106,10 @@ class CUDADevice(BaseDevice):
             clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
         self.clause_weights = ga.to_gpu(clause_weights)
-        self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        if self.args.track_patch_weights:
+            self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        else:
+            self.patch_weights = ga.to_gpu(np.zeros((1, 1), dtype=np.int32))
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -349,6 +355,12 @@ class CUDADevice(BaseDevice):
 
     def get_ta_states(self):
         return self.ta_states.get().reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
+
+    def get_patch_weights(self):
+        if not self.args.track_patch_weights:
+            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
+            return self.patch_weights.get()
+        return self.patch_weights.get().reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
 
     def get_clauses(self):
         # WARN: Needs testing. Probably wrong.
