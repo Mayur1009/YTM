@@ -13,19 +13,16 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         # iota = np.arange(encoded_X_train.shape[0])
         with train_fit_timer:
             tm.fit(encoded_X_train, Y_train, is_X_encoded=True, clause_drop_p=0.5)
-            # tm.fit2(X_train, Y_train, clause_drop_p=0.5)
 
 
         test_timer = Timer()
         with test_timer:
             test_pred, _ = tm.predict(encoded_X_test, is_X_encoded=True)
-            # test_pred, _ = tm.predict2(X_test)
 
 
         train_timer = Timer()
         with train_timer:
             train_pred, _ = tm.predict(encoded_X_train, is_X_encoded=True)
-            # train_pred, _ = tm.predict2(X_train)
 
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
