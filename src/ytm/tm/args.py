@@ -25,6 +25,7 @@ class TMArgs:
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
     skip_t2_fb: bool = False
+    boost_tp_fb: bool = True
     track_patch_weights: bool = True
     seed: int = -1
 

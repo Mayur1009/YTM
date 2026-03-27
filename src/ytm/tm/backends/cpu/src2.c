@@ -1,27 +1,27 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
-    #define USE_OMP 1
-    #define TOTAL_CLAUSES 1000
-    #define THRESH 100
-    #define S 10.0
-    #define CLASSES 10
-    #define HEIGHT 28
-    #define WIDTH 28
-    #define DEPTH 1
-    #define PATCH_HEIGHT 10
-    #define PATCH_WIDTH 10
-    #define NEGATED_LITERALS 1
-    #define POSITION_LITERALS 1
-    #define COALESCED 1
-    #define WEIGHTED 1
-    #define MAX_WEIGHT 10.0f
-    #define NEGATIVE_CLAUSES 1
-    #define ALLOW_POLARITY_CHANGE 1
-    #define MAX_INCLUDED_LITERALS 10
-    #define INCLUDE_STATE 128
-    #define MAX_TA_STATE 255
-    #define TYPE1A_FB 1
-    #define TYPE1B_FB 1
-    #define TYPE2_FB 1
+#define USE_OMP 1
+#define TOTAL_CLAUSES 1000
+#define THRESH 100
+#define S 10.0
+#define CLASSES 10
+#define HEIGHT 28
+#define WIDTH 28
+#define DEPTH 1
+#define PATCH_HEIGHT 10
+#define PATCH_WIDTH 10
+#define NEGATED_LITERALS 1
+#define POSITION_LITERALS 1
+#define COALESCED 1
+#define WEIGHTED 1
+#define MAX_WEIGHT 10.0f
+#define NEGATIVE_CLAUSES 1
+#define ALLOW_POLARITY_CHANGE 1
+#define MAX_INCLUDED_LITERALS 10
+#define INCLUDE_STATE 128
+#define MAX_TA_STATE 255
+#define TYPE1A_FB 1
+#define TYPE1B_FB 1
+#define TYPE2_FB 1
 #endif
 
 #define INT_SIZE 32
@@ -30,9 +30,9 @@
 #define N_POSITION_FEATS (HEIGHT - PATCH_HEIGHT + WIDTH - PATCH_WIDTH)
 #define N_FEATURE_FEATS (PATCH_HEIGHT * PATCH_WIDTH * DEPTH)
 #if NEGATED_LITERALS
-    #define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
+#define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
 #else
-    #define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
+#define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
 #endif
 #define NUM_LITERAL_CHUNKS ((LITERALS + INT_SIZE - 1) / INT_SIZE)
 
@@ -41,17 +41,17 @@
 #define PATCHES (N_PATCHES_Y * N_PATCHES_X)
 
 #if ((LITERALS % INT_SIZE) != 0)
-    #define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
+#define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
 #else
-    #define FILTER 0xFFFFFFFF
+#define FILTER 0xFFFFFFFF
 #endif
 
 #if COALESCED == 0
-    #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
-    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
+#define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+#define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
 #else
-    #define CLAUSES_PER_CLASS TOTAL_CLAUSES
-    #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
+#define CLAUSES_PER_CLASS TOTAL_CLAUSES
+#define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
 #define CLIP(val, min, max) ((val < min) ? min : ((val > max) ? max : val))
@@ -64,17 +64,17 @@
 #include <string.h>
 
 #if USE_OMP
-    #include <omp.h>
-    #define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
-    #define OMP_ATOMIC _Pragma("omp atomic")
-    #define OMP_SIMD _Pragma("omp simd")
-    #define GET_THREAD_ID omp_get_thread_num()
+#include <omp.h>
+#define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
+#define OMP_ATOMIC _Pragma("omp atomic")
+#define OMP_SIMD _Pragma("omp simd")
+#define GET_THREAD_ID omp_get_thread_num()
 void set_num_threads(int num_threads) { omp_set_num_threads(num_threads); }
 #else
-    #define OMP_PARALLEL_FOR
-    #define OMP_ATOMIC
-    #define OMP_SIMD
-    #define GET_THREAD_ID 0
+#define OMP_PARALLEL_FOR
+#define OMP_ATOMIC
+#define OMP_SIMD
+#define GET_THREAD_ID 0
 #endif
 
 typedef unsigned long long ull;
@@ -95,7 +95,8 @@ static inline float xorshift32(uint* state) {
 // Returns the number of trials until first success (1-indexed)
 static inline int geometric_sample(uint* rng, float p) {
     float u = xorshift32(rng);
-    if (u >= 1.0f) u = 0.9999999f;
+    if (u >= 1.0f)
+        u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
@@ -105,7 +106,8 @@ static inline void literal_dec_with_p(uint* restrict rng, uint* restrict ta_stat
                                       float p) {
     int li = start + geometric_sample(rng, p) - 1;
     while (li < end) {
-        if (ta_state[li + offset] > 0) ta_state[li + offset] -= 1;
+        if (ta_state[li + offset] > 0)
+            ta_state[li + offset] -= 1;
         li += geometric_sample(rng, p);
     }
 }
@@ -117,6 +119,20 @@ static inline void literal_inc(uint* restrict ta_state, int start, int end, int 
     for (int li = start; li < end; ++li) {
         ta_state[li + offset] += (ta_state[li + offset] < max_val);
     }
+}
+
+static inline void literal_inc_maybe_p(uint* restrict rng, uint* restrict ta_state, int start, int end, int offset,
+                                       float p) {
+#if BOOST_TP_FB
+    literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
+#else
+    int li = start + geometric_sample(rng, p) - 1;
+    while (li < end) {
+        if (ta_state[li + offset] < MAX_TA_STATE)
+            ta_state[li + offset] += 1;
+        li += geometric_sample(rng, p);
+    }
+#endif
 }
 
 static inline float uprob_fun(float v, float y) {
@@ -162,12 +178,14 @@ static inline uint scan_clause(const uint* ta_state, int* included_feats_pos, in
 
     for (int lit = 0; lit < HEIGHT - PATCH_HEIGHT; ++lit) {
         if (ta_state[lit] >= INCLUDE_STATE) {
-            if (lit + 1 > *min_row) *min_row = lit + 1;
+            if (lit + 1 > *min_row)
+                *min_row = lit + 1;
             total_includes++;
         }
 #if NEGATED_LITERALS
         if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-            if (lit + 1 < *max_row) *max_row = lit + 1;
+            if (lit + 1 < *max_row)
+                *max_row = lit + 1;
             total_includes++;
         }
 #endif
@@ -176,12 +194,14 @@ static inline uint scan_clause(const uint* ta_state, int* included_feats_pos, in
     for (int lit = HEIGHT - PATCH_HEIGHT; lit < N_POSITION_FEATS; ++lit) {
         int x_lit = lit - (HEIGHT - PATCH_HEIGHT);
         if (ta_state[lit] >= INCLUDE_STATE) {
-            if (x_lit + 1 > *min_col) *min_col = x_lit + 1;
+            if (x_lit + 1 > *min_col)
+                *min_col = x_lit + 1;
             total_includes++;
         }
 #if NEGATED_LITERALS
         if (ta_state[lit + LITERALS / 2] >= INCLUDE_STATE) {
-            if (x_lit + 1 < *max_col) *max_col = x_lit + 1;
+            if (x_lit + 1 < *max_col)
+                *max_col = x_lit + 1;
             total_includes++;
         }
 #endif
@@ -210,16 +230,17 @@ static inline uint scan_clause(const uint* ta_state, int* included_feats_pos, in
 static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float* restrict weight, const int8_t* X,
                              int patch_row, int patch_col, const int sign) {
 #if TYPE1A_FB
-    #if WEIGHTED
-    if (fabs(*weight) < MAX_WEIGHT) (*weight) += sign * 1.0f;
-    #endif
+#if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT)
+        (*weight) += sign * 1.0f;
+#endif
 
     // Position Y literals: [0, patch_row) have value 1, [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
-    literal_inc(ta_state, 0, patch_row, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, 0, patch_row, 0, 1.0f - S_INV);
     literal_dec_with_p(rng, ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, S_INV);
 
     // Position X literals: [0, patch_col) have value 1, [patch_col, WIDTH-PATCH_WIDTH) have value 0
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, 0, 1.0f - S_INV);
     literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, 0, S_INV);
 
     // Feature literals: check pixel value
@@ -227,30 +248,44 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
         int8_t val = get_X_fid(X, patch_row, patch_col, lit);
 
         if (val == 1) {
-            if (ta_state[lit] < MAX_TA_STATE) ta_state[lit] += 1;
+#if BOOST_TP_FB
+            if (ta_state[lit] < MAX_TA_STATE)
+                ta_state[lit] += 1;
+#else
+            if (ta_state[lit] < MAX_TA_STATE && xorshift32(rng) <= 1.0f - S_INV)
+                ta_state[lit] += 1;
+#endif
         } else {
-            if (ta_state[lit] > 0 && xorshift32(rng) <= S_INV) ta_state[lit] -= 1;
+            if (ta_state[lit] > 0 && xorshift32(rng) <= S_INV)
+                ta_state[lit] -= 1;
         }
 
-    #if NEGATED_LITERALS
+#if NEGATED_LITERALS
         int lit_neg = lit + LITERALS / 2;
-        if (val == 0) {  // inverted
-            if (ta_state[lit_neg] < MAX_TA_STATE) ta_state[lit_neg] += 1;
+        if (val == 0) { // inverted
+#if BOOST_TP_FB
+            if (ta_state[lit_neg] < MAX_TA_STATE)
+                ta_state[lit_neg] += 1;
+#else
+            if (ta_state[lit_neg] < MAX_TA_STATE && xorshift32(rng) <= 1.0f - S_INV)
+                ta_state[lit_neg] += 1;
+#endif
         } else {
-            if (ta_state[lit_neg] > 0 && xorshift32(rng) <= S_INV) ta_state[lit_neg] -= 1;
+            if (ta_state[lit_neg] > 0 && xorshift32(rng) <= S_INV)
+                ta_state[lit_neg] -= 1;
         }
-    #endif
+#endif
     }
 
-    #if NEGATED_LITERALS
+#if NEGATED_LITERALS
     // Negated position Y: [0, patch_row) have value 0, [patch_row, HEIGHT-PATCH_HEIGHT) have value 1
     literal_dec_with_p(rng, ta_state, 0, patch_row, LITERALS / 2, S_INV);
-    literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, LITERALS / 2, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, patch_row, HEIGHT - PATCH_HEIGHT, LITERALS / 2, 1.0f - S_INV);
 
     // Negated position X: [0, patch_col) have value 0, [patch_col, WIDTH-PATCH_WIDTH) have value 1
     literal_dec_with_p(rng, ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, S_INV);
-    literal_inc(ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, LITERALS / 2, MAX_TA_STATE);
-    #endif
+    literal_inc_maybe_p(rng, ta_state, HEIGHT - PATCH_HEIGHT + patch_col, N_POSITION_FEATS, LITERALS / 2, 1.0f - S_INV);
+#endif
 
 #endif
 }
@@ -267,16 +302,20 @@ static inline void type1b_fb(uint* restrict rng, uint* restrict ta_state, const 
 static inline void type2_fb(uint* restrict ta_state, float* restrict weight, const int8_t* X, int patch_row,
                             int patch_col, const int sign) {
 #if TYPE2_FB
-    #if WEIGHTED
-    if (fabs(*weight) < MAX_WEIGHT) (*weight) -= sign * 1.0f;
-        #if ALLOW_POLARITY_CHANGE == 0
-    if (sign == 1 && *weight < 0) *weight = 1;
-    if (sign == -1 && *weight >= 0) *weight = -1;
-        #endif
-    #endif
-    #if NEGATIVE_CLAUSES == 0
-    if (*weight < 1) *weight = 1;
-    #endif
+#if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT)
+        (*weight) -= sign * 1.0f;
+#if ALLOW_POLARITY_CHANGE == 0
+    if (sign == 1 && *weight < 0)
+        *weight = 1;
+    if (sign == -1 && *weight >= 0)
+        *weight = -1;
+#endif
+#endif
+#if NEGATIVE_CLAUSES == 0
+    if (*weight < 1)
+        *weight = 1;
+#endif
 
     // Position Y literals: [patch_row, HEIGHT-PATCH_HEIGHT) have value 0
     literal_inc(ta_state, patch_row, HEIGHT - PATCH_HEIGHT, 0, INCLUDE_STATE);
@@ -292,21 +331,21 @@ static inline void type2_fb(uint* restrict ta_state, float* restrict weight, con
             ta_state[lit] += 1;
         }
 
-    #if NEGATED_LITERALS
+#if NEGATED_LITERALS
         int lit_neg = lit + LITERALS / 2;
-        if (val == 1 && ta_state[lit_neg] < INCLUDE_STATE) {  // inverted
+        if (val == 1 && ta_state[lit_neg] < INCLUDE_STATE) { // inverted
             ta_state[lit_neg] += 1;
         }
-    #endif
+#endif
     }
 
-    #if NEGATED_LITERALS
+#if NEGATED_LITERALS
     // Negated position Y: [0, patch_row) have value 0
     literal_inc(ta_state, 0, patch_row, LITERALS / 2, INCLUDE_STATE);
 
     // Negated position X: [0, patch_col) have value 0
     literal_inc(ta_state, HEIGHT - PATCH_HEIGHT, HEIGHT - PATCH_HEIGHT + patch_col, LITERALS / 2, INCLUDE_STATE);
-    #endif
+#endif
 
 #endif
 }
@@ -365,13 +404,15 @@ void eval_clauses(uint* restrict rng, const int8_t* restrict X, const uint* rest
 
                 for (int i = 0; matches && i < n_feats_pos; ++i) {
                     int lit = N_POSITION_FEATS + included_feats_pos[i];
-                    if (get_X_fid(X, patch_row, patch_col, lit) != 1) matches = false;
+                    if (get_X_fid(X, patch_row, patch_col, lit) != 1)
+                        matches = false;
                 }
 
 #if NEGATED_LITERALS
                 for (int i = 0; matches && i < n_feats_neg; ++i) {
                     int lit = N_POSITION_FEATS + included_feats_neg[i];
-                    if (get_X_fid(X, patch_row, patch_col, lit) != 0) matches = false;
+                    if (get_X_fid(X, patch_row, patch_col, lit) != 0)
+                        matches = false;
                 }
 #endif
 
@@ -407,7 +448,8 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         // Skip dropped clauses
-        if (clause_drop_mask[clause] == 1) continue;
+        if (clause_drop_mask[clause] == 1)
+            continue;
 
         uint* ta_state = &global_ta_states[clause * LITERALS];
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
@@ -422,7 +464,8 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
         // Count included literals for this clause
         uint num_includes = 0;
         for (int li = 0; li < LITERALS; ++li) {
-            if (ta_state[li] >= INCLUDE_STATE) num_includes++;
+            if (ta_state[li] >= INCLUDE_STATE)
+                num_includes++;
         }
 
         ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
@@ -559,17 +602,20 @@ void infer_sample(uint* restrict rng, const int8_t* restrict X, const uint* rest
 
                 for (int i = 0; matches && i < n_feats_pos; ++i) {
                     int lit = N_POSITION_FEATS + included_feats_pos[i];
-                    if (get_X_fid(X, patch_row, patch_col, lit) != 1) matches = false;
+                    if (get_X_fid(X, patch_row, patch_col, lit) != 1)
+                        matches = false;
                 }
 
 #if NEGATED_LITERALS
                 for (int i = 0; matches && i < n_feats_neg; ++i) {
                     int lit = N_POSITION_FEATS + included_feats_neg[i];
-                    if (get_X_fid(X, patch_row, patch_col, lit) != 0) matches = false;
+                    if (get_X_fid(X, patch_row, patch_col, lit) != 0)
+                        matches = false;
                 }
 #endif
 
-                if (matches) clause_matched = true;
+                if (matches)
+                    clause_matched = true;
             }
         }
 

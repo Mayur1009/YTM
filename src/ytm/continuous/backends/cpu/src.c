@@ -24,6 +24,8 @@
 #define TYPE1A_FB 1
 #define TYPE1B_FB 1
 #define TYPE2_FB 1
+#define TRACK_PATCH_WEIGHTS 1
+#define BOOST_TP_FB 1
 #define N_RAW_PATCH_FEATS 100
 #define N_PATCH_FEATS 100
 #define N_POSITION_FEATS 36
@@ -108,6 +110,20 @@ static inline void literal_inc(uint* restrict ta_state, int start, int end, int 
     }
 }
 
+static inline void literal_inc_maybe_p(uint* restrict rng, uint* restrict ta_state, int start, int end, int offset,
+                                       float p) {
+#if BOOST_TP_FB
+    literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
+#else
+    int li = start + geometric_sample(rng, p) - 1;
+    while (li < end) {
+        if (ta_state[li + offset] < MAX_TA_STATE)
+            ta_state[li + offset] += 1;
+        li += geometric_sample(rng, p);
+    }
+#endif
+}
+
 // Update prob function - v is the clipped class sum and y it the target threshold.
 static inline float uprob_fun(float v, float y) {
     float prob = (y - v) / (2 * y);
@@ -140,21 +156,21 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
 
 #if POSITION_LITERALS
     // Position Y literals: [0, patch_idx_y) have value 1, [patch_idx_y, N_POSITION_FEATS_Y) have value 0
-    literal_inc(ta_state, 0, patch_idx_y, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, 0, patch_idx_y, 0, 1 - S_INV);
     literal_dec_with_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
 
     // Position X literals: [0, patch_idx_x) have value 1, [patch_idx_x, N_POSITION_FEATS_X) have value 0
-    literal_inc(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, 1 - S_INV);
     literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
 
 #if NEGATED_LITERALS
     // Negated position Y: [0, patch_idx_y) have value 0, [patch_idx_y, N_POSITION_FEATS_Y) have value 1
     literal_dec_with_p(rng, ta_state, 0, patch_idx_y, N_LITERALS / 2, S_INV);
-    literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1 - S_INV);
 
     // Negated position X: [0, patch_idx_x) have value 0, [patch_idx_x, N_POSITION_FEATS_X) have value 1
     literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
-    literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, 1 - S_INV);
 #endif
 #endif
 
@@ -164,12 +180,12 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
         // Positive literals: bits [0, shifted_val) are 1, [shifted_val, lit_end) are 0
-        literal_inc(ta_state, lit_start, lit_start + shifted_val, 0, MAX_TA_STATE);
+        literal_inc_maybe_p(rng, ta_state, lit_start, lit_start + shifted_val, 0, 1 - S_INV);
         literal_dec_with_p(rng, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
 #if NEGATED_LITERALS
         // Negated: bits [0, shifted_val) are 0, [shifted_val, n_bits) are 1
         literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
-        literal_inc(ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, MAX_TA_STATE);
+        literal_inc_maybe_p(rng, ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, 1 - S_INV);
 #endif
     }
 #endif

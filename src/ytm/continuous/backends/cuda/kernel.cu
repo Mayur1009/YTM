@@ -23,6 +23,8 @@
 #define TYPE1A_FB 1
 #define TYPE1B_FB 1
 #define TYPE2_FB 1
+#define TRACK_PATCH_WEIGHTS 1
+#define BOOST_TP_FB 1
 #define N_RAW_PATCH_FEATS 100
 #define N_PATCH_FEATS 100
 #define N_POSITION_FEATS 36
@@ -75,6 +77,19 @@ __device__ inline void literal_inc(uint* ta_state, int start, int end, int offse
     }
 }
 
+__device__ inline void literal_inc_maybe_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
+#if BOOST_TP_FB
+    literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
+#else
+    int li = start + geometric_sample(rng, p) - 1;
+    while (li < end) {
+        if (ta_state[li + offset] < MAX_TA_STATE)
+            ta_state[li + offset] += 1;
+        li += geometric_sample(rng, p);
+    }
+#endif
+}
+
 __device__ inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
 __device__ inline bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
@@ -109,21 +124,21 @@ __device__ void type1a_fb(curandState* rng, uint* ta_state, float* weight, const
 
 #if POSITION_LITERALS
     // Position Y
-    literal_inc(ta_state, 0, patch_idx_y, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, 0, patch_idx_y, 0, 1.0f - S_INV);
     literal_dec_with_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
 
     // Position X
-    literal_inc(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, 1.0f - S_INV);
     literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
 
 #if NEGATED_LITERALS
     // Negated position Y
     literal_dec_with_p(rng, ta_state, 0, patch_idx_y, N_LITERALS / 2, S_INV);
-    literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1.0f - S_INV);
 
     // Negated position X
     literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
-    literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, MAX_TA_STATE);
+    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, 1.0f - S_INV);
 #endif
 #endif
 
@@ -135,13 +150,13 @@ __device__ void type1a_fb(curandState* rng, uint* ta_state, float* weight, const
         int shifted_val = val - feat_mins[fid];
 
         // Positive: [0, shifted_val) are 1, [shifted_val, n_bits) are 0
-        literal_inc(ta_state, lit_start, lit_start + shifted_val, 0, MAX_TA_STATE);
+        literal_inc_maybe_p(rng, ta_state, lit_start, lit_start + shifted_val, 0, 1.0f - S_INV);
         literal_dec_with_p(rng, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
 
 #if NEGATED_LITERALS
         // Negated: [0, shifted_val) are 0, [shifted_val, n_bits) are 1
         literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
-        literal_inc(ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, MAX_TA_STATE);
+        literal_inc_maybe_p(rng, ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, 1.0f - S_INV);
 #endif
     }
 #endif

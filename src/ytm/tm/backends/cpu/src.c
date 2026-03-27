@@ -1,27 +1,29 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
-    #define USE_OMP 1
-    #define TOTAL_CLAUSES 1000
-    #define THRESH 100
-    #define S 10.0
-    #define CLASSES 10
-    #define HEIGHT 28
-    #define WIDTH 28
-    #define DEPTH 1
-    #define PATCH_HEIGHT 10
-    #define PATCH_WIDTH 10
-    #define NEGATED_LITERALS 1
-    #define POSITION_LITERALS 1
-    #define COALESCED 1
-    #define WEIGHTED 1
-    #define MAX_WEIGHT 10.0f
-    #define NEGATIVE_CLAUSES 1
-    #define ALLOW_POLARITY_CHANGE 1
-    #define MAX_INCLUDED_LITERALS 10
-    #define INCLUDE_STATE 128
-    #define MAX_TA_STATE 255
-    #define TYPE1A_FB 1
-    #define TYPE1B_FB 1
-    #define TYPE2_FB 1
+#define USE_OMP 1
+#define TOTAL_CLAUSES 1000
+#define THRESH 100
+#define S 10.0
+#define CLASSES 10
+#define HEIGHT 28
+#define WIDTH 28
+#define DEPTH 1
+#define PATCH_HEIGHT 10
+#define PATCH_WIDTH 10
+#define NEGATED_LITERALS 1
+#define POSITION_LITERALS 1
+#define COALESCED 1
+#define WEIGHTED 1
+#define MAX_WEIGHT 10.0f
+#define NEGATIVE_CLAUSES 1
+#define ALLOW_POLARITY_CHANGE 1
+#define MAX_INCLUDED_LITERALS 10
+#define INCLUDE_STATE 128
+#define MAX_TA_STATE 255
+#define TYPE1A_FB 1
+#define TYPE1B_FB 1
+#define TYPE2_FB 1
+#define TRACK_PATCH_WEIGHTS 1
+#define BOOST_TP_FB 1
 #endif
 
 #define INT_SIZE 32
@@ -30,9 +32,9 @@
 #define N_POSITION_FEATS (HEIGHT - PATCH_HEIGHT + WIDTH - PATCH_WIDTH)
 #define N_FEATURE_FEATS (PATCH_HEIGHT * PATCH_WIDTH * DEPTH)
 #if NEGATED_LITERALS
-    #define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
+#define LITERALS (2 * (N_POSITION_FEATS + N_FEATURE_FEATS))
 #else
-    #define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
+#define LITERALS (N_POSITION_FEATS + N_FEATURE_FEATS)
 #endif
 #define NUM_LITERAL_CHUNKS ((LITERALS + INT_SIZE - 1) / INT_SIZE)
 
@@ -41,17 +43,17 @@
 #define PATCHES (N_PATCHES_Y * N_PATCHES_X)
 
 #if ((LITERALS % INT_SIZE) != 0)
-    #define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
+#define FILTER (~(0xFFFFFFFF << (LITERALS % INT_SIZE)))
 #else
-    #define FILTER 0xFFFFFFFF
+#define FILTER 0xFFFFFFFF
 #endif
 
 #if COALESCED == 0
-    #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
-    #define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
+#define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+#define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
 #else
-    #define CLAUSES_PER_CLASS TOTAL_CLAUSES
-    #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
+#define CLAUSES_PER_CLASS TOTAL_CLAUSES
+#define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
 #define CLIP(val, min, max) ((val < min) ? min : ((val > max) ? max : val))
@@ -64,17 +66,17 @@
 #include <string.h>
 
 #if USE_OMP
-    #include <omp.h>
-    #define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
-    #define OMP_ATOMIC _Pragma("omp atomic")
-    #define OMP_SIMD _Pragma("omp simd")
-    #define GET_THREAD_ID omp_get_thread_num()
+#include <omp.h>
+#define OMP_PARALLEL_FOR _Pragma("omp parallel for schedule(static)")
+#define OMP_ATOMIC _Pragma("omp atomic")
+#define OMP_SIMD _Pragma("omp simd")
+#define GET_THREAD_ID omp_get_thread_num()
 void set_num_threads(int num_threads) { omp_set_num_threads(num_threads); }
 #else
-    #define OMP_PARALLEL_FOR
-    #define OMP_ATOMIC
-    #define OMP_SIMD
-    #define GET_THREAD_ID 0
+#define OMP_PARALLEL_FOR
+#define OMP_ATOMIC
+#define OMP_SIMD
+#define GET_THREAD_ID 0
 #endif
 
 typedef unsigned long long ull;
@@ -95,33 +97,15 @@ static inline float xorshift32(uint* state) {
 // Returns the number of trials until first success (1-indexed)
 static inline int geometric_sample(uint* rng, float p) {
     float u = xorshift32(rng);
-    if (u >= 1.0f) u = 0.9999999f;
+    if (u >= 1.0f)
+        u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
-}
-
-// Probabilistically decrement literals in range [start, end) with probability p
-// offset is added to index (use LITERALS/2 for negated, 0 otherwise)
-static inline void literal_dec_with_p(uint* restrict rng, uint* restrict ta_state, int start, int end, int offset,
-                                      float p) {
-    int li = start + geometric_sample(rng, p) - 1;
-    while (li < end) {
-        if (ta_state[li + offset] > 0) ta_state[li + offset] -= 1;
-        li += geometric_sample(rng, p);
-    }
-}
-
-// Increment literals in range [start, end) up to max_val (branchless, SIMD-friendly)
-// offset is added to index (use LITERALS/2 for negated, 0 otherwise)
-static inline void literal_inc(uint* restrict ta_state, int start, int end, int offset, uint max_val) {
-    OMP_SIMD
-    for (int li = start; li < end; ++li) {
-        ta_state[li + offset] += (ta_state[li + offset] < max_val);
-    }
 }
 
 static inline int clause_match_fun(const uint* restrict ta_state, const uint* restrict X) {
     for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS - 1; ++chunk)
-        if ((ta_state[chunk] & X[chunk]) != ta_state[chunk]) return 0;
+        if ((ta_state[chunk] & X[chunk]) != ta_state[chunk])
+            return 0;
     if ((ta_state[NUM_LITERAL_CHUNKS - 1] & (X[NUM_LITERAL_CHUNKS - 1] & FILTER)) !=
         (ta_state[NUM_LITERAL_CHUNKS - 1] & FILTER))
         return 0;
@@ -133,9 +117,10 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
                              const uint* restrict patch, const int sign) {
 #if TYPE1A_FB
     float s_inv = S_INV;
-    #if WEIGHTED
-    if (fabs(*weight) < MAX_WEIGHT) (*weight) += sign * 1.0f;
-    #endif
+#if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT)
+        (*weight) += sign * 1.0f;
+#endif
 
     for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
         uint patch_bits = patch[chunk];
@@ -143,7 +128,12 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
             uint patch_bit = (patch_bits >> bit) & 1u;
             int li = chunk * INT_SIZE + bit;
             if (patch_bit == 1 && ta_state[li] < MAX_TA_STATE) {
+#if BOOST_TP_FB
                 ta_state[li] += 1;
+#else
+                if (xorshift32(rng) <= 1 - s_inv)
+                    ta_state[li] += 1;
+#endif
             } else if (patch_bit == 0 && ta_state[li] > 0 && xorshift32(rng) <= s_inv) {
                 ta_state[li] -= 1;
             }
@@ -155,23 +145,32 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
 
 static inline void type1b_fb(uint* restrict rng, uint* restrict ta_state, const int sign) {
 #if TYPE1B_FB
-    literal_dec_with_p(rng, ta_state, 0, LITERALS, 0, S_INV);
+    int li = 0 + geometric_sample(rng, S_INV) - 1;
+    while (li < LITERALS) {
+        if (ta_state[li] > 0)
+            ta_state[li] -= 1;
+        li += geometric_sample(rng, S_INV);
+    }
 #endif
 }
 
 static inline void type2_fb(uint* restrict ta_state, float* restrict weight, const uint* restrict patch,
                             const int sign) {
 #if TYPE2_FB
-    #if WEIGHTED
-    if (fabs(*weight) < MAX_WEIGHT) (*weight) -= sign * 1.0f;
-        #if ALLOW_POLARITY_CHANGE == 0
-    if (sign == 1 && *weight < 0) *weight = 1;
-    if (sign == -1 && *weight >= 0) *weight = -1;
-        #endif
-    #endif
-    #if NEGATIVE_CLAUSES == 0
-    if (*weight < 1) *weight = 1;
-    #endif
+#if WEIGHTED
+    if (fabs(*weight) < MAX_WEIGHT)
+        (*weight) -= sign * 1.0f;
+#if ALLOW_POLARITY_CHANGE == 0
+    if (sign == 1 && *weight < 0)
+        *weight = 1;
+    if (sign == -1 && *weight >= 0)
+        *weight = -1;
+#endif
+#endif
+#if NEGATIVE_CLAUSES == 0
+    if (*weight < 1)
+        *weight = 1;
+#endif
 
     for (int chunk = 0; chunk < NUM_LITERAL_CHUNKS; ++chunk) {
         uint patch_bits = patch[chunk];
@@ -449,7 +448,8 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
     OMP_PARALLEL_FOR
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         // Skip dropped clauses
-        if (clause_drop_mask[clause] == 1) continue;
+        if (clause_drop_mask[clause] == 1)
+            continue;
 
         uint* ta_state = &global_ta_states[clause * LITERALS];
         int local_clause_output = selected_patch_ids[clause] > -1 ? 1 : 0;
@@ -514,7 +514,8 @@ void clause_inference(const uint* restrict packed_clauses, const float* restrict
     for (ull e_clause = 0; e_clause < (ull)N * (ull)TOTAL_CLAUSES; e_clause++) {
         ull e = e_clause / TOTAL_CLAUSES;
         ull clause = e_clause % TOTAL_CLAUSES;
-        if (num_includes[clause] == 0) continue;  // Skip empty clauses
+        if (num_includes[clause] == 0)
+            continue; // Skip empty clauses
         int clause_output = 0;
         for (int patch_id = 0; patch_id < PATCHES; ++patch_id) {
             if (clause_match_fun(&packed_clauses[clause * NUM_LITERAL_CHUNKS],
