@@ -68,7 +68,7 @@ class CUDADevice(BaseDevice):
         self.k_pack_clauses.prepare("PPPPPPPPPP")
 
         self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_eval_clauses.prepare("PiPPPPPPPPPP")
+        self.k_eval_clauses.prepare("PiPPPPPPPPPPP")
 
         self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
         self.k_select_patch_and_count_votes.prepare("PPPPPP")
@@ -80,10 +80,10 @@ class CUDADevice(BaseDevice):
         self.k_update_clauses.prepare("PPPPPPPPPPPPP")
 
         self.k_infer_batch = mod.get_function("infer_batch")
-        self.k_infer_batch.prepare("PPPiPPPPPPPP")
+        self.k_infer_batch.prepare("PPPiPPPPPPPPP")
 
         self.k_transform_patchwise = mod.get_function("transform_patchwise")
-        self.k_transform_patchwise.prepare("PPiPPPPPPPP")
+        self.k_transform_patchwise.prepare("PPiPPPPPPPPP")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses)
         self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
@@ -201,6 +201,7 @@ class CUDADevice(BaseDevice):
                     np.int32(e),
                     clause_drop_mask_gpu.gpudata,
                     self.feat_mins_gpu.gpudata,
+                    self.literal_offsets_gpu.gpudata,
                     clause_positions.gpudata,
                     clause_feat_min.gpudata,
                     clause_feat_max.gpudata,
@@ -305,6 +306,7 @@ class CUDADevice(BaseDevice):
                 cs_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
+                self.literal_offsets_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
                 bufs["clause_feat_min"].gpudata,
                 bufs["clause_feat_max"].gpudata,
@@ -338,6 +340,7 @@ class CUDADevice(BaseDevice):
                 po_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
+                self.literal_offsets_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
                 bufs["clause_feat_min"].gpudata,
                 bufs["clause_feat_max"].gpudata,
