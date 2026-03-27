@@ -396,7 +396,7 @@ void select_patch_and_count_votes(uint* restrict rng, const float* restrict clau
 }
 
 void evidence_to_update_prob(const float* restrict pos_votes, const float* restrict neg_votes,
-                             const int8_t* restrict targets, const int e, float* restrict prob) {
+                             const float* restrict targets, const int e, float* restrict prob) {
     /*
      * Convert the votes to update probability.
      *
@@ -426,7 +426,7 @@ void evidence_to_update_prob(const float* restrict pos_votes, const float* restr
 
 void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, const uint* restrict num_includes,
                     const int8_t* restrict clause_drop_mask, const uint* restrict encoded_X,
-                    const int8_t* restrict targets, const float* restrict prob, const int e,
+                    const float* restrict targets, const float* restrict prob, const int e,
                     uint* restrict global_ta_states, float* restrict clause_weights) {
     /*
      * Update clauses.
@@ -459,8 +459,11 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 
         ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
-            int local_target = targets[e * CLASSES + class_id];
-            if (local_target == 0) continue;
+            float q_prob = targets[e * CLASSES + class_id]; // Can be [-1, 1]
+
+            if (q_prob == 0.0f || xorshift32(&rng[GET_THREAD_ID]) > fabs(q_prob))
+                continue;
+            int local_target = (q_prob > 0.0f) ? 1 : -1;
 
             float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             int sign = (*local_weight >= 0) - (*local_weight < 0);

@@ -176,7 +176,7 @@ class CUDADevice(BaseDevice):
         for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             X_batch = ga.to_gpu(np.ascontiguousarray(X[i:batch_end], dtype=np.int32))
-            tar_batch = ga.to_gpu(np.ascontiguousarray(targets[i:batch_end], dtype=np.int8))
+            tar_batch = ga.to_gpu(np.ascontiguousarray(targets[i:batch_end], dtype=np.float32))
             bs = batch_end - i
 
             for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):

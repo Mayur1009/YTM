@@ -390,7 +390,7 @@ void eval_clauses(uint* restrict rng, const int8_t* restrict X, const uint* rest
 
 void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, uint* restrict global_ta_states,
                     float* restrict clause_weights, const int8_t* restrict clause_drop_mask, const int8_t* restrict X,
-                    const int8_t* restrict targets, const float* restrict prob) {
+                    const float* restrict targets, const float* restrict prob) {
     /*
      * Update clauses based on feedback (no pre-encoding version).
      *
@@ -427,8 +427,11 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 
         ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
-            int local_target = targets[class_id];
-            if (local_target == 0) continue;
+            float q_prob = targets[class_id]; // Can be [-1, 1]
+
+            if (q_prob == 0.0f || xorshift32(&rng[GET_THREAD_ID]) > fabs(q_prob))
+                continue;
+            int local_target = (q_prob > 0.0f) ? 1 : -1;
 
             float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
             int sign = (*local_weight >= 0) - (*local_weight < 0);
@@ -457,7 +460,7 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 }
 
 void fit_sample(uint* restrict rng, uint* global_ta_states, float* restrict clause_weights, int* restrict patch_weights,
-                const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const int8_t* restrict targets) {
+                const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const float* restrict targets) {
     /*
      * Fit a single sample (no pre-encoding version).
      *
@@ -494,13 +497,13 @@ void fit_sample(uint* restrict rng, uint* global_ta_states, float* restrict clau
     // Step 3: Calculate update probabilities
     float prob[CLASSES];
     for (ull class_id = 0; class_id < CLASSES; class_id++) {
-        int local_target = targets[class_id];
-        if (local_target == 0) {
+        float local_target = targets[class_id];
+        if (local_target == 0.0f) {
             prob[class_id] = 0.0f;
             continue;
         }
 
-        float y = (float)THRESH * (float)local_target;
+        float y = (float)THRESH * (local_target > 0.0f ? 1.0f : -1.0f);
         float class_sum = (float)CLIP(votes[class_id], -THRESH, THRESH);
         prob[class_id] = uprob_fun(class_sum, y);
     }
@@ -605,7 +608,7 @@ void infer_batch(uint* restrict rng, const int8_t* restrict X, const uint* restr
 }
 
 void fit_batch(uint* restrict rng, uint* global_ta_states, float* restrict clause_weights, int* restrict patch_weights,
-               const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const int8_t* restrict targets,
+               const int8_t* restrict clause_drop_mask, const int8_t* restrict X, const float* restrict targets,
                int N) {
     /*
      * Batch training for N samples (no pre-encoding version).
@@ -624,7 +627,7 @@ void fit_batch(uint* restrict rng, uint* global_ta_states, float* restrict claus
 
     for (int e = 0; e < N; e++) {
         const int8_t* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
-        const int8_t* targets_sample = &targets[e * CLASSES];
+        const float* targets_sample = &targets[e * CLASSES];
 
         fit_sample(rng, global_ta_states, clause_weights, patch_weights, clause_drop_mask, X_sample, targets_sample);
     }

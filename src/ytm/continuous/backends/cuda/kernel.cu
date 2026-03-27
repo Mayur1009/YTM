@@ -409,30 +409,30 @@ __global__ void select_patch_and_count_votes(curandState* rng, const int8_t* cla
     rng[tid] = local_rng;
 }
 
-__global__ void calc_update_prob(const float* votes, const int8_t* targets, const int e, float* prob) {
+__global__ void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
     for (ull class_id = tid; class_id < (ull)CLASSES; class_id += stride) {
-        int target = targets[(ull)e * CLASSES + class_id];
-        if (target == 0) {
+        float target = targets[(ull)e * CLASSES + class_id];
+        if (target == 0.0f) {
             prob[class_id] = 0.0f;
             continue;
         }
-        float y = (float)THRESH * (float)target;
+        float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
         float v = (float)CLIP(votes[class_id], -THRESH, THRESH);
         prob[class_id] = uprob_fun(v, y);
     }
 }
 
 __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, const uint* num_includes,
-                               const int8_t* clause_drop_mask, const int* X, const int8_t* targets, const int e,
+                               const int8_t* clause_drop_mask, const int* X, const float* targets, const int e,
                                const float* prob, uint* ta_states, float* clause_weights, const int* feat_mins,
                                const int* literal_offsets, int8_t* is_clause_synced) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    const int8_t* targets_e = &targets[(ull)e * CLASSES];
+    const float* targets_e = &targets[(ull)e * CLASSES];
     curandState local_rng = rng[tid];
 
     for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
@@ -453,9 +453,10 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
 
         ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
-            int target = targets_e[class_id];
-            if (target == 0)
+            float q_prob = targets_e[class_id];
+            if (q_prob == 0.0f || curand_uniform(&local_rng) > fabsf(q_prob))
                 continue;
+            int target = (q_prob > 0.0f) ? 1 : -1;
 
             float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
             int sign = (*weight >= 0) - (*weight < 0);

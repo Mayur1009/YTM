@@ -356,7 +356,7 @@ extern "C" {
         rng[index] = localRNG;
     }
 
-    __global__ void evidence_to_update_prob(const float* pos_votes, const float* neg_votes, const int8_t* targets,
+    __global__ void evidence_to_update_prob(const float* pos_votes, const float* neg_votes, const float* targets,
                                             const int e, float* prob) {
         /*
          * Convert the votes to update probability.
@@ -374,20 +374,20 @@ extern "C" {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
         for (ull class_id = index; class_id < CLASSES; class_id += stride) {
-            int local_target = targets[e * CLASSES + class_id];
-            if (local_target == 0) {
+            float local_target = targets[e * CLASSES + class_id];
+            if (local_target == 0.0f) {
                 prob[class_id] = 0.0f;
                 continue;
             }
 
-            float y = (float)THRESH * (float)local_target;
+            float y = (float)THRESH * (local_target > 0.0f ? 1.0f : -1.0f);
             float class_sum = (float)CLIP(pos_votes[class_id] + neg_votes[class_id], -THRESH, THRESH);
             prob[class_id] = uprob_fun(class_sum, y);
         }
     }
 
     __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, const uint* num_includes,
-                                   const int8_t* clause_drop_mask, const uint* encoded_X, const int8_t* targets,
+                                   const int8_t* clause_drop_mask, const uint* encoded_X, const float* targets,
                                    const float* prob, const int e, uint* global_ta_states, float* clause_weights) {
         /*
          * Update clauses.
@@ -423,8 +423,9 @@ extern "C" {
 
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
-                int local_target = targets[e * CLASSES + class_id];
-                if (local_target == 0) continue;
+                float q_prob = targets[e * CLASSES + class_id];
+                if (q_prob == 0.0f || curand_uniform(&localRNG) > fabsf(q_prob)) continue;
+                int local_target = (q_prob > 0.0f) ? 1 : -1;
 
                 float* local_weight = &clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
                 int sign = (*local_weight >= 0) - (*local_weight < 0);

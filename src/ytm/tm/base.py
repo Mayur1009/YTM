@@ -89,18 +89,13 @@ class BaseTM:
         class_sums = self.dev.infer2(X, batch_size)
         return class_sums
 
-    def _target_sampling(
-        self, one_hot_Y: np.ndarray[tuple[int, int], np.dtype[np.int8]]
-    ) -> np.ndarray[tuple[int, int], np.dtype[np.int8]]:
+    def _target_sampling(self, one_hot_Y: np.ndarray) -> np.ndarray:
         N = one_hot_Y.shape[0]
-        targets = np.copy(one_hot_Y).astype(np.int8)
-        p = self.args.q / max(1, self.args.n_classes - 1)
+        targets = np.copy(one_hot_Y).astype(np.float32)
         for i in range(N):
-            # Each negative class can get feedback with prob (q / number_of_outputs - 1)
             false_classes = np.where(one_hot_Y[i, :] == 0)[0]
             if len(false_classes) > 0:
-                not_skip = self.rng.random(size=len(false_classes)) <= p
-                targets[i, false_classes[not_skip]] = -1
+                targets[i, false_classes] = -self.args.q / max(1, self.args.n_classes - 1)
 
         return targets
 

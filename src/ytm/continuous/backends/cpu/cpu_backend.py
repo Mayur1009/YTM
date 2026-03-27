@@ -156,7 +156,7 @@ class CPUDevice(BaseDevice):
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
         X = X.astype(np.int32)
-        targets = targets.astype(np.int8)
+        targets = targets.astype(np.float32)
 
         clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
         clause_feat_min = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
@@ -180,7 +180,7 @@ class CPUDevice(BaseDevice):
                 self.p_literal_offsets,
                 clause_drop_mask.ctypes.data_as(int8_p),
                 X.ctypes.data_as(int32_p),
-                targets.ctypes.data_as(int8_p),
+                targets.ctypes.data_as(float_p),
                 c_int(e),
                 clause_positions.ctypes.data_as(int32_p),
                 clause_feat_min.ctypes.data_as(int32_p),

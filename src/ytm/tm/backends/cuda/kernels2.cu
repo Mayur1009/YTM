@@ -599,14 +599,14 @@ extern "C" {
      */
     __global__ void prob_and_update(curandState* rng, const int* selected_patch_ids, const int* patch_ranges,
                                     const uint* num_includes, const int8_t* clause_drop_mask, const int8_t* X,
-                                    const int8_t* targets, const int e, const float* pos_votes, const float* neg_votes,
+                                    const float* targets, const int e, const float* pos_votes, const float* neg_votes,
                                     uint* global_ta_states, float* clause_weights) {
         ull index = blockIdx.x * blockDim.x + threadIdx.x;
         ull stride = blockDim.x * gridDim.x;
 
         // Index into batch
         const int8_t* X_sample = &X[e * HEIGHT * WIDTH * DEPTH];
-        const int8_t* targets_sample = &targets[e * CLASSES];
+        const float* targets_sample = &targets[e * CLASSES];
 
         curandState localRNG = rng[index];
 
@@ -629,11 +629,12 @@ extern "C" {
             // Process each class
             ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
-                int local_target = targets_sample[class_id];
-                if (local_target == 0) continue;
+                float q_prob = targets_sample[class_id];
+                if (q_prob == 0.0f || curand_uniform(&localRNG) > fabsf(q_prob)) continue;
+                int local_target = (q_prob > 0.0f) ? 1 : -1;
 
                 // Compute update probability for this class (inlined from calc_update_prob)
-                float y = (float)THRESH * (float)local_target;
+                float y = (float)THRESH * (local_target > 0 ? 1.0f : -1.0f);
                 float class_sum = (float)CLIP(pos_votes[class_id] + neg_votes[class_id], -THRESH, THRESH);
                 float update_prob = uprob_fun(class_sum, y);
 

@@ -67,14 +67,14 @@ class CPUDevice(BaseDevice):
         self.lib_pack_clauses.argtypes = [uint32_p, uint32_p, uint32_p]
         self.lib_eval_clauses.argtypes = [uint32_p, uint32_p, int8_p, uint32_p, c_int, int8_p]
         self.lib_select_patch.argtypes = [uint32_p, float_p, int8_p, int32_p, int32_p, float_p, float_p]
-        self.lib_calc_update_prob.argtypes = [float_p, float_p, int8_p, c_int, float_p]
+        self.lib_calc_update_prob.argtypes = [float_p, float_p, float_p, c_int, float_p]
         self.lib_update_clauses.argtypes = [
             uint32_p,
             int32_p,
             uint32_p,
             int8_p,
             uint32_p,
-            int8_p,
+            float_p,
             float_p,
             c_int,
             uint32_p,
@@ -169,7 +169,7 @@ class CPUDevice(BaseDevice):
     def prepare_fit_buffers(self, encoded_X, targets, clause_drop_mask) -> FitBuffers:
         return FitBuffers(
             encoded_X=encoded_X.astype(np.uint32),
-            targets=targets.astype(np.int8),
+            targets=targets.astype(np.float32),
             packed_clauses=np.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
             n_includes=np.empty((self.total_clauses,), dtype=np.uint32),
             clause_outputs=np.empty((self.total_clauses * self.n_patches,), dtype=np.int8),
@@ -231,7 +231,7 @@ class CPUDevice(BaseDevice):
         self.lib_calc_update_prob(
             pos_votes.ctypes.data_as(float_p),
             neg_votes.ctypes.data_as(float_p),
-            targets.ctypes.data_as(int8_p),
+            targets.ctypes.data_as(float_p),
             c_int(e),
             update_probs.ctypes.data_as(float_p),
         )
@@ -252,7 +252,7 @@ class CPUDevice(BaseDevice):
             n_includes.ctypes.data_as(uint32_p),
             clause_drop_mask.ctypes.data_as(int8_p),
             encoded_X.ctypes.data_as(uint32_p),
-            targets.ctypes.data_as(int8_p),
+            targets.ctypes.data_as(float_p),
             update_probs.ctypes.data_as(float_p),
             c_int(e),
             self.ta_states.ctypes.data_as(uint32_p),
@@ -335,7 +335,7 @@ class CPUDevice(BaseDevice):
         for i in tqdm(range(0, N, batch_size), desc="Fitting (no-enc)", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             batch_X = np.ascontiguousarray(X[i:batch_end], dtype=np.int8)
-            batch_targets = np.ascontiguousarray(targets[i:batch_end], dtype=np.int8)
+            batch_targets = np.ascontiguousarray(targets[i:batch_end], dtype=np.float32)
 
             self.lib2_fit_batch(
                 self.p_rng,
@@ -344,7 +344,7 @@ class CPUDevice(BaseDevice):
                 self.patch_weights.ctypes.data_as(int32_p),
                 clause_drop_mask.ctypes.data_as(int8_p),
                 batch_X.ctypes.data_as(int8_p),
-                batch_targets.ctypes.data_as(int8_p),
+                batch_targets.ctypes.data_as(float_p),
                 c_int(batch_end - i),
             )
 
@@ -362,7 +362,7 @@ class CPUDevice(BaseDevice):
             int32_p,  # patch_weights
             int8_p,  # clause_drop_mask
             int8_p,  # X (single sample)
-            int8_p,  # targets
+            float_p,  # targets
         ]
 
         self.lib2_infer_sample = dll2.infer_sample
@@ -392,7 +392,7 @@ class CPUDevice(BaseDevice):
             int32_p,  # patch_weights
             int8_p,  # clause_drop_mask
             int8_p,  # X (batch)
-            int8_p,  # targets (batch)
+            float_p,  # targets (batch)
             c_int,  # N (batch size)
         ]
 

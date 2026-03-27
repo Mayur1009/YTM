@@ -162,7 +162,7 @@ class CUDADevice(BaseDevice):
     ) -> FitBuffers:
         return FitBuffers(
             encoded_X=ga.to_gpu(encoded_X.astype(np.uint32)),
-            targets=ga.to_gpu(targets.astype(np.int8)),
+            targets=ga.to_gpu(targets.astype(np.float32)),
             packed_clauses=ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
             n_includes=ga.empty((self.total_clauses,), dtype=np.uint32),
             clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.int8),
@@ -473,7 +473,7 @@ class CUDADevice(BaseDevice):
 
             # Upload entire batch to GPU once
             X_batch_gpu = ga.to_gpu(X[batch_start:batch_end].astype(np.int8).reshape(batch_N, -1))
-            targets_batch_gpu = ga.to_gpu(targets[batch_start:batch_end].astype(np.int8))
+            targets_batch_gpu = ga.to_gpu(targets[batch_start:batch_end].astype(np.float32))
 
             # Pre-compute skip mask to avoid np.all() in hot loop
             skip_mask = np.all(targets[batch_start:batch_end] == 0, axis=1)
