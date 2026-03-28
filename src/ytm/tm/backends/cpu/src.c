@@ -411,13 +411,13 @@ void evidence_to_update_prob(const float* restrict pos_votes, const float* restr
 
     OMP_PARALLEL_FOR
     for (ull class_id = 0; class_id < CLASSES; class_id++) {
-        int local_target = targets[e * CLASSES + class_id];
-        if (local_target == 0) {
+        float local_target = targets[e * CLASSES + class_id];
+        if (local_target == 0.0f) {
             prob[class_id] = 0.0f;
             continue;
         }
 
-        float y = (float)THRESH * (float)local_target;
+        float y = (float)THRESH * (local_target > 0.0f ? 1.0f : -1.0f);
         float class_sum = (float)CLIP(pos_votes[class_id] + neg_votes[class_id], -THRESH, THRESH);
         prob[class_id] = uprob_fun(class_sum, y);
     }
