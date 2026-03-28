@@ -178,8 +178,7 @@ static inline void type1a_fb(uint* restrict rng, uint* restrict ta_state, float*
     for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
-        int n_bits = lit_end - lit_start;
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
         // Positive literals: bits [0, shifted_val) are 1, [shifted_val, lit_end) are 0
         literal_inc_maybe_p(rng, ta_state, lit_start, lit_start + shifted_val, 0, 1 - S_INV);
         literal_dec_with_p(rng, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
@@ -239,8 +238,7 @@ static inline void type2_fb(uint* restrict ta_state, float* restrict weight, con
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
 
-        int n_bits = lit_end - lit_start;
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
         // Positive literals: increment where value is 0, i.e., [shifted_val, lit_end)
         literal_inc(ta_state, lit_start + shifted_val, lit_end, 0, INCLUDE_STATE);
@@ -258,12 +256,10 @@ static inline int min(int a, int b) { return (a < b) ? a : b; }
 static inline int max(int a, int b) { return (a > b) ? a : b; }
 
 static inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin, const int* cfmax,
-                               const int* feat_mins, const int* literal_offsets, const int* constrained_fids,
-                               int n_constrained) {
+                               const int* feat_mins, const int* constrained_fids, int n_constrained) {
     for (int i = 0; i < n_constrained; ++i) {
         int fid = constrained_fids[i];
-        int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
         if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
             return false;
     }
@@ -404,7 +400,7 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
                   const int* restrict clause_feat_max, const int* restrict constrained_fids,
                   const int* restrict n_constrained, const uint* restrict num_includes,
                   const int8_t* restrict is_clause_valid, const int8_t* restrict clause_drop_mask,
-                  const int* restrict feat_mins, const int* restrict literal_offsets, const int* restrict X,
+                  const int* restrict feat_mins, const int* restrict X,
                   const int e, int* selected_pids, int* patch_weights) {
     /*
      * Evaluate clauses on a input, and randomly select a patch which is matching.
@@ -455,7 +451,7 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
         for (int patch_idx_y = pos[0]; patch_idx_y <= pos[1]; patch_idx_y++) {
             for (int patch_idx_x = pos[2]; patch_idx_x <= pos[3]; patch_idx_x++) {
                 bool patch_matches =
-                    match_patch(Xe, patch_idx_y, patch_idx_x, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
+                    match_patch(Xe, patch_idx_y, patch_idx_x, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
                 if (patch_matches) {
                     // Reservoir sampling to select a patch.
                     active_patch_count++;
@@ -568,7 +564,7 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
                  constrained_fids, n_constrained, num_includes, is_clause_valid, is_clause_synced);
 
     eval_clauses(rng, clause_positions, clause_feat_min, clause_feat_max, constrained_fids, n_constrained, num_includes,
-                 is_clause_valid, clause_drop_mask, feat_mins, literal_offsets, X, e, selected_pids, patch_weights);
+                 is_clause_valid, clause_drop_mask, feat_mins, X, e, selected_pids, patch_weights);
 
     memset(votes, 0, sizeof(float) * CLASSES);
 #if USE_OMP
@@ -606,7 +602,7 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
                   const int* restrict clause_feat_min, const int* restrict clause_feat_max,
                   const int* restrict constrained_fids, const int* restrict n_constrained,
                   const uint* restrict num_includes, const int8_t* restrict is_clause_valid,
-                  const int* restrict feat_mins, const int* restrict literal_offsets, const int* restrict X,
+                  const int* restrict feat_mins, const int* restrict X,
                   const int e, float* restrict class_sums) {
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -632,7 +628,7 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
         // Early exit on first matching patch — closed interval [pos[0], pos[1]]
         for (int py = pos[0]; !matching_patch_found && py <= pos[1]; ++py) {
             for (int px = pos[2]; !matching_patch_found && px <= pos[3]; ++px) {
-                matching_patch_found = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
+                matching_patch_found = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
             }
         }
 
@@ -650,7 +646,7 @@ void eval_sample_patchwise(const float* restrict clause_weights, const int* rest
                            const int* restrict clause_feat_min, const int* restrict clause_feat_max,
                            const int* restrict constrained_fids, const int* restrict n_constrained,
                            const uint* restrict num_includes, const int8_t* restrict is_clause_valid,
-                           const int* restrict feat_mins, const int* restrict literal_offsets,
+                           const int* restrict feat_mins,
                            const int* restrict X, const int e, int8_t* restrict co_patchwise) {
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -681,7 +677,7 @@ void eval_sample_patchwise(const float* restrict clause_weights, const int* rest
         for (int py = pos[0]; py <= pos[1]; ++py) {
             for (int px = pos[2]; px <= pos[3]; ++px) {
                 copwe[clause * (ull)N_PATCHES + py * (ull)N_PATCHES_X + px] =
-                    match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
+                    match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
             }
         }
     }

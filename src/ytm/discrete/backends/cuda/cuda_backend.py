@@ -68,7 +68,7 @@ class CUDADevice(BaseDevice):
         self.k_pack_clauses.prepare("PPPPPPPPPP")
 
         self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_eval_clauses.prepare("PiPPPPPPPPPPP")
+        self.k_eval_clauses.prepare("PiPPPPPPPPPP")
 
         self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
         self.k_select_patch_and_count_votes.prepare("PPPPPP")
@@ -80,10 +80,10 @@ class CUDADevice(BaseDevice):
         self.k_update_clauses.prepare("PPPPPPPPPPPPP")
 
         self.k_infer_batch = mod.get_function("infer_batch")
-        self.k_infer_batch.prepare("PPPiPPPPPPPPP")
+        self.k_infer_batch.prepare("PPPiPPPPPPPP")
 
         self.k_transform_patchwise = mod.get_function("transform_patchwise")
-        self.k_transform_patchwise.prepare("PPiPPPPPPPPP")
+        self.k_transform_patchwise.prepare("PPiPPPPPPPP")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses)
         self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
@@ -201,7 +201,6 @@ class CUDADevice(BaseDevice):
                     np.int32(e),
                     clause_drop_mask_gpu.gpudata,
                     self.feat_mins_gpu.gpudata,
-                    self.literal_offsets_gpu.gpudata,
                     clause_positions.gpudata,
                     clause_feat_min.gpudata,
                     clause_feat_max.gpudata,
@@ -306,7 +305,6 @@ class CUDADevice(BaseDevice):
                 cs_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
-                self.literal_offsets_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
                 bufs["clause_feat_min"].gpudata,
                 bufs["clause_feat_max"].gpudata,
@@ -340,7 +338,6 @@ class CUDADevice(BaseDevice):
                 po_batch.gpudata,
                 np.int32(bs),
                 self.feat_mins_gpu.gpudata,
-                self.literal_offsets_gpu.gpudata,
                 bufs["clause_positions"].gpudata,
                 bufs["clause_feat_min"].gpudata,
                 bufs["clause_feat_max"].gpudata,
@@ -396,13 +393,10 @@ class CUDADevice(BaseDevice):
         feature_bounds[:, :, 0] = clause_feat_min + feat_mins  # lower bounds
         feature_bounds[:, :, 1] = clause_feat_max + feat_mins  # upper bounds
 
-        # Position bounds (convert from exclusive max to inclusive)
+        # Position bounds — already closed interval [min, max]
         position_bounds = None
         if self.args.position_literals:
             position_bounds = clause_positions.copy()
-            # Convert [min, max) to [min, max] (inclusive)
-            position_bounds[:, 1] -= 1  # max_y
-            position_bounds[:, 3] -= 1  # max_x
 
         return {
             "feature_bounds": feature_bounds,

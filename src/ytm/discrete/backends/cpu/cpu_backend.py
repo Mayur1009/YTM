@@ -246,7 +246,6 @@ class CPUDevice(BaseDevice):
                 bufs["num_includes"].ctypes.data_as(uint32_p),
                 bufs["is_clause_valid"].ctypes.data_as(int8_p),
                 self.p_feat_mins,
-                self.p_literal_offsets,
                 X.ctypes.data_as(int32_p),
                 c_int(e),
                 class_sums.ctypes.data_as(float_p),
@@ -273,7 +272,6 @@ class CPUDevice(BaseDevice):
                 bufs["num_includes"].ctypes.data_as(uint32_p),
                 bufs["is_clause_valid"].ctypes.data_as(int8_p),
                 self.p_feat_mins,
-                self.p_literal_offsets,
                 X.ctypes.data_as(int32_p),
                 c_int(e),
                 patch_outputs.ctypes.data_as(int8_p),
@@ -317,13 +315,10 @@ class CPUDevice(BaseDevice):
         feature_bounds[:, :, 0] = bufs["clause_feat_min"] + feat_mins  # lower bounds
         feature_bounds[:, :, 1] = bufs["clause_feat_max"] + feat_mins  # upper bounds
 
-        # Position bounds (convert from exclusive max to inclusive)
+        # Position bounds — already closed interval [min, max]
         position_bounds = None
         if self.args.position_literals:
             position_bounds = bufs["clause_positions"].copy()
-            # Convert [min, max) to [min, max] (inclusive)
-            position_bounds[:, 1] -= 1  # max_y
-            position_bounds[:, 3] -= 1  # max_x
 
         # Check validity from packed buffer
         is_valid = bufs["is_clause_valid"].astype(bool)

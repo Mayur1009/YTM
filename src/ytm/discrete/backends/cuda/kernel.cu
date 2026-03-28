@@ -104,12 +104,11 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
 
 // Check if a patch matches a clause using sparse range representation
 __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin,
-                                       const int* cfmax, const int* feat_mins, const int* literal_offsets,
+                                       const int* cfmax, const int* feat_mins,
                                        const int* cfids, int n_cfids) {
     for (int i = 0; i < n_cfids; ++i) {
         int fid = cfids[i];
-        int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
         if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
             return false;
     }
@@ -148,8 +147,7 @@ __device__ void type1a_fb(curandState* rng, uint* ta_state, float* weight, const
     for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
-        int n_bits = lit_end - lit_start;
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
         // Positive: [0, shifted_val) are 1, [shifted_val, n_bits) are 0
         literal_inc_maybe_p(rng, ta_state, lit_start, lit_start + shifted_val, 0, 1.0f - S_INV);
@@ -206,8 +204,7 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
     for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
-        int n_bits = lit_end - lit_start;
-        int shifted_val = CLIP(get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid], 0, n_bits);
+        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
         // Positive: [shifted_val, n_bits) are 0 → increment
         literal_inc(ta_state, lit_start + shifted_val, lit_end, 0, INCLUDE_STATE);
@@ -325,7 +322,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
 }
 
 __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask, const int* feat_mins,
-                             const int* literal_offsets, const int* clause_positions, const int* clause_feat_min,
+                             const int* clause_positions, const int* clause_feat_min,
                              const int* clause_feat_max, const int* constrained_fids, const int* n_constrained,
                              const uint* num_includes, const int8_t* is_clause_valid, int8_t* clause_outputs) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -374,7 +371,7 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
 
-        bool matches = match_patch(Xe, patch_row, patch_col, cfmin, cfmax, feat_mins, literal_offsets, cfids, n_cfids);
+        bool matches = match_patch(Xe, patch_row, patch_col, cfmin, cfmax, feat_mins, cfids, n_cfids);
         *output = matches ? 1 : 0;
     }
 }
@@ -508,7 +505,7 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
 }
 
 __global__ void infer_batch(const int* X, const float* clause_weights, float* class_sums, const int N,
-                            const int* feat_mins, const int* literal_offsets, const int* clause_positions,
+                            const int* feat_mins, const int* clause_positions,
                             const int* clause_feat_min, const int* clause_feat_max, const int* constrained_fids,
                             const int* n_constrained, const uint* num_includes, const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -540,7 +537,7 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
         // Early exit on first matching patch — closed interval [pos[0], pos[1]]
         for (int py = pos[0]; py <= pos[1] && !matched; ++py) {
             for (int px = pos[2]; px <= pos[3] && !matched; ++px) {
-                matched = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, n_cfids);
+                matched = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids);
             }
         }
 
@@ -555,7 +552,7 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
 }
 
 __global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* feat_mins,
-                                    const int* literal_offsets, const int* clause_positions, const int* clause_feat_min,
+                                    const int* clause_positions, const int* clause_feat_min,
                                     const int* clause_feat_max, const int* constrained_fids, const int* n_constrained,
                                     const uint* num_includes, const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -599,7 +596,7 @@ __global__ void transform_patchwise(const int* X, int8_t* patch_output, const in
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
 
-        *output = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, n_cfids) ? 1 : 0;
+        *output = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids) ? 1 : 0;
     }
 }
 
