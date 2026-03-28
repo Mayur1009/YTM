@@ -251,7 +251,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[lit + N_LITERALS / 2])) {
-                pos[1] = min(pos[1], lit);
+                pos[1] = min(pos[1], lit + 1);
                 total_includes++;
             }
 #endif
@@ -265,7 +265,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[N_POSITION_FEATS_Y + lit + N_LITERALS / 2])) {
-                pos[3] = min(pos[3], lit);
+                pos[3] = min(pos[3], lit + 1);
                 total_includes++;
             }
 #endif
