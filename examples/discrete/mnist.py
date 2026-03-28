@@ -1,7 +1,7 @@
 import numpy as np
 from keras.datasets import mnist
 
-from ytm.continuous.multiclass import MultiClassTM
+from ytm.discrete.multiclass import MultiClassTM
 from ytm.utils import Timer
 
 
