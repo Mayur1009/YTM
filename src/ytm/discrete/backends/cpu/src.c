@@ -307,11 +307,11 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
         int* pos = &clause_positions[clause * 4]; // [min_row, max_row, min_col, max_col]
         is_clause_valid[clause] = 1;
 
-        // Initialize position bounds
-        pos[0] = 0;           // min_row
-        pos[1] = N_PATCHES_Y; // max_row
-        pos[2] = 0;           // min_col
-        pos[3] = N_PATCHES_X; // max_col
+        // Initialize position bounds — closed interval [min, max]
+        pos[0] = 0;               // min_row (inclusive)
+        pos[1] = N_PATCHES_Y - 1; // max_row (inclusive)
+        pos[2] = 0;               // min_col (inclusive)
+        pos[3] = N_PATCHES_X - 1; // max_col (inclusive)
         (*total_includes) = 0;
 
         // Scaning of thermometer literals:
@@ -328,7 +328,7 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[lit + N_LITERALS / 2])) {
-                pos[1] = min(pos[1], lit + 1);
+                pos[1] = min(pos[1], lit);
                 (*total_includes)++;
             }
 #endif
@@ -343,7 +343,7 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[offset + lit + N_LITERALS / 2])) {
-                pos[3] = min(pos[3], lit + 1);
+                pos[3] = min(pos[3], lit);
                 (*total_includes)++;
             }
 #endif
@@ -451,9 +451,9 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
         int active_patch_count = 0;
         *selected_patch = -1; // -1 means no patch matches the clause
 
-        // Check only the postions where clause can be true.
-        for (int patch_idx_y = pos[0]; patch_idx_y < pos[1]; patch_idx_y++) {
-            for (int patch_idx_x = pos[2]; patch_idx_x < pos[3]; patch_idx_x++) {
+        // Check only the positions where clause can be true — closed interval [pos[0], pos[1]]
+        for (int patch_idx_y = pos[0]; patch_idx_y <= pos[1]; patch_idx_y++) {
+            for (int patch_idx_x = pos[2]; patch_idx_x <= pos[3]; patch_idx_x++) {
                 bool patch_matches =
                     match_patch(Xe, patch_idx_y, patch_idx_x, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
                 if (patch_matches) {
@@ -629,9 +629,9 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
         int clause_n_constrained = n_constrained[clause];
         bool matching_patch_found = false;
 
-        // Early exit on first matching patch
-        for (int py = pos[0]; !matching_patch_found && py < pos[1]; ++py) {
-            for (int px = pos[2]; !matching_patch_found && px < pos[3]; ++px) {
+        // Early exit on first matching patch — closed interval [pos[0], pos[1]]
+        for (int py = pos[0]; !matching_patch_found && py <= pos[1]; ++py) {
+            for (int px = pos[2]; !matching_patch_found && px <= pos[3]; ++px) {
                 matching_patch_found = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
             }
         }
@@ -678,8 +678,8 @@ void eval_sample_patchwise(const float* restrict clause_weights, const int* rest
         const int* cfids = &constrained_fids[clause * N_RAW_PATCH_FEATS];
         int clause_n_constrained = n_constrained[clause];
 
-        for (int py = pos[0]; py < pos[1]; ++py) {
-            for (int px = pos[2]; px < pos[3]; ++px) {
+        for (int py = pos[0]; py <= pos[1]; ++py) {
+            for (int px = pos[2]; px <= pos[3]; ++px) {
                 copwe[clause * (ull)N_PATCHES + py * (ull)N_PATCHES_X + px] =
                     match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, clause_n_constrained);
             }

@@ -235,11 +235,11 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
         int* pos = &clause_positions[clause * 4];
         is_clause_valid[clause] = 1;
 
-        // Initialize position bounds
-        pos[0] = 0;           // min_row
-        pos[1] = N_PATCHES_Y; // max_row
-        pos[2] = 0;           // min_col
-        pos[3] = N_PATCHES_X; // max_col
+        // Initialize position bounds — closed interval [min, max]
+        pos[0] = 0;               // min_row (inclusive)
+        pos[1] = N_PATCHES_Y - 1; // max_row (inclusive)
+        pos[2] = 0;               // min_col (inclusive)
+        pos[3] = N_PATCHES_X - 1; // max_col (inclusive)
         uint total_includes = 0;
 
 #if POSITION_LITERALS
@@ -251,7 +251,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[lit + N_LITERALS / 2])) {
-                pos[1] = min(pos[1], lit + 1);
+                pos[1] = min(pos[1], lit);
                 total_includes++;
             }
 #endif
@@ -265,7 +265,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[N_POSITION_FEATS_Y + lit + N_LITERALS / 2])) {
-                pos[3] = min(pos[3], lit + 1);
+                pos[3] = min(pos[3], lit);
                 total_includes++;
             }
 #endif
@@ -362,7 +362,8 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
         int patch_row = patch / N_PATCHES_X;
         int patch_col = patch % N_PATCHES_X;
 
-        if (patch_row < pos[0] || patch_row >= pos[1] || patch_col < pos[2] || patch_col >= pos[3]) {
+        // Closed interval [pos[0], pos[1]]
+        if (patch_row < pos[0] || patch_row > pos[1] || patch_col < pos[2] || patch_col > pos[3]) {
             *output = 0;
             continue;
         }
@@ -536,9 +537,9 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
 
         bool matched = false;
 
-        // Early exit on first matching patch
-        for (int py = pos[0]; py < pos[1] && !matched; ++py) {
-            for (int px = pos[2]; px < pos[3] && !matched; ++px) {
+        // Early exit on first matching patch — closed interval [pos[0], pos[1]]
+        for (int py = pos[0]; py <= pos[1] && !matched; ++py) {
+            for (int px = pos[2]; px <= pos[3] && !matched; ++px) {
                 matched = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, literal_offsets, cfids, n_cfids);
             }
         }
@@ -585,7 +586,8 @@ __global__ void transform_patchwise(const int* X, int8_t* patch_output, const in
         int py = patch / N_PATCHES_X;
         int px = patch % N_PATCHES_X;
 
-        if (py < pos[0] || py >= pos[1] || px < pos[2] || px >= pos[3]) {
+        // Closed interval [pos[0], pos[1]]
+        if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
             *output = 0;
             continue;
         }
