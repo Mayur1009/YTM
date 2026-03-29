@@ -363,47 +363,6 @@ class CUDADevice(BaseDevice):
             return self.patch_weights.get()
         return self.patch_weights.get().reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
 
-    def get_clauses(self):
-        # WARN: Needs testing. Probably wrong.
-        """
-        Returns human-interpretable clause constraints.
-
-        Returns:
-            dict with:
-            - "feature_bounds": (total_clauses, n_raw_patch_feats, 2)
-               [..., 0] = lower bound (value >= this), inclusive, in original feature space
-               [..., 1] = upper bound (value <= this), inclusive, in original feature space
-            - "position_bounds": (total_clauses, 4) if position_literals else None
-               [min_patch_y, max_patch_y, min_patch_x, max_patch_x], inclusive bounds
-            - "is_valid": (total_clauses,) bool - False if clause has contradictory constraints
-        """
-        bufs = self.pack_clauses()
-
-        # Transfer to CPU for processing
-        clause_feat_min = bufs["clause_feat_min"].get()
-        clause_feat_max = bufs["clause_feat_max"].get()
-        clause_positions = bufs["clause_positions"].get()
-        is_clause_valid = bufs["is_clause_valid"].get()
-
-        feat_mins = self.args.feat_mins
-
-        # Convert from shifted bounds to original feature space
-        # clause_feat_min/max are in shifted space (value - feat_min)
-        feature_bounds = np.zeros((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
-        feature_bounds[:, :, 0] = clause_feat_min + feat_mins  # lower bounds
-        feature_bounds[:, :, 1] = clause_feat_max + feat_mins  # upper bounds
-
-        # Position bounds — already closed interval [min, max]
-        position_bounds = None
-        if self.args.position_literals:
-            position_bounds = clause_positions.copy()
-
-        return {
-            "feature_bounds": feature_bounds,
-            "position_bounds": position_bounds,
-            "is_valid": is_clause_valid.astype(bool),
-        }
-
     def get_state_dict(self):
         return {
             "ta_states": self.ta_states.get(),

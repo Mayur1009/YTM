@@ -75,7 +75,10 @@ class BaseTM:
         return self.dev.get_patch_weights()
 
     def get_clauses(self):
-        return self.dev.get_clauses()
+        pass
+
+    def wac(self):
+        pass
 
     def to(self, device: Literal["cpu", "cuda"]):
         if device == self.args.device:
