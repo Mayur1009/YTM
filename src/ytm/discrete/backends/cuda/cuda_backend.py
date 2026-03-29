@@ -354,7 +354,8 @@ class CUDADevice(BaseDevice):
 
             patch_output[i:batch_end] = po_batch.get()
 
-        return patch_output
+        return patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
+
 
     def get_weights(self):
         return self.clause_weights.get()
@@ -366,7 +367,7 @@ class CUDADevice(BaseDevice):
         if not self.args.track_patch_weights:
             warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
             return self.patch_weights.get()
-        return self.patch_weights.get().reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
+        return self.patch_weights.get().reshape(self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x)
 
     def get_state_dict(self):
         return {

@@ -80,6 +80,9 @@ class BaseTM:
     def get_ta_states(self) -> np.ndarray:
         return self.dev.get_ta_states()
 
+    def get_literals(self) -> np.ndarray:
+        return np.asarray(self.get_ta_states() >= self.args.include_state, dtype=np.uint8)
+
     def get_patch_weights(self) -> np.ndarray:
         return self.dev.get_patch_weights()
 
@@ -87,16 +90,21 @@ class BaseTM:
         buf: PackedClauses = self.dev.pack_clauses()
         buf.to_cpu()
 
-        position_bounds = buf.clause_position_bounds if self.args.position_literals else None
-
-        return ClauseInfo(
-            feature_bounds=buf.clause_feat_bounds,
-            position_bounds=position_bounds,
-            is_valid=buf.is_clause_valid.astype(bool),
+        clause_feat_bounds = buf.clause_feat_bounds.reshape(
+            (self.dev.n_clause_banks, self.args.n_clauses, self.dev.n_raw_patch_feats * 2)
         )
 
-    def wac(self):
-        pass
+        position_bounds = None
+        if self.args.position_literals or self.dev.n_patches > 1:
+            position_bounds = buf.clause_position_bounds.reshape((self.dev.n_clause_banks, self.args.n_clauses, 4))
+
+        is_valid = buf.is_clause_valid.reshape((self.dev.n_clause_banks, self.args.n_clauses)).astype(bool)
+
+        return ClauseInfo(
+            feature_bounds=clause_feat_bounds,
+            position_bounds=position_bounds,
+            is_valid=is_valid,
+        )
 
     def to(self, device: Literal["cpu", "cuda"]):
         if device == self.args.device:
