@@ -54,8 +54,10 @@ class BaseTM:
 
         self.dev.fit_epoch(X, targets, clause_drop_p, batch_size)
 
-    def score(self, X: np.ndarray, batch_size: int = -1):
+    def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)
+        if clip_class_sums:
+            class_sums = np.clip(class_sums, -self.args.T, self.args.T)
         return class_sums
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:

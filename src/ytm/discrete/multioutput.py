@@ -16,7 +16,7 @@ class MultiOutputTM(BaseTM):
 
         return self._fit(X, Y, shuffle, clause_drop_p, batch_size)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1):
-        class_sums = self.score(X, batch_size)
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
+        class_sums = self.score(X, batch_size, clip_class_sums)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums

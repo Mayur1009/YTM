@@ -20,7 +20,7 @@ class MultiClassTM(BaseTM):
 
         return self._fit(X, encoded_Y, shuffle, clause_drop_p, batch_size)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1):
-        class_sums = self.score(X, batch_size)
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
+        class_sums = self.score(X, batch_size, clip_class_sums)
         preds = np.argmax(class_sums, axis=1)
         return preds, class_sums

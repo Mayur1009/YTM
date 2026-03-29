@@ -61,8 +61,10 @@ class BaseTM:
 
         self.dev.fit_epoch(encoded_X, targets, clause_drop_p)
 
-    def score(self, encoded_X: np.ndarray):
+    def score(self, encoded_X: np.ndarray, clip_class_sums: bool = False):
         class_sums = self.dev.infer(encoded_X)
+        if clip_class_sums:
+            class_sums = np.clip(class_sums, -self.args.T, self.args.T)
         return class_sums
 
     def _target_sampling(self, one_hot_Y: np.ndarray) -> np.ndarray:
@@ -80,6 +82,9 @@ class BaseTM:
 
     def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         return self.dev.get_ta_states()
+
+    def get_literals(self) -> np.ndarray:
+        return np.asarray(self.get_ta_states() >= self.args.include_state, dtype=np.uint8)
 
     def get_patch_weights(self) -> np.ndarray:
         return self.dev.get_patch_weights()

@@ -17,8 +17,8 @@ class MultiOutputTM(BaseTM):
         encoded_X = self.encode(X) if not is_X_encoded else X
         return self._fit(encoded_X, Y, shuffle, clause_drop_p)
 
-    def predict(self, X: np.ndarray, is_X_encoded: bool = False):
+    def predict(self, X: np.ndarray, is_X_encoded: bool = False, clip_class_sums: bool = False):
         encoded_X = self.encode(X) if not is_X_encoded else X
-        class_sums = self.score(encoded_X)
+        class_sums = self.score(encoded_X, clip_class_sums)
         preds = (class_sums >= 0).astype(np.uint32)
         return preds, class_sums
