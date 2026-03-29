@@ -255,34 +255,34 @@ static inline bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE
 static inline int min(int a, int b) { return (a < b) ? a : b; }
 static inline int max(int a, int b) { return (a > b) ? a : b; }
 
-static inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin, const int* cfmax,
-                               const int* feat_mins, const int* constrained_fids, int n_constrained) {
+static inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfb,
+                               const int* constrained_fids, int n_constrained) {
     for (int i = 0; i < n_constrained; ++i) {
         int fid = constrained_fids[i];
-        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
-        if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
+        int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
+        if (val < cfb[fid * 2] || val > cfb[fid * 2 + 1])
             return false;
     }
     return true;
 }
 
-void pack_clauses(const uint* restrict global_ta_states, const int* literal_offsets, int* restrict clause_positions,
-                  int* restrict clause_feat_min, int* restrict clause_feat_max, int* restrict constrained_fids,
-                  int* restrict n_constrained, uint* restrict num_includes, int8_t* is_clause_valid,
-                  int8_t* restrict is_clause_synced) {
+void pack_clauses(const uint* restrict global_ta_states, const int* restrict feat_mins, const int* restrict feat_maxs,
+                  const int* literal_offsets, int* restrict clause_position_bounds, int* restrict clause_feat_bounds,
+                  int* restrict constrained_fids, int* restrict n_constrained, uint* restrict num_includes,
+                  int8_t* is_clause_valid, int8_t* restrict is_clause_synced) {
     /*
      * Create a sparse ranged representation for the clauses. This is possible since all the features in the clause are
      * encoded using thermometer encoding.
      *
      * Inputs:
      * - global_ta_states[TOTAL_CLAUSES * N_LITERALS]: the state of each TA for each clause
+     * - feat_mins[N_RAW_PATCH_FEATS]: The minimum value for each feature across the dataset.
+     * - feat_maxs[N_RAW_PATCH_FEATS]: The maximum value for each feature across the dataset.
      * - literal_offsets[N_RAW_PATCH_FEATS + 1]: Prefix sum array of the number of bins for each feature.
      *
      * Outputs:
-     * - clause_positions[TOTAL_CLAUSES * 4]: the postional bounds(inclusive) for the clause in the format [min_row,
-     * max_row, min_col, max_col]
-     * - clause_feat_min[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive lower bound for each feature in the clause
-     * - clause_feat_max[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive upper bound for each feature in the clause
+     * - clause_position_bounds[TOTAL_CLAUSES * 4]: the positional bounds (closed) [min_row, max_row, min_col, max_col]
+     * - clause_feat_bounds[TOTAL_CLAUSES * N_RAW_PATCH_FEATS * 2]: closed [min, max] per feature in original space
      * - constrained_fids[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: Indices of features with constraints for each clause
      * - n_constrained[TOTAL_CLAUSES]: Number of constrained features for each clause
      * - num_includes[TOTAL_CLAUSES]: The number of included literals in the clause.
@@ -300,7 +300,7 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
 
         const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         uint* total_includes = &num_includes[clause];
-        int* pos = &clause_positions[clause * 4]; // [min_row, max_row, min_col, max_col]
+        int* pos = &clause_position_bounds[clause * 4]; // [min_row, max_row, min_col, max_col]
         is_clause_valid[clause] = 1;
 
         // Initialize position bounds — closed interval [min, max]
@@ -310,10 +310,9 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
         pos[3] = N_PATCHES_X - 1; // max_col (inclusive)
         (*total_includes) = 0;
 
-        // Scaning of thermometer literals:
-        // Scan positive literals in reverse order to find the first included literal. The the bound for that feature is
-        // >= bit+1. Scan negative literals in normal order to find the first included literal. Then the bound for that
-        // feature is <= bit.
+        // Scanning of thermometer literals:
+        // Positive literal[bit] included => lower bound >= bit + 1
+        // Negated literal[bit] included => upper bound <= bit
 
 #if POSITION_LITERALS
         // Scan Y position literals
@@ -353,9 +352,8 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
             continue;
         }
 
-        // Scan features literals
-        int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
-        int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        // Scan feature literals
+        int* cfb = &clause_feat_bounds[clause * N_RAW_PATCH_FEATS * 2];
         int* cfids = &constrained_fids[clause * N_RAW_PATCH_FEATS];
         int local_n_constrained = 0;
 
@@ -364,25 +362,25 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
             int lstart = N_POSITION_FEATS + literal_offsets[fid];
             bool has_constraint = false;
 
-            // Init the bounds to max
-            cfmin[fid] = 0;
-            cfmax[fid] = n_bits;
+            // Init bounds to full range [feat_min, feat_max]
+            cfb[fid * 2 + 0] = feat_mins[fid];
+            cfb[fid * 2 + 1] = feat_maxs[fid];
 
             for (int bit = 0; bit < n_bits; ++bit) {
                 if (is_included(ta_state[lstart + bit])) {
-                    cfmin[fid] = max(cfmin[fid], bit + 1);
+                    cfb[fid * 2 + 0] = max(cfb[fid * 2 + 0], feat_mins[fid] + bit + 1);
                     (*total_includes)++;
                     has_constraint = true;
                 }
 #if NEGATED_LITERALS
                 if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
-                    cfmax[fid] = min(cfmax[fid], bit);
+                    cfb[fid * 2 + 1] = min(cfb[fid * 2 + 1], feat_mins[fid] + bit);
                     (*total_includes)++;
                     has_constraint = true;
                 }
 #endif
             }
-            if (cfmin[fid] > cfmax[fid]) {
+            if (cfb[fid * 2 + 0] > cfb[fid * 2 + 1]) {
                 is_clause_valid[clause] = 0;
             }
             if (has_constraint) {
@@ -396,25 +394,22 @@ void pack_clauses(const uint* restrict global_ta_states, const int* literal_offs
     }
 }
 
-void eval_clauses(uint* restrict rng, const int* restrict clause_positions, const int* restrict clause_feat_min,
-                  const int* restrict clause_feat_max, const int* restrict constrained_fids,
+void eval_clauses(uint* restrict rng, const int* restrict clause_position_bounds,
+                  const int* restrict clause_feat_bounds, const int* restrict constrained_fids,
                   const int* restrict n_constrained, const uint* restrict num_includes,
                   const int8_t* restrict is_clause_valid, const int8_t* restrict clause_drop_mask,
-                  const int* restrict feat_mins, const int* restrict X,
-                  const int e, int* selected_pids, int* patch_weights) {
+                  const int* restrict X, const int e, int* selected_pids, int* patch_weights) {
     /*
-     * Evaluate clauses on a input, and randomly select a patch which is matching.
+     * Evaluate clauses on an input, and randomly select a matching patch.
      * Inputs:
      * - rng: RNG states for each thread
-     * - clause_positions[TOTAL_CLAUSES * 4]: the postional bounds(inclusive) of the clause.
-     * - clause_feat_min[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive lower bound for each feature in the clause.
-     * - clause_feat_max[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: The inclusive upper bound for each feature in the clause.
+     * - clause_position_bounds[TOTAL_CLAUSES * 4]: closed positional bounds [min_row, max_row, min_col, max_col]
+     * - clause_feat_bounds[TOTAL_CLAUSES * N_RAW_PATCH_FEATS * 2]: closed [min, max] per feature in original space
      * - constrained_fids[TOTAL_CLAUSES * N_RAW_PATCH_FEATS]: Indices of constrained features for each clause.
      * - n_constrained[TOTAL_CLAUSES]: Number of constrained features for each clause.
      * - num_includes[TOTAL_CLAUSES]: The number of included literals in the clause.
      * - is_clause_valid[TOTAL_CLAUSES]: invalid if clause has contradiction, and can never be true.
      * - clause_drop_mask[TOTAL_CLAUSES]: 1 if the clause is dropped.
-     * - feat_mins[N_RAW_PATCH_FEATS]: The minimum value for each feature across the dataset.
      * - X[Samples * HEIGHT * WIDTH * DEPTH]: The input samples.
      * - e: the index of the sample to evaluate on.
      * Outputs:
@@ -438,9 +433,8 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
         }
 
         const int* Xe = &X[(ull)e * (ull)HEIGHT * (ull)WIDTH * (ull)DEPTH];
-        const int* pos = &clause_positions[clause * 4];
-        const int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        const int* pos = &clause_position_bounds[clause * 4];
+        const int* cfb = &clause_feat_bounds[clause * N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * N_RAW_PATCH_FEATS];
         int clause_n_constrained = n_constrained[clause];
         int* selected_patch = &selected_pids[clause];
@@ -450,8 +444,7 @@ void eval_clauses(uint* restrict rng, const int* restrict clause_positions, cons
         // Check only the positions where clause can be true — closed interval [pos[0], pos[1]]
         for (int patch_idx_y = pos[0]; patch_idx_y <= pos[1]; patch_idx_y++) {
             for (int patch_idx_x = pos[2]; patch_idx_x <= pos[3]; patch_idx_x++) {
-                bool patch_matches =
-                    match_patch(Xe, patch_idx_y, patch_idx_x, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
+                bool patch_matches = match_patch(Xe, patch_idx_y, patch_idx_x, cfb, cfids, clause_n_constrained);
                 if (patch_matches) {
                     // Reservoir sampling to select a patch.
                     active_patch_count++;
@@ -551,20 +544,20 @@ void update_clauses(uint* restrict rng, const int* restrict selected_patch_ids, 
 }
 
 void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* restrict clause_weights,
-                int* restrict patch_weights, const int* restrict feat_mins, const int* restrict literal_offsets,
-                const int8_t* restrict clause_drop_mask, const int32_t* restrict X, const float* restrict targets,
-                const int e,
+                int* restrict patch_weights, const int* restrict feat_mins, const int* restrict feat_maxs,
+                const int* restrict literal_offsets, const int8_t* restrict clause_drop_mask,
+                const int32_t* restrict X, const float* restrict targets, const int e,
                 // Array allocations
-                int* restrict clause_positions, int* restrict clause_feat_min, int* restrict clause_feat_max,
+                int* restrict clause_position_bounds, int* restrict clause_feat_bounds,
                 int* restrict constrained_fids, int* restrict n_constrained, uint* restrict num_includes,
                 int8_t* restrict is_clause_valid, int8_t* restrict is_clause_synced, int* restrict selected_pids,
                 float* restrict votes, float* restrict prob) {
 
-    pack_clauses(global_ta_states, literal_offsets, clause_positions, clause_feat_min, clause_feat_max,
+    pack_clauses(global_ta_states, feat_mins, feat_maxs, literal_offsets, clause_position_bounds, clause_feat_bounds,
                  constrained_fids, n_constrained, num_includes, is_clause_valid, is_clause_synced);
 
-    eval_clauses(rng, clause_positions, clause_feat_min, clause_feat_max, constrained_fids, n_constrained, num_includes,
-                 is_clause_valid, clause_drop_mask, feat_mins, X, e, selected_pids, patch_weights);
+    eval_clauses(rng, clause_position_bounds, clause_feat_bounds, constrained_fids, n_constrained, num_includes,
+                 is_clause_valid, clause_drop_mask, X, e, selected_pids, patch_weights);
 
     memset(votes, 0, sizeof(float) * CLASSES);
 #if USE_OMP
@@ -598,11 +591,10 @@ void fit_sample(uint* restrict rng, uint* restrict global_ta_states, float* rest
                    is_clause_synced, global_ta_states, clause_weights);
 }
 
-void infer_sample(const float* restrict clause_weights, const int* restrict clause_positions,
-                  const int* restrict clause_feat_min, const int* restrict clause_feat_max,
-                  const int* restrict constrained_fids, const int* restrict n_constrained,
-                  const uint* restrict num_includes, const int8_t* restrict is_clause_valid,
-                  const int* restrict feat_mins, const int* restrict X,
+void infer_sample(const float* restrict clause_weights, const int* restrict clause_position_bounds,
+                  const int* restrict clause_feat_bounds, const int* restrict constrained_fids,
+                  const int* restrict n_constrained, const uint* restrict num_includes,
+                  const int8_t* restrict is_clause_valid, const int* restrict X,
                   const int e, float* restrict class_sums) {
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -618,9 +610,8 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
             continue;
         }
 
-        const int* pos = &clause_positions[clause * 4];
-        const int* cfmin = &clause_feat_min[clause * N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * N_RAW_PATCH_FEATS];
+        const int* pos = &clause_position_bounds[clause * 4];
+        const int* cfb = &clause_feat_bounds[clause * N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * N_RAW_PATCH_FEATS];
         int clause_n_constrained = n_constrained[clause];
         bool matching_patch_found = false;
@@ -628,7 +619,7 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
         // Early exit on first matching patch — closed interval [pos[0], pos[1]]
         for (int py = pos[0]; !matching_patch_found && py <= pos[1]; ++py) {
             for (int px = pos[2]; !matching_patch_found && px <= pos[3]; ++px) {
-                matching_patch_found = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
+                matching_patch_found = match_patch(Xe, py, px, cfb, cfids, clause_n_constrained);
             }
         }
 
@@ -642,12 +633,11 @@ void infer_sample(const float* restrict clause_weights, const int* restrict clau
     }
 }
 
-void eval_sample_patchwise(const float* restrict clause_weights, const int* restrict clause_positions,
-                           const int* restrict clause_feat_min, const int* restrict clause_feat_max,
-                           const int* restrict constrained_fids, const int* restrict n_constrained,
-                           const uint* restrict num_includes, const int8_t* restrict is_clause_valid,
-                           const int* restrict feat_mins,
-                           const int* restrict X, const int e, int8_t* restrict co_patchwise) {
+void eval_sample_patchwise(const float* restrict clause_weights, const int* restrict clause_position_bounds,
+                           const int* restrict clause_feat_bounds, const int* restrict constrained_fids,
+                           const int* restrict n_constrained, const uint* restrict num_includes,
+                           const int8_t* restrict is_clause_valid, const int* restrict X, const int e,
+                           int8_t* restrict co_patchwise) {
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* copwe = &co_patchwise[(ull)e * TOTAL_CLAUSES * N_PATCHES];
@@ -668,16 +658,15 @@ void eval_sample_patchwise(const float* restrict clause_weights, const int* rest
             continue;
         }
 
-        const int* pos = &clause_positions[clause * 4];
-        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* pos = &clause_position_bounds[clause * 4];
+        const int* cfb = &clause_feat_bounds[clause * N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * N_RAW_PATCH_FEATS];
         int clause_n_constrained = n_constrained[clause];
 
         for (int py = pos[0]; py <= pos[1]; ++py) {
             for (int px = pos[2]; px <= pos[3]; ++px) {
                 copwe[clause * (ull)N_PATCHES + py * (ull)N_PATCHES_X + px] =
-                    match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, clause_n_constrained);
+                    match_patch(Xe, py, px, cfb, cfids, clause_n_constrained);
             }
         }
     }

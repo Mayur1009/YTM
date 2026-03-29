@@ -62,7 +62,7 @@ __device__ inline int geometric_sample(curandState* rng, float p) {
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
-__device__ inline  void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
+__device__ inline void literal_dec_with_p(curandState* rng, uint* ta_state, int start, int end, int offset, float p) {
     int li = start + geometric_sample(rng, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] > 0)
@@ -103,13 +103,12 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
 }
 
 // Check if a patch matches a clause using sparse range representation
-__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfmin,
-                                       const int* cfmax, const int* feat_mins,
-                                       const int* cfids, int n_cfids) {
+__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfb, const int* cfids,
+                                   int n_cfids) {
     for (int i = 0; i < n_cfids; ++i) {
         int fid = cfids[i];
-        int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
-        if (shifted_val < cfmin[fid] || shifted_val > cfmax[fid])
+        int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
+        if (val < cfb[fid * 2] || val > cfb[fid * 2 + 1])
             return false;
     }
     return true;
@@ -139,7 +138,8 @@ __device__ void type1a_fb(curandState* rng, uint* ta_state, float* weight, const
 
     // Negated position X
     literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
-    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2, 1.0f - S_INV);
+    literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2,
+                        1.0f - S_INV);
 #endif
 #endif
 
@@ -217,9 +217,10 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 #endif
 }
 
-__global__ void pack_clauses(const uint* global_ta_states, const int* literal_offsets, int* clause_positions,
-                             int* clause_feat_min, int* clause_feat_max, int* constrained_fids, int* n_constrained,
-                             uint* num_includes, int8_t* is_clause_valid, int8_t* is_clause_synced) {
+__global__ void pack_clauses(const uint* global_ta_states, const int* feat_mins, const int* feat_maxs,
+                             const int* literal_offsets, int* clause_position_bounds, int* clause_feat_bounds,
+                             int* constrained_fids, int* n_constrained, uint* num_includes, int8_t* is_clause_valid,
+                             int8_t* is_clause_synced) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -229,7 +230,7 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             continue;
 
         const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
-        int* pos = &clause_positions[clause * 4];
+        int* pos = &clause_position_bounds[clause * 4];
         is_clause_valid[clause] = 1;
 
         // Initialize position bounds — closed interval [min, max]
@@ -277,37 +278,36 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
             continue;
         }
 
-        // Scan feature literals - compute cfmin/cfmax bounds
-        int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
-        int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int local_n_constrained = 0;
 
-        for (int fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
+        // Find inclusive bounds for each feature
+        for (ull fid = 0; fid < N_RAW_PATCH_FEATS; ++fid) {
             int n_bits = literal_offsets[fid + 1] - literal_offsets[fid];
             int lstart = N_POSITION_FEATS + literal_offsets[fid];
             bool has_constraint = false;
 
-            // Init bounds to full range
-            cfmin[fid] = 0;
-            cfmax[fid] = n_bits;
+            // Init bounds to full range [feat_min, feat_max]
+            cfb[fid * 2 + 0] = feat_mins[fid];
+            cfb[fid * 2 + 1] = feat_maxs[fid];
 
             for (int bit = 0; bit < n_bits; ++bit) {
                 if (is_included(ta_state[lstart + bit])) {
-                    cfmin[fid] = max(cfmin[fid], bit + 1);
+                    cfb[fid * 2 + 0] = max(cfb[fid * 2 + 0], feat_mins[fid] + bit + 1);
                     total_includes++;
                     has_constraint = true;
                 }
 #if NEGATED_LITERALS
                 if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
-                    cfmax[fid] = min(cfmax[fid], bit);
+                    cfb[fid * 2 + 1] = min(cfb[fid * 2 + 1], feat_mins[fid] + bit);
                     total_includes++;
                     has_constraint = true;
                 }
 #endif
             }
 
-            if (cfmin[fid] > cfmax[fid]) {
+            if (cfb[fid * 2 + 0] > cfb[fid * 2 + 1]) {
                 is_clause_valid[clause] = 0;
             }
             if (has_constraint) {
@@ -321,10 +321,10 @@ __global__ void pack_clauses(const uint* global_ta_states, const int* literal_of
     }
 }
 
-__global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask, const int* feat_mins,
-                             const int* clause_positions, const int* clause_feat_min,
-                             const int* clause_feat_max, const int* constrained_fids, const int* n_constrained,
-                             const uint* num_includes, const int8_t* is_clause_valid, int8_t* clause_outputs) {
+__global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask,
+                             const int* clause_position_bounds, const int* clause_feat_bounds,
+                             const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                             const int8_t* is_clause_valid, int8_t* clause_outputs) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -355,7 +355,7 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
         }
 
         // Check position bounds
-        const int* pos = &clause_positions[clause * 4];
+        const int* pos = &clause_position_bounds[clause * 4];
         int patch_row = patch / N_PATCHES_X;
         int patch_col = patch % N_PATCHES_X;
 
@@ -366,12 +366,11 @@ __global__ void eval_clauses(const int* X, const int e, const int8_t* clause_dro
         }
 
         // Use match_patch with sparse range representation
-        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
 
-        bool matches = match_patch(Xe, patch_row, patch_col, cfmin, cfmax, feat_mins, cfids, n_cfids);
+        bool matches = match_patch(Xe, patch_row, patch_col, cfb, cfids, n_cfids);
         *output = matches ? 1 : 0;
     }
 }
@@ -505,9 +504,9 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
 }
 
 __global__ void infer_batch(const int* X, const float* clause_weights, float* class_sums, const int N,
-                            const int* feat_mins, const int* clause_positions,
-                            const int* clause_feat_min, const int* clause_feat_max, const int* constrained_fids,
-                            const int* n_constrained, const uint* num_includes, const int8_t* is_clause_valid) {
+                            const int* clause_position_bounds, const int* clause_feat_bounds,
+                            const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                            const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -524,11 +523,10 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
             continue;
 
         const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* pos = &clause_positions[clause * 4];
+        const int* pos = &clause_position_bounds[clause * 4];
 
         // Get sparse range representation for this clause
-        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
 
@@ -537,7 +535,7 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
         // Early exit on first matching patch — closed interval [pos[0], pos[1]]
         for (int py = pos[0]; py <= pos[1] && !matched; ++py) {
             for (int px = pos[2]; px <= pos[3] && !matched; ++px) {
-                matched = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids);
+                matched = match_patch(Xe, py, px, cfb, cfids, n_cfids);
             }
         }
 
@@ -551,10 +549,9 @@ __global__ void infer_batch(const int* X, const float* clause_weights, float* cl
     }
 }
 
-__global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* feat_mins,
-                                    const int* clause_positions, const int* clause_feat_min,
-                                    const int* clause_feat_max, const int* constrained_fids, const int* n_constrained,
-                                    const uint* num_includes, const int8_t* is_clause_valid) {
+__global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* clause_position_bounds,
+                                    const int* clause_feat_bounds, const int* constrained_fids,
+                                    const int* n_constrained, const uint* num_includes, const int8_t* is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -579,7 +576,7 @@ __global__ void transform_patchwise(const int* X, int8_t* patch_output, const in
         }
 
         // Check position bounds
-        const int* pos = &clause_positions[clause * 4];
+        const int* pos = &clause_position_bounds[clause * 4];
         int py = patch / N_PATCHES_X;
         int px = patch % N_PATCHES_X;
 
@@ -591,12 +588,11 @@ __global__ void transform_patchwise(const int* X, int8_t* patch_output, const in
 
         // Use match_patch with sparse range representation
         const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* cfmin = &clause_feat_min[clause * (ull)N_RAW_PATCH_FEATS];
-        const int* cfmax = &clause_feat_max[clause * (ull)N_RAW_PATCH_FEATS];
+        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
 
-        *output = match_patch(Xe, py, px, cfmin, cfmax, feat_mins, cfids, n_cfids) ? 1 : 0;
+        *output = match_patch(Xe, py, px, cfb, cfids, n_cfids) ? 1 : 0;
     }
 }
 

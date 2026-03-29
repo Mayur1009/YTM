@@ -8,7 +8,7 @@ from ctypes import CDLL, POINTER, c_bool, c_float, c_int, c_int8, c_int32, c_uin
 import numpy as np
 from tqdm import tqdm
 
-from ..base import BaseDevice
+from ..base import BaseDevice, PackedClauses
 
 bool_p = POINTER(c_bool)
 int8_p = POINTER(c_int8)
@@ -145,6 +145,7 @@ class CPUDevice(BaseDevice):
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
         self.p_feat_mins = self.args.feat_mins.ctypes.data_as(int32_p)
+        self.p_feat_maxs = self.args.feat_maxs.ctypes.data_as(int32_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
         self.p_lit_to_fid = self.lit_to_fid.ctypes.data_as(int32_p)
 
@@ -159,9 +160,8 @@ class CPUDevice(BaseDevice):
         X = X.astype(np.int32)
         targets = targets.astype(np.float32)
 
-        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
-        clause_feat_min = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        clause_feat_max = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_position_bounds = np.empty((self.total_clauses, 4), dtype=np.int32)
+        clause_feat_bounds = np.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
         constrained_fids = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         n_constrained = np.empty(self.total_clauses, dtype=np.int32)
         num_includes = np.empty(self.total_clauses, dtype=np.uint32)
@@ -178,14 +178,14 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 self.p_patch_weights,
                 self.p_feat_mins,
+                self.p_feat_maxs,
                 self.p_literal_offsets,
                 clause_drop_mask.ctypes.data_as(int8_p),
                 X.ctypes.data_as(int32_p),
                 targets.ctypes.data_as(float_p),
                 c_int(e),
-                clause_positions.ctypes.data_as(int32_p),
-                clause_feat_min.ctypes.data_as(int32_p),
-                clause_feat_max.ctypes.data_as(int32_p),
+                clause_position_bounds.ctypes.data_as(int32_p),
+                clause_feat_bounds.ctypes.data_as(int32_p),
                 constrained_fids.ctypes.data_as(int32_p),
                 n_constrained.ctypes.data_as(int32_p),
                 num_includes.ctypes.data_as(uint32_p),
@@ -197,9 +197,8 @@ class CPUDevice(BaseDevice):
             )
 
     def pack_clauses(self):
-        clause_positions = np.empty((self.total_clauses, 4), dtype=np.int32)
-        clause_feat_min = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        clause_feat_max = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_position_bounds = np.empty((self.total_clauses, 4), dtype=np.int32)
+        clause_feat_bounds = np.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
         constrained_fids = np.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         n_constrained = np.empty(self.total_clauses, dtype=np.int32)
         num_includes = np.empty(self.total_clauses, dtype=np.uint32)
@@ -208,26 +207,26 @@ class CPUDevice(BaseDevice):
 
         self.lib.pack_clauses(
             self.p_ta_states,
+            self.p_feat_mins,
+            self.p_feat_maxs,
             self.p_literal_offsets,
-            clause_positions.ctypes.data_as(int32_p),
-            clause_feat_min.ctypes.data_as(int32_p),
-            clause_feat_max.ctypes.data_as(int32_p),
+            clause_position_bounds.ctypes.data_as(int32_p),
+            clause_feat_bounds.ctypes.data_as(int32_p),
             constrained_fids.ctypes.data_as(int32_p),
             n_constrained.ctypes.data_as(int32_p),
             num_includes.ctypes.data_as(uint32_p),
             is_clause_valid.ctypes.data_as(int8_p),
             is_clause_synced.ctypes.data_as(int8_p),
         )
-        return {
-            "clause_positions": clause_positions,
-            "clause_feat_min": clause_feat_min,
-            "clause_feat_max": clause_feat_max,
-            "constrained_fids": constrained_fids,
-            "n_constrained": n_constrained,
-            "num_includes": num_includes,
-            "is_clause_valid": is_clause_valid,
-            "is_clause_synced": is_clause_synced,
-        }
+        return PackedClauses(
+            clause_position_bounds=clause_position_bounds,
+            clause_feat_bounds=clause_feat_bounds,
+            constrained_fids=constrained_fids,
+            n_constrained=n_constrained,
+            num_includes=num_includes,
+            is_clause_valid=is_clause_valid,
+            is_clause_synced=is_clause_synced
+        )
 
     def infer(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
@@ -238,14 +237,12 @@ class CPUDevice(BaseDevice):
         for e in tqdm(range(N), desc="Infer", leave=False):
             self.lib.infer_sample(
                 self.p_clause_weights,
-                bufs["clause_positions"].ctypes.data_as(int32_p),
-                bufs["clause_feat_min"].ctypes.data_as(int32_p),
-                bufs["clause_feat_max"].ctypes.data_as(int32_p),
-                bufs["constrained_fids"].ctypes.data_as(int32_p),
-                bufs["n_constrained"].ctypes.data_as(int32_p),
-                bufs["num_includes"].ctypes.data_as(uint32_p),
-                bufs["is_clause_valid"].ctypes.data_as(int8_p),
-                self.p_feat_mins,
+                bufs.clause_position_bounds.ctypes.data_as(int32_p),
+                bufs.clause_feat_bounds.ctypes.data_as(int32_p),
+                bufs.constrained_fids.ctypes.data_as(int32_p),
+                bufs.n_constrained.ctypes.data_as(int32_p),
+                bufs.num_includes.ctypes.data_as(uint32_p),
+                bufs.is_clause_valid.ctypes.data_as(int8_p),
                 X.ctypes.data_as(int32_p),
                 c_int(e),
                 class_sums.ctypes.data_as(float_p),
@@ -264,14 +261,12 @@ class CPUDevice(BaseDevice):
         for e in tqdm(range(N), desc="Transform", leave=False):
             self.lib.eval_sample_patchwise(
                 self.p_clause_weights,
-                bufs["clause_positions"].ctypes.data_as(int32_p),
-                bufs["clause_feat_min"].ctypes.data_as(int32_p),
-                bufs["clause_feat_max"].ctypes.data_as(int32_p),
-                bufs["constrained_fids"].ctypes.data_as(int32_p),
-                bufs["n_constrained"].ctypes.data_as(int32_p),
-                bufs["num_includes"].ctypes.data_as(uint32_p),
-                bufs["is_clause_valid"].ctypes.data_as(int8_p),
-                self.p_feat_mins,
+                bufs.clause_position_bounds.ctypes.data_as(int32_p),
+                bufs.clause_feat_bounds.ctypes.data_as(int32_p),
+                bufs.constrained_fids.ctypes.data_as(int32_p),
+                bufs.n_constrained.ctypes.data_as(int32_p),
+                bufs.num_includes.ctypes.data_as(uint32_p),
+                bufs.is_clause_valid.ctypes.data_as(int8_p),
                 X.ctypes.data_as(int32_p),
                 c_int(e),
                 patch_outputs.ctypes.data_as(int8_p),

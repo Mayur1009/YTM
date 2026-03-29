@@ -1,7 +1,14 @@
 import numpy as np
-from typing import Literal, Unpack
+from typing import Literal, NamedTuple, Unpack
 from dataclasses import asdict
 from .args import TMArgs, T_args
+from .backends.base import PackedClauses
+
+
+class ClauseInfo(NamedTuple):
+    feature_bounds: np.ndarray  # (total_clauses, n_raw_patch_feats, 2) closed [lower, upper]
+    position_bounds: np.ndarray | None  # (total_clauses, 4) closed [min_y, max_y, min_x, max_x] or None
+    is_valid: np.ndarray  # (total_clauses,) bool
 
 
 class BaseTM:
@@ -74,8 +81,17 @@ class BaseTM:
     def get_patch_weights(self) -> np.ndarray:
         return self.dev.get_patch_weights()
 
-    def get_clauses(self):
-        pass
+    def get_clauses(self) -> ClauseInfo:
+        buf: PackedClauses = self.dev.pack_clauses()
+        buf.to_cpu()
+
+        position_bounds = buf.clause_position_bounds if self.args.position_literals else None
+
+        return ClauseInfo(
+            feature_bounds=buf.clause_feat_bounds,
+            position_bounds=position_bounds,
+            is_valid=buf.is_clause_valid.astype(bool),
+        )
 
     def wac(self):
         pass

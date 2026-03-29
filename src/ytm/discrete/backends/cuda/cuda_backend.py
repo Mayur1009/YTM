@@ -7,7 +7,17 @@ import pycuda.gpuarray as ga
 from pycuda.compiler import SourceModule
 from pycuda.curandom import XORWOWRandomNumberGenerator
 from pycuda.driver import Context, device_attribute, memset_d32_async  # pyright: ignore # ty: ignore
-from ..base import BaseDevice
+from ..base import BaseDevice, PackedClauses
+
+class PackedClausesCUDA(PackedClauses):
+    def to_cpu(self):
+        self.clause_position_bounds = self.clause_position_bounds.get()
+        self.clause_feat_bounds = self.clause_feat_bounds.get()
+        self.constrained_fids = self.constrained_fids.get()
+        self.n_constrained = self.n_constrained.get()
+        self.num_includes = self.num_includes.get()
+        self.is_clause_valid = self.is_clause_valid.get()
+        self.is_clause_synced = self.is_clause_synced.get()
 
 
 def read_file(path):
@@ -65,10 +75,10 @@ class CUDADevice(BaseDevice):
         )
 
         self.k_pack_clauses = mod.get_function("pack_clauses")
-        self.k_pack_clauses.prepare("PPPPPPPPPP")
+        self.k_pack_clauses.prepare("PPPPPPPPPPP")
 
         self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_eval_clauses.prepare("PiPPPPPPPPPP")
+        self.k_eval_clauses.prepare("PiPPPPPPPP")
 
         self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
         self.k_select_patch_and_count_votes.prepare("PPPPPP")
@@ -80,10 +90,10 @@ class CUDADevice(BaseDevice):
         self.k_update_clauses.prepare("PPPPPPPPPPPPP")
 
         self.k_infer_batch = mod.get_function("infer_batch")
-        self.k_infer_batch.prepare("PPPiPPPPPPPP")
+        self.k_infer_batch.prepare("PPPiPPPPPP")
 
         self.k_transform_patchwise = mod.get_function("transform_patchwise")
-        self.k_transform_patchwise.prepare("PPiPPPPPPPP")
+        self.k_transform_patchwise.prepare("PPiPPPPPP")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses)
         self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
@@ -146,6 +156,7 @@ class CUDADevice(BaseDevice):
         self._init_weights()
         self._init_kernels()
         self.feat_mins_gpu = ga.to_gpu(np.asarray(self.args.feat_mins, dtype=np.int32))
+        self.feat_maxs_gpu = ga.to_gpu(np.asarray(self.args.feat_maxs, dtype=np.int32))
         self.literal_offsets_gpu = ga.to_gpu(self.literal_offsets.astype(np.int32))
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
@@ -161,9 +172,8 @@ class CUDADevice(BaseDevice):
         clause_drop_mask_gpu = ga.to_gpu(clause_drop_mask)
 
         # Persistent buffers for training (sparse range representation matching CPU)
-        clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
-        clause_feat_min = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        clause_feat_max = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_position_bounds = ga.empty((self.total_clauses, 4), dtype=np.int32)
+        clause_feat_bounds = ga.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
         constrained_fids = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         n_constrained = ga.empty(self.total_clauses, dtype=np.int32)
         num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
@@ -184,10 +194,11 @@ class CUDADevice(BaseDevice):
                 self.k_pack_clauses.prepared_call(
                     *self.kconf_clauses,
                     self.ta_states.gpudata,
+                    self.feat_mins_gpu.gpudata,
+                    self.feat_maxs_gpu.gpudata,
                     self.literal_offsets_gpu.gpudata,
-                    clause_positions.gpudata,
-                    clause_feat_min.gpudata,
-                    clause_feat_max.gpudata,
+                    clause_position_bounds.gpudata,
+                    clause_feat_bounds.gpudata,
                     constrained_fids.gpudata,
                     n_constrained.gpudata,
                     num_includes.gpudata,
@@ -200,10 +211,8 @@ class CUDADevice(BaseDevice):
                     X_batch.gpudata,
                     np.int32(e),
                     clause_drop_mask_gpu.gpudata,
-                    self.feat_mins_gpu.gpudata,
-                    clause_positions.gpudata,
-                    clause_feat_min.gpudata,
-                    clause_feat_max.gpudata,
+                    clause_position_bounds.gpudata,
+                    clause_feat_bounds.gpudata,
                     constrained_fids.gpudata,
                     n_constrained.gpudata,
                     num_includes.gpudata,
@@ -250,9 +259,8 @@ class CUDADevice(BaseDevice):
             self.ctx.synchronize()
 
     def pack_clauses(self):
-        clause_positions = ga.empty((self.total_clauses, 4), dtype=np.int32)
-        clause_feat_min = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        clause_feat_max = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
+        clause_position_bounds = ga.empty((self.total_clauses, 4), dtype=np.int32)
+        clause_feat_bounds = ga.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
         constrained_fids = ga.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
         n_constrained = ga.empty(self.total_clauses, dtype=np.int32)
         num_includes = ga.empty(self.total_clauses, dtype=np.uint32)
@@ -262,10 +270,11 @@ class CUDADevice(BaseDevice):
         self.k_pack_clauses.prepared_call(
             *self.kconf_clauses,
             self.ta_states.gpudata,
+            self.feat_mins_gpu.gpudata,
+            self.feat_maxs_gpu.gpudata,
             self.literal_offsets_gpu.gpudata,
-            clause_positions.gpudata,
-            clause_feat_min.gpudata,
-            clause_feat_max.gpudata,
+            clause_position_bounds.gpudata,
+            clause_feat_bounds.gpudata,
             constrained_fids.gpudata,
             n_constrained.gpudata,
             num_includes.gpudata,
@@ -273,15 +282,15 @@ class CUDADevice(BaseDevice):
             is_clause_synced.gpudata,
         )
 
-        return {
-            "clause_positions": clause_positions,
-            "clause_feat_min": clause_feat_min,
-            "clause_feat_max": clause_feat_max,
-            "constrained_fids": constrained_fids,
-            "n_constrained": n_constrained,
-            "num_includes": num_includes,
-            "is_clause_valid": is_clause_valid,
-        }
+        return PackedClausesCUDA(
+            clause_position_bounds=clause_position_bounds,
+            clause_feat_bounds=clause_feat_bounds,
+            constrained_fids=constrained_fids,
+            n_constrained=n_constrained,
+            num_includes=num_includes,
+            is_clause_valid=is_clause_valid,
+            is_clause_synced=is_clause_synced,
+        )
 
     def infer(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
@@ -304,14 +313,12 @@ class CUDADevice(BaseDevice):
                 self.clause_weights.gpudata,
                 cs_batch.gpudata,
                 np.int32(bs),
-                self.feat_mins_gpu.gpudata,
-                bufs["clause_positions"].gpudata,
-                bufs["clause_feat_min"].gpudata,
-                bufs["clause_feat_max"].gpudata,
-                bufs["constrained_fids"].gpudata,
-                bufs["n_constrained"].gpudata,
-                bufs["num_includes"].gpudata,
-                bufs["is_clause_valid"].gpudata,
+                bufs.clause_position_bounds.gpudata,
+                bufs.clause_feat_bounds.gpudata,
+                bufs.constrained_fids.gpudata,
+                bufs.n_constrained.gpudata,
+                bufs.num_includes.gpudata,
+                bufs.is_clause_valid.gpudata,
             )
 
             class_sums[i:batch_end] = cs_batch.get()
@@ -337,14 +344,12 @@ class CUDADevice(BaseDevice):
                 batch_X.gpudata,
                 po_batch.gpudata,
                 np.int32(bs),
-                self.feat_mins_gpu.gpudata,
-                bufs["clause_positions"].gpudata,
-                bufs["clause_feat_min"].gpudata,
-                bufs["clause_feat_max"].gpudata,
-                bufs["constrained_fids"].gpudata,
-                bufs["n_constrained"].gpudata,
-                bufs["num_includes"].gpudata,
-                bufs["is_clause_valid"].gpudata,
+                bufs.clause_position_bounds.gpudata,
+                bufs.clause_feat_bounds.gpudata,
+                bufs.constrained_fids.gpudata,
+                bufs.n_constrained.gpudata,
+                bufs.num_includes.gpudata,
+                bufs.is_clause_valid.gpudata,
             )
 
             patch_output[i:batch_end] = po_batch.get()

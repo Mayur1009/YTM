@@ -1,6 +1,21 @@
+from typing import Any
+from dataclasses import dataclass
 import abc
 import numpy as np
 from ..args import TMArgs
+
+@dataclass
+class PackedClauses:
+    clause_position_bounds: Any
+    clause_feat_bounds: Any
+    constrained_fids: Any
+    n_constrained: Any
+    num_includes: Any
+    is_clause_valid: Any
+    is_clause_synced: Any
+
+    def to_cpu(self):
+        pass
 
 
 class BaseDevice(abc.ABC):
@@ -52,3 +67,9 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def dev_init(self):
         pass
+
+    @abc.abstractmethod
+    def pack_clauses(self) -> PackedClauses:
+        pass
+
+
