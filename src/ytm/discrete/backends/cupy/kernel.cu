@@ -217,98 +217,13 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 #endif
 }
 
-__global__ void eval_clauses(const int* X, const int e, const int8_t* clause_drop_mask,
-                             const int* clause_position_bounds, const int* clause_feat_bounds,
-                             const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                             const int8_t* is_clause_valid, int8_t* clause_outputs) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
-
-    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-
-    for (ull idx = tid; idx < (ull)TOTAL_CLAUSES * N_PATCHES; idx += stride) {
-        ull clause = idx / N_PATCHES;
-        int patch = idx % N_PATCHES;
-
-        int8_t* output = &clause_outputs[clause * (ull)N_PATCHES + patch];
-
-        // Skip dropped clauses
-        if (clause_drop_mask[clause] == 1) {
-            *output = 0;
-            continue;
-        }
-
-        // Empty clause matches all patches
-        if (num_includes[clause] == 0) {
-            *output = 1;
-            continue;
-        }
-
-        // Skip invalid clauses (contradictions)
-        if (is_clause_valid[clause] == 0) {
-            *output = 0;
-            continue;
-        }
-
-        // Check position bounds
-        const int* pos = &clause_position_bounds[clause * 4];
-        int patch_row = patch / N_PATCHES_X;
-        int patch_col = patch % N_PATCHES_X;
-
-        // Closed interval [pos[0], pos[1]]
-        if (patch_row < pos[0] || patch_row > pos[1] || patch_col < pos[2] || patch_col > pos[3]) {
-            *output = 0;
-            continue;
-        }
-
-        // Use match_patch with sparse range representation
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_cfids = n_constrained[clause];
-
-        bool matches = match_patch(Xe, patch_row, patch_col, cfb, cfids, n_cfids);
-        *output = matches ? 1 : 0;
-    }
-}
-
-__global__ void select_patch_and_count_votes(curandState* rng, const int8_t* clause_outputs,
-                                             const float* clause_weights, int* selected_patch_ids, int* patch_weights,
-                                             float* votes) {
+__global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
     for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        curandState local_rng = rng[clause];
-        const int8_t* outputs = &clause_outputs[clause * (ull)N_PATCHES];
-
-#if N_PATCHES > 1
-        // Reservoir sampling over matching patches
-        int count = 0;
-        int selected_id = -1;
-
-        for (int patch = 0; patch < N_PATCHES; ++patch) {
-            if (outputs[patch]) {
-                count++;
-                if (curand_uniform(&local_rng) < 1.0f / count) {
-                    selected_id = patch;
-                }
-            }
-        }
-#else
-        // Single patch case (no sampling needed)
-        int selected_id = outputs[0] ? 0 : -1;
-#endif
-
-        selected_patch_ids[clause] = selected_id;
-        rng[clause] = local_rng;
-
+        int selected_id = selected_patch_ids[clause];
         if (selected_id >= 0) {
-            // Update patch weights (no race - each clause has unique row)
-#if TRACK_PATCH_WEIGHTS
-            patch_weights[clause * (ull)N_PATCHES + selected_id]++;
-#endif
-
-            // Accumulate votes (atomic needed)
             ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
             LOOP_CLASS_ID(class_id, clause) {
                 atomicAdd(&votes[class_id], clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);

@@ -76,12 +76,20 @@ class CupyDevice(BaseDevice):
         )
         self.k_pack_clauses = pack_mod.get_function("pack_clauses")
 
+        eval_mod = cp.RawModule(
+            code=header + "\n" + read_file(os.path.join(cur_dir, "evaluate.cu")),
+            options=("--use_fast_math", f"-I{curand_include}"),
+        )
+        if self.n_patches > 1:
+            self.k_evaluate = eval_mod.get_function("evaluate_conv")
+        else:
+            self.k_evaluate = eval_mod.get_function("evaluate_noconv")
+
         mod = cp.RawModule(
             code=header + "\n" + read_file(os.path.join(cur_dir, "kernel.cu")),
             options=("--use_fast_math", f"-I{curand_include}"),
         )
-        self.k_eval_clauses = mod.get_function("eval_clauses")
-        self.k_select_patch_and_count_votes = mod.get_function("select_patch_and_count_votes")
+        self.k_count_votes = mod.get_function("count_votes")
         self.k_calc_update_prob = mod.get_function("calc_update_prob")
         self.k_update_clauses = mod.get_function("update_clauses")
         self.k_infer_batch = mod.get_function("infer_batch")
@@ -188,7 +196,6 @@ class CupyDevice(BaseDevice):
         num_includes = cp.empty(self.total_clauses, dtype=np.uint32)
         is_clause_valid = cp.empty(self.total_clauses, dtype=np.int8)
         is_clause_synced = cp.zeros(self.total_clauses, dtype=np.int8)
-        clause_outputs = cp.empty((self.total_clauses, self.n_patches), dtype=np.int8)
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.zeros(self.args.n_classes, dtype=np.float32)
         prob = cp.empty(self.args.n_classes, dtype=np.float32)
@@ -216,8 +223,8 @@ class CupyDevice(BaseDevice):
                         is_clause_synced,
                     ),
                 )
-                self.k_eval_clauses(
-                    *self.kconf_clause_patches,
+                self.k_evaluate(
+                    *self.kconf_clauses_warp,
                     (
                         X_batch,
                         np.int32(e),
@@ -228,13 +235,15 @@ class CupyDevice(BaseDevice):
                         n_constrained,
                         num_includes,
                         is_clause_valid,
-                        clause_outputs,
+                        self.rng,
+                        selected_patch_ids,
+                        self.patch_weights,
                     ),
                 )
                 votes.fill(0)
-                self.k_select_patch_and_count_votes(
+                self.k_count_votes(
                     *self.kconf_clauses,
-                    (self.rng, clause_outputs, self.clause_weights, selected_patch_ids, self.patch_weights, votes),
+                    (selected_patch_ids, self.clause_weights, votes),
                 )
                 self.k_calc_update_prob(
                     *self.kconf_classes,
