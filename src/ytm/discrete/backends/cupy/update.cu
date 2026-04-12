@@ -217,21 +217,6 @@ __device__ void type2_fb(uint* ta_state, float* weight, const int* X, int patch_
 #endif
 }
 
-__global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
-
-    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        int selected_id = selected_patch_ids[clause];
-        if (selected_id >= 0) {
-            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                atomicAdd(&votes[class_id], clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
-            }
-        }
-    }
-}
-
 __global__ void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
@@ -258,10 +243,10 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
     const float* targets_e = &targets[(ull)e * CLASSES];
 
     for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        curandState local_rng = rng[clause];
         if (clause_drop_mask[clause] == 1)
             continue;
 
+        curandState local_rng = rng[clause];
         uint* ta_state = &ta_states[clause * (ull)N_LITERALS];
         int patch_id = selected_patch_ids[clause];
         int clause_output = (patch_id >= 0) ? 1 : 0;
@@ -277,8 +262,10 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
         ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         LOOP_CLASS_ID(class_id, clause) {
             float q_prob = targets_e[class_id];
-            if (q_prob == 0.0f || curand_uniform(&local_rng) > fabsf(q_prob))
+            if (q_prob == 0.0f || curand_uniform(&local_rng) > fabsf(q_prob)) {
+                rng[clause] = local_rng;
                 continue;
+            }
             int target = (q_prob > 0.0f) ? 1 : -1;
 
             float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -308,99 +295,6 @@ __global__ void update_clauses(curandState* rng, const int* selected_patch_ids, 
             }
         }
         rng[clause] = local_rng;
-    }
-}
-
-__global__ void infer_batch(const int* X, const float* clause_weights, float* class_sums, const int N,
-                            const int* clause_position_bounds, const int* clause_feat_bounds,
-                            const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                            const int8_t* is_clause_valid) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
-
-    for (ull e_clause = tid; e_clause < (ull)N * TOTAL_CLAUSES; e_clause += stride) {
-        ull e = e_clause / (ull)TOTAL_CLAUSES;
-        ull clause = e_clause % (ull)TOTAL_CLAUSES;
-
-        // Skip empty clauses
-        if (num_includes[clause] == 0)
-            continue;
-
-        // Skip invalid clauses (contradictions)
-        if (is_clause_valid[clause] == 0)
-            continue;
-
-        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* pos = &clause_position_bounds[clause * 4];
-
-        // Get sparse range representation for this clause
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_cfids = n_constrained[clause];
-
-        bool matched = false;
-
-        // Early exit on first matching patch — closed interval [pos[0], pos[1]]
-        for (int py = pos[0]; py <= pos[1] && !matched; ++py) {
-            for (int px = pos[2]; px <= pos[3] && !matched; ++px) {
-                matched = match_patch(Xe, py, px, cfb, cfids, n_cfids);
-            }
-        }
-
-        if (matched) {
-            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                atomicAdd(&class_sums[e * (ull)CLASSES + class_id],
-                          clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
-            }
-        }
-    }
-}
-
-__global__ void transform_patchwise(const int* X, int8_t* patch_output, const int N, const int* clause_position_bounds,
-                                    const int* clause_feat_bounds, const int* constrained_fids,
-                                    const int* n_constrained, const uint* num_includes, const int8_t* is_clause_valid) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
-
-    for (ull idx = tid; idx < (ull)N * TOTAL_CLAUSES * N_PATCHES; idx += stride) {
-        ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
-        ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
-        ull clause = clause_patch / (ull)N_PATCHES;
-        int patch = clause_patch % N_PATCHES;
-
-        int8_t* output = &patch_output[e * (ull)TOTAL_CLAUSES * N_PATCHES + clause * (ull)N_PATCHES + patch];
-
-        // Empty clause matches all patches
-        if (num_includes[clause] == 0) {
-            *output = 1;
-            continue;
-        }
-
-        // Skip invalid clauses (contradictions)
-        if (is_clause_valid[clause] == 0) {
-            *output = 0;
-            continue;
-        }
-
-        // Check position bounds
-        const int* pos = &clause_position_bounds[clause * 4];
-        int py = patch / N_PATCHES_X;
-        int px = patch % N_PATCHES_X;
-
-        // Closed interval [pos[0], pos[1]]
-        if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
-            *output = 0;
-            continue;
-        }
-
-        // Use match_patch with sparse range representation
-        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_cfids = n_constrained[clause];
-
-        *output = match_patch(Xe, py, px, cfb, cfids, n_cfids) ? 1 : 0;
     }
 }
 

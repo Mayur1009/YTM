@@ -85,15 +85,24 @@ class CupyDevice(BaseDevice):
         else:
             self.k_evaluate = eval_mod.get_function("evaluate_noconv")
 
+        self.k_count_votes = eval_mod.get_function("count_votes")
+
         mod = cp.RawModule(
-            code=header + "\n" + read_file(os.path.join(cur_dir, "kernel.cu")),
+            code=header + "\n" + read_file(os.path.join(cur_dir, "update.cu")),
             options=("--use_fast_math", f"-I{curand_include}"),
         )
-        self.k_count_votes = mod.get_function("count_votes")
         self.k_calc_update_prob = mod.get_function("calc_update_prob")
         self.k_update_clauses = mod.get_function("update_clauses")
-        self.k_infer_batch = mod.get_function("infer_batch")
-        self.k_transform_patchwise = mod.get_function("transform_patchwise")
+        infer_mod = cp.RawModule(
+            code=header + "\n" + read_file(os.path.join(cur_dir, "inference.cu")),
+            options=("--use_fast_math",),
+        )
+        if self.n_patches > 1:
+            self.k_eval_clauses = infer_mod.get_function("infer_clauses_conv")
+        else:
+            self.k_eval_clauses = infer_mod.get_function("infer_clauses_noconv")
+        self.k_sum_votes = infer_mod.get_function("sum_votes")
+        self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses)
         self.kconf_clauses_warp = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
@@ -268,7 +277,6 @@ class CupyDevice(BaseDevice):
                     ),
                 )
 
-
     def pack_clauses(self):
         clause_position_bounds = cp.empty((self.total_clauses, 4), dtype=np.int32)
         clause_feat_bounds = cp.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
@@ -280,9 +288,19 @@ class CupyDevice(BaseDevice):
 
         self.k_pack_clauses(
             *self.kconf_clauses_warp,
-            (self.ta_states, self.feat_mins_gpu, self.feat_maxs_gpu, self.literal_offsets_gpu,
-             clause_position_bounds, clause_feat_bounds, constrained_fids, n_constrained,
-             num_includes, is_clause_valid, is_clause_synced),
+            (
+                self.ta_states,
+                self.feat_mins_gpu,
+                self.feat_maxs_gpu,
+                self.literal_offsets_gpu,
+                clause_position_bounds,
+                clause_feat_bounds,
+                constrained_fids,
+                n_constrained,
+                num_includes,
+                is_clause_valid,
+                is_clause_synced,
+            ),
         )
 
         return PackedClausesCUDA(
@@ -300,25 +318,41 @@ class CupyDevice(BaseDevice):
         if batch_size == -1:
             batch_size = N
 
-        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
+        class_sums = cp.zeros((N, self.args.n_classes), dtype=np.float32)
         bufs = self.pack_clauses()
 
         for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
-            batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
             bs = batch_end - i
+            batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
+            co_batch = cp.empty((bs, self.total_clauses), dtype=cp.int8)
 
-            cs_batch = cp.zeros((bs, self.args.n_classes), dtype=np.float32)
-
-            self.k_infer_batch(
-                *self._kernel_config(bs * self.total_clauses),
-                (batch_X, self.clause_weights, cs_batch, np.int32(bs),
-                 bufs.clause_position_bounds, bufs.clause_feat_bounds, bufs.constrained_fids,
-                 bufs.n_constrained, bufs.num_includes, bufs.is_clause_valid),
+            self.k_eval_clauses(
+                *self._kernel_config(bs * self.total_clauses * self.cuda_props["warp_size"]),
+                (
+                    batch_X,
+                    co_batch,
+                    np.int32(bs),
+                    bufs.clause_position_bounds,
+                    bufs.clause_feat_bounds,
+                    bufs.constrained_fids,
+                    bufs.n_constrained,
+                    bufs.num_includes,
+                    bufs.is_clause_valid,
+                ),
             )
-            class_sums[i:batch_end] = cs_batch.get()
 
-        return class_sums
+            self.k_sum_votes(
+                *self._kernel_config(bs * self.args.n_classes * self.cuda_props["warp_size"]),
+                (
+                    co_batch,
+                    self.clause_weights,
+                    class_sums[i:batch_end],
+                    np.int32(bs),
+                ),
+            )
+
+        return class_sums.get()
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
@@ -336,8 +370,17 @@ class CupyDevice(BaseDevice):
 
             self.k_transform_patchwise(
                 *self._kernel_config(bs * self.total_clauses * self.n_patches),
-                (batch_X, po_batch, np.int32(bs), bufs.clause_position_bounds, bufs.clause_feat_bounds,
-                 bufs.constrained_fids, bufs.n_constrained, bufs.num_includes, bufs.is_clause_valid),
+                (
+                    batch_X,
+                    po_batch,
+                    np.int32(bs),
+                    bufs.clause_position_bounds,
+                    bufs.clause_feat_bounds,
+                    bufs.constrained_fids,
+                    bufs.n_constrained,
+                    bufs.num_includes,
+                    bufs.is_clause_valid,
+                ),
             )
             patch_output[i:batch_end] = po_batch.get()
 

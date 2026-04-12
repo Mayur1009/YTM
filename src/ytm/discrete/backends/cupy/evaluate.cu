@@ -23,6 +23,14 @@
 #define WARP_SIZE 32
 #endif
 
+#if COALESCED == 0
+#define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+#define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
+#else
+#define CLAUSES_PER_CLASS TOTAL_CLAUSES
+#define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
+#endif
+
 #include <curand_kernel.h>
 
 typedef signed char int8_t;
@@ -40,8 +48,8 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x,
-                                   const int* cfb, const int* cfids, int n_cfids) {
+__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfb, const int* cfids,
+                                   int n_cfids) {
     for (int i = 0; i < n_cfids; ++i) {
         int fid = cfids[i];
         int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
@@ -54,10 +62,10 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
 // --- Convolution: 1 warp per clause, 32 lanes evaluate patches in parallel ---
 
 __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_drop_mask,
-                         const int* clause_position_bounds, const int* clause_feat_bounds,
-                         const int* constrained_fids, const int* n_constrained,
-                         const uint* num_includes, const int8_t* is_clause_valid,
-                         curandState* rng, int* selected_patch_ids, int* patch_weights) {
+                              const int* clause_position_bounds, const int* clause_feat_bounds,
+                              const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                              const int8_t* is_clause_valid, curandState* rng, int* selected_patch_ids,
+                              int* patch_weights) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -66,7 +74,8 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1 || is_clause_valid[clause] == 0) {
-            if (lane == 0) selected_patch_ids[clause] = -1;
+            if (lane == 0)
+                selected_patch_ids[clause] = -1;
             continue;
         }
 
@@ -79,7 +88,8 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
         int n_cfids = n_constrained[clause];
 
         curandState local_rng;
-        if (lane == 0) local_rng = rng[clause];
+        if (lane == 0)
+            local_rng = rng[clause];
 
         int selected_id = -1;
         int count = 0;
@@ -129,9 +139,9 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 
 __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_drop_mask,
                                 const int* clause_position_bounds, const int* clause_feat_bounds,
-                                const int* constrained_fids, const int* n_constrained,
-                                const uint* num_includes, const int8_t* is_clause_valid,
-                                curandState* rng, int* selected_patch_ids, int* patch_weights) {
+                                const int* constrained_fids, const int* n_constrained, const uint* num_includes,
+                                const int8_t* is_clause_valid, curandState* rng, int* selected_patch_ids,
+                                int* patch_weights) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -140,12 +150,14 @@ __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1 || is_clause_valid[clause] == 0) {
-            if (lane == 0) selected_patch_ids[clause] = -1;
+            if (lane == 0)
+                selected_patch_ids[clause] = -1;
             continue;
         }
 
         if (num_includes[clause] == 0) {
-            if (lane == 0) selected_patch_ids[clause] = 0;
+            if (lane == 0)
+                selected_patch_ids[clause] = 0;
             continue;
         }
 
@@ -167,6 +179,21 @@ __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
 
         if (lane == 0)
             selected_patch_ids[clause] = matched ? 0 : -1;
+    }
+}
+
+__global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
+    ull stride = blockDim.x * gridDim.x;
+
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+        int selected_id = selected_patch_ids[clause];
+        if (selected_id >= 0) {
+            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+            LOOP_CLASS_ID(class_id, clause) {
+                atomicAdd(&votes[class_id], clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
+            }
+        }
     }
 }
 
