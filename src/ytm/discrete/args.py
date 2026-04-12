@@ -33,7 +33,7 @@ class TMArgs:
     seed: int = -1
 
     # Device specific arguments
-    device: Literal["cpu", "cuda"] = "cpu"
+    device: Literal["cpu", "cuda", "cupy"] = "cpu"
     n_threads: int = 1
     compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native", "-lm", "-mtune=native"])
     grid_size: int | None = None
@@ -94,7 +94,7 @@ class T_args(TypedDict, total=False):
     track_patch_weights: bool
     boost_tp_fb: bool
     seed: int
-    device: Literal["cpu", "cuda"]
+    device: Literal["cpu", "cuda", "cupy"]
     n_threads: int
     compile_flags: list[str]
     grid_size: int | None

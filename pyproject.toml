@@ -11,8 +11,9 @@ version = "0.6.0+dev4"
 
 [project.optional-dependencies]
 cuda = [
-  "pycuda",
-  "nvidia-ml-py",
+    "pycuda",
+    "nvidia-ml-py",
+    "cupy-cuda12x[ctk]",
 ]
 examples = [
     "matplotlib",
@@ -64,10 +65,11 @@ cuda = "12"
 
 [tool.pixi.feature.cuda.dependencies]
 cuda = "*"
+cuda-nsight = "*"
 openmp = "*"
-wandb = "*"
 seaborn = "*"
 jupyterlab = "*"
+ipdb = "*"
 
 [tool.pixi.feature.cuda.pypi-dependencies]
 ytm = { path = ".", editable = true, extras = ["examples", "cuda"] }

@@ -32,6 +32,9 @@ class BaseTM:
             from .backends.cuda.cuda_backend import CUDADevice
 
             self.dev = CUDADevice(self.args)
+        elif self.args.device == "cupy":
+            from .backends.cupy.cupy_backend import CupyDevice
+            self.dev = CupyDevice(self.args)
         else:
             raise ValueError(f"Unsupported device: {self.args.device}")
 
@@ -106,7 +109,7 @@ class BaseTM:
             is_valid=is_valid,
         )
 
-    def to(self, device: Literal["cpu", "cuda"]):
+    def to(self, device: Literal["cpu", "cuda", "cupy"]):
         if device == self.args.device:
             return
 
