@@ -5,9 +5,6 @@ import numpy as np
 import cupy as cp
 from tqdm import tqdm
 from ..base import BaseDevice, PackedClauses
-from cuda.pathfinder import find_nvidia_header_directory
-
-curand_include = find_nvidia_header_directory("curand")
 
 
 class PackedClausesCUDA(PackedClauses):
@@ -78,7 +75,7 @@ class CupyDevice(BaseDevice):
 
         eval_mod = cp.RawModule(
             code=header + "\n" + read_file(os.path.join(cur_dir, "evaluate.cu")),
-            options=("--use_fast_math", f"-I{curand_include}"),
+            options=("--use_fast_math",),
         )
         if self.n_patches > 1:
             self.k_evaluate = eval_mod.get_function("evaluate_conv")
@@ -89,7 +86,7 @@ class CupyDevice(BaseDevice):
 
         mod = cp.RawModule(
             code=header + "\n" + read_file(os.path.join(cur_dir, "update.cu")),
-            options=("--use_fast_math", f"-I{curand_include}"),
+            options=("--use_fast_math",),
         )
         self.k_calc_update_prob = mod.get_function("calc_update_prob")
         self.k_update_clauses = mod.get_function("update_clauses")
@@ -141,31 +138,10 @@ class CupyDevice(BaseDevice):
         return (gs, 1, 1), (bs, 1, 1)
 
     def _init_rng(self):
-        """Find size of curandState and init RNG state per clause."""
-        mod = cp.RawModule(
-            code=r"""
-            #include <curand_kernel.h>
-
-            extern "C" __global__ void get_curandstate_size(unsigned int* size) {
-                *size = (unsigned int)sizeof(curandState);
-            }
-
-            extern "C" __global__ void setup_rng(const unsigned int* base_seeds, curandState* rng_state, int n) {
-                int tid = blockDim.x * blockIdx.x + threadIdx.x;
-                for (int i = tid; i < n; i += blockDim.x * gridDim.x) {
-                    curand_init(base_seeds[i], 0, 0, &rng_state[i]);
-                }
-            }
-            """,
-            options=(f"-I{curand_include}",),
-        )
-        curand_state_bytes = cp.zeros(1, dtype=np.uint32)
-        mod.get_function("get_curandstate_size")((1,), (1,), (curand_state_bytes,))
-
-        base_seeds = cp.asarray(self.np_rng.integers(1, 2**30, size=self.total_clauses, dtype=np.uint32))
-        self.rng = cp.empty((self.total_clauses * int(curand_state_bytes[0])), dtype=np.uint8)
-        mod.get_function("setup_rng")(
-            *self._kernel_config(self.total_clauses), (base_seeds, self.rng, cp.int32(self.total_clauses))
+        """Init xorshift32 RNG seeds: one uint32 per clause."""
+        self.n_rng_states = self.total_clauses
+        self.rng = cp.asarray(
+            self.np_rng.integers(1, 2**30, size=self.total_clauses, dtype=np.uint32)
         )
 
     def dev_init(self):
@@ -259,7 +235,7 @@ class CupyDevice(BaseDevice):
                     (votes, tar_batch, np.int32(e), prob),
                 )
                 self.k_update_clauses(
-                    *self.kconf_clauses,
+                    *self.kconf_clauses_warp,
                     (
                         self.rng,
                         selected_patch_ids,

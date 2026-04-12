@@ -31,13 +31,22 @@
 #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
-#include <curand_kernel.h>
+#define UINT_MAX_INV (1.0f / 4294967295.0f)
 
 typedef signed char int8_t;
 typedef unsigned long long ull;
 typedef unsigned int uint;
 
 extern "C" {
+
+__device__ inline float xorshift32(uint* state) {
+    uint x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return (float)x * UINT_MAX_INV;
+}
 
 __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
@@ -64,13 +73,17 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
 __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_drop_mask,
                               const int* clause_position_bounds, const int* clause_feat_bounds,
                               const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                              const int8_t* is_clause_valid, curandState* rng, int* selected_patch_ids,
+                              const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids,
                               int* patch_weights) {
+    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     int lane = threadIdx.x % warpSize;
-    ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+    ull warp_id = tid / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    uint local_rng;
+    if (lane == 0)
+        local_rng = rng[warp_id];
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1 || is_clause_valid[clause] == 0) {
@@ -86,10 +99,6 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
         const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         const int* cfids = &constrained_fids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_cfids = n_constrained[clause];
-
-        curandState local_rng;
-        if (lane == 0)
-            local_rng = rng[clause];
 
         int selected_id = -1;
         int count = 0;
@@ -117,7 +126,7 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
                     int bit = __ffs(mask) - 1;
                     mask &= mask - 1;
                     count++;
-                    if (curand_uniform(&local_rng) < 1.0f / count)
+                    if (xorshift32(&local_rng) < 1.0f / count)
                         selected_id = base + bit;
                 }
             }
@@ -125,7 +134,6 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 
         if (lane == 0) {
             selected_patch_ids[clause] = selected_id;
-            rng[clause] = local_rng;
 
 #if TRACK_PATCH_WEIGHTS
             if (selected_id >= 0)
@@ -133,6 +141,9 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 #endif
         }
     }
+
+    if (lane == 0)
+        rng[warp_id] = local_rng;
 }
 
 // --- Non-convolution: 1 warp per clause, 32 lanes split features via __all_sync ---
@@ -140,7 +151,7 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_drop_mask,
                                 const int* clause_position_bounds, const int* clause_feat_bounds,
                                 const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                                const int8_t* is_clause_valid, curandState* rng, int* selected_patch_ids,
+                                const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids,
                                 int* patch_weights) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
