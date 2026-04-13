@@ -73,8 +73,7 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
 __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_drop_mask,
                               const int* clause_position_bounds, const int* clause_feat_bounds,
                               const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                              const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids,
-                              int* patch_weights) {
+                              const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids, int* patch_weights) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     int lane = threadIdx.x % warpSize;
     ull warp_id = tid / warpSize;
@@ -151,8 +150,7 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_drop_mask,
                                 const int* clause_position_bounds, const int* clause_feat_bounds,
                                 const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                                const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids,
-                                int* patch_weights) {
+                                const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids, int* patch_weights) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -194,17 +192,29 @@ __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
 }
 
 __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
+    int lane = threadIdx.x % warpSize;
+    ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+    ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
 
-    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        int selected_id = selected_patch_ids[clause];
-        if (selected_id >= 0) {
-            ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                atomicAdd(&votes[class_id], clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause]);
-            }
+    for (ull class_id = warp_id; class_id < (ull)CLASSES; class_id += total_warps) {
+        const float* cw = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS];
+        float partial = 0.0f;
+
+        for (int c = lane; c < CLAUSES_PER_CLASS; c += warpSize) {
+#if COALESCED == 0
+            ull clause = class_id * (ull)CLAUSES_PER_CLASS + c;
+#else
+            ull clause = c;
+#endif
+            if (selected_patch_ids[clause] >= 0)
+                partial += cw[c];
         }
+
+        for (int d = warpSize / 2; d > 0; d >>= 1)
+            partial += __shfl_xor_sync(0xFFFFFFFF, partial, d);
+
+        if (lane == 0)
+            votes[class_id] = partial;
     }
 }
 

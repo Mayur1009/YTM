@@ -105,6 +105,7 @@ class CupyDevice(BaseDevice):
         self.kconf_clauses_warp = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_clause_patches = self._kernel_config(self.total_clauses * self.n_patches)
         self.kconf_classes = self._kernel_config(self.args.n_classes)
+        self.kconf_classes_warp = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 
     def _init_clauses(self):
         self.ta_states = cp.full(
@@ -225,9 +226,8 @@ class CupyDevice(BaseDevice):
                         self.patch_weights,
                     ),
                 )
-                votes.fill(0)
                 self.k_count_votes(
-                    *self.kconf_clauses,
+                    *self.kconf_classes_warp,
                     (selected_patch_ids, self.clause_weights, votes),
                 )
                 self.k_calc_update_prob(
