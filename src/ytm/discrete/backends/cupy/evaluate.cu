@@ -31,7 +31,7 @@
 #define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
-#define UINT_MAX_INV (1.0f / 4294967295.0f)
+#define UINT_MAX_INV (1.0f / (float)0xFFFFFFFFu)
 
 typedef signed char int8_t;
 typedef unsigned long long ull;
@@ -48,7 +48,7 @@ __device__ inline float xorshift32(uint* state) {
     return (float)x * UINT_MAX_INV;
 }
 
-__device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+__device__ inline int get_feature_value(const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -57,8 +57,8 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfb, const int* cfids,
-                                   int n_cfids) {
+__device__ inline bool match_patch(const int* __restrict__ X, int patch_idx_y, int patch_idx_x,
+                                   const int* __restrict__ cfb, const int* __restrict__ cfids, int n_cfids) {
     for (int i = 0; i < n_cfids; ++i) {
         int fid = cfids[i];
         int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
@@ -68,21 +68,19 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
     return true;
 }
 
-// --- Convolution: 1 warp per clause, 32 lanes evaluate patches in parallel ---
-
-__global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_drop_mask,
-                              const int* clause_position_bounds, const int* clause_feat_bounds,
-                              const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                              const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids, int* patch_weights) {
+__global__ void evaluate_conv(const int* __restrict__ X, const int e, const int8_t* __restrict__ clause_drop_mask,
+                              const int* __restrict__ clause_position_bounds,
+                              const int* __restrict__ clause_feat_bounds, const int* __restrict__ constrained_fids,
+                              const int* __restrict__ n_constrained, const uint* __restrict__ num_includes,
+                              const int8_t* __restrict__ is_clause_valid, uint* __restrict__ rng,
+                              int* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     int lane = threadIdx.x % warpSize;
     ull warp_id = tid / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    uint local_rng;
-    if (lane == 0)
-        local_rng = rng[warp_id];
+    uint local_rng = rng[tid];
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1 || is_clause_valid[clause] == 0) {
@@ -140,17 +138,17 @@ __global__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
 #endif
         }
     }
-
-    if (lane == 0)
-        rng[warp_id] = local_rng;
+    rng[tid] = local_rng;
 }
 
 // --- Non-convolution: 1 warp per clause, 32 lanes split features via __all_sync ---
 
-__global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_drop_mask,
-                                const int* clause_position_bounds, const int* clause_feat_bounds,
-                                const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                                const int8_t* is_clause_valid, uint* rng, int* selected_patch_ids, int* patch_weights) {
+__global__ void evaluate_noconv(const int* __restrict__ X, const int e, const int8_t* __restrict__ clause_drop_mask,
+                                const int* __restrict__ clause_position_bounds,
+                                const int* __restrict__ clause_feat_bounds, const int* __restrict__ constrained_fids,
+                                const int* __restrict__ n_constrained, const uint* __restrict__ num_includes,
+                                const int8_t* __restrict__ is_clause_valid, uint* __restrict__ rng,
+                                int* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -191,7 +189,8 @@ __global__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
     }
 }
 
-__global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
+__global__ void count_votes(const int* __restrict__ selected_patch_ids, const float* __restrict__ clause_weights,
+                            float* __restrict__ votes) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;

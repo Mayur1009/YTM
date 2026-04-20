@@ -36,7 +36,7 @@ typedef signed char int8_t;
 
 extern "C" {
 
-__device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+__device__ inline int get_feature_value(const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -45,8 +45,8 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* cfb, const int* cfids,
-                                   int n_cfids) {
+__device__ inline bool match_patch(const int* __restrict__ X, int patch_idx_y, int patch_idx_x,
+                                   const int* __restrict__ cfb, const int* __restrict__ cfids, int n_cfids) {
     for (int i = 0; i < n_cfids; ++i) {
         int fid = cfids[i];
         int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
@@ -56,11 +56,10 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
     return true;
 }
 
-// Warp-per-(sample, clause). 32 lanes check patches in parallel.
-// X: (N, H, W, D), clause_outputs: (N, TOTAL_CLAUSES)
-__global__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const int N, const int* clause_position_bounds,
-                             const int* clause_feat_bounds, const int* constrained_fids, const int* n_constrained,
-                             const uint* num_includes, const int8_t* is_clause_valid) {
+__global__ void infer_clauses_conv(const int* __restrict__ X, int8_t* __restrict__ clause_outputs, const int N,
+                             const int* __restrict__ clause_position_bounds, const int* __restrict__ clause_feat_bounds,
+                             const int* __restrict__ constrained_fids, const int* __restrict__ n_constrained,
+                             const uint* __restrict__ num_includes, const int8_t* __restrict__ is_clause_valid) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -109,12 +108,10 @@ __global__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const i
     }
 }
 
-// Non-conv: 1 thread per (sample, clause). 32 lanes split features via __all_sync.
-// X: (N, H, W, D), clause_outputs: (N, TOTAL_CLAUSES)
-__global__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const int N,
-                                    const int* clause_position_bounds, const int* clause_feat_bounds,
-                                    const int* constrained_fids, const int* n_constrained,
-                                    const uint* num_includes, const int8_t* is_clause_valid) {
+__global__ void infer_clauses_noconv(const int* __restrict__ X, int8_t* __restrict__ clause_outputs, const int N,
+                                    const int* __restrict__ clause_position_bounds, const int* __restrict__ clause_feat_bounds,
+                                    const int* __restrict__ constrained_fids, const int* __restrict__ n_constrained,
+                                    const uint* __restrict__ num_includes, const int8_t* __restrict__ is_clause_valid) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -154,9 +151,8 @@ __global__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const
     }
 }
 
-// Warp-per-(sample, class). 32 lanes split CLAUSES_PER_CLASS, warp-reduce, no atomicAdd.
-// clause_outputs: (N, TOTAL_CLAUSES), class_sums: (N, CLASSES)
-__global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums, const int N) {
+__global__ void sum_votes(const int8_t* __restrict__ clause_outputs, const float* __restrict__ clause_weights,
+                          float* __restrict__ class_sums, const int N) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
@@ -190,10 +186,10 @@ __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weig
     }
 }
 
-__global__ void infer_clauses_patchwise(const int* X, int8_t* patch_output, const int N,
-                                       const int* clause_position_bounds, const int* clause_feat_bounds,
-                                       const int* constrained_fids, const int* n_constrained, const uint* num_includes,
-                                       const int8_t* is_clause_valid) {
+__global__ void infer_clauses_patchwise(const int* __restrict__ X, int8_t* __restrict__ patch_output, const int N,
+                                       const int* __restrict__ clause_position_bounds, const int* __restrict__ clause_feat_bounds,
+                                       const int* __restrict__ constrained_fids, const int* __restrict__ n_constrained,
+                                       const uint* __restrict__ num_includes, const int8_t* __restrict__ is_clause_valid) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 

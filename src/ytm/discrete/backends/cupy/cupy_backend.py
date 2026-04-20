@@ -139,10 +139,14 @@ class CupyDevice(BaseDevice):
         return (gs, 1, 1), (bs, 1, 1)
 
     def _init_rng(self):
-        """Init xorshift32 RNG seeds: one uint32 per clause."""
-        self.n_rng_states = self.total_clauses
+        """Init xorshift32 RNG seeds: one uint32 per thread."""
+        bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
+        ws = self.cuda_props["warp_size"]
+        # update_clauses uses kconf_clauses_warp: total_clauses * warp_size threads
+        gs = (self.total_clauses * ws + bs - 1) // bs
+        self.n_rng_states = gs * bs
         self.rng = cp.asarray(
-            self.np_rng.integers(1, 2**30, size=self.total_clauses, dtype=np.uint32)
+            self.np_rng.integers(1, 2**30, size=self.n_rng_states, dtype=np.uint32)
         )
 
     def dev_init(self):

@@ -38,7 +38,7 @@
 #define N_POSITION_FEATS_Y (N_PATCHES_Y - 1)
 #define N_POSITION_FEATS_X (N_PATCHES_X - 1)
 #define S_INV (1.0f / S)
-#define UINT_MAX_INV (1.0f / 4294967295.0f)
+#define UINT_MAX_INV (1.0f / (float)0xFFFFFFFFu)
 
 #if COALESCED == 0
 #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
@@ -72,7 +72,7 @@ __device__ inline int geometric_sample(uint* rng, float p) {
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
-__device__ inline void literal_dec_with_p(uint* rng, uint* ta_state, int start, int end, int offset, float p) {
+__device__ inline void literal_dec_with_p(uint* __restrict__ rng, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
     int li = start + geometric_sample(rng, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] > 0)
@@ -81,13 +81,13 @@ __device__ inline void literal_dec_with_p(uint* rng, uint* ta_state, int start, 
     }
 }
 
-__device__ inline void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+__device__ inline void literal_inc(uint* __restrict__ ta_state, int start, int end, int offset, uint max_val) {
     for (int li = start; li < end; ++li) {
         ta_state[li + offset] += (ta_state[li + offset] < max_val);
     }
 }
 
-__device__ inline void literal_inc_maybe_p(uint* rng, uint* ta_state, int start, int end, int offset, float p) {
+__device__ inline void literal_inc_maybe_p(uint* __restrict__ rng, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
 #if BOOST_TP_FB
     literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
 #else
@@ -102,7 +102,7 @@ __device__ inline void literal_inc_maybe_p(uint* rng, uint* ta_state, int start,
 
 __device__ inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
 
-__device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+__device__ inline int get_feature_value(const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -113,9 +113,9 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
 
 // --- Warp-parallel feedback functions ---
 
-__device__ void warp_type1a_fb(uint* rng, uint* ta_state, float* weight, const int* X,
-                               int patch_idx_y, int patch_idx_x, int sign, const int* feat_mins,
-                               const int* literal_offsets, int lane) {
+__device__ inline void warp_type1a_fb(uint* __restrict__ rng, uint* __restrict__ ta_state, float* __restrict__ weight,
+                               const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int sign,
+                               const int* __restrict__ feat_mins, const int* __restrict__ literal_offsets, int lane) {
 #if TYPE1A_FB
 #if WEIGHTED
     if (lane == 0 && fabsf(*weight) < MAX_WEIGHT)
@@ -157,7 +157,7 @@ __device__ void warp_type1a_fb(uint* rng, uint* ta_state, float* weight, const i
 #endif
 }
 
-__device__ void warp_type1b_fb(uint* rng, uint* ta_state, int lane) {
+__device__ inline void warp_type1b_fb(uint* __restrict__ rng, uint* __restrict__ ta_state, int lane) {
 #if TYPE1B_FB
     for (int li = lane; li < N_LITERALS; li += WARP_SIZE) {
         if (xorshift32(rng) <= S_INV && ta_state[li] > 0)
@@ -166,9 +166,9 @@ __device__ void warp_type1b_fb(uint* rng, uint* ta_state, int lane) {
 #endif
 }
 
-__device__ void warp_type2_fb(uint* ta_state, float* weight, const int* X, int patch_idx_y,
-                              int patch_idx_x, int sign, const int* feat_mins,
-                              const int* literal_offsets, int lane) {
+__device__ inline void warp_type2_fb(uint* __restrict__ ta_state, float* __restrict__ weight,
+                              const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int sign,
+                              const int* __restrict__ feat_mins, const int* __restrict__ literal_offsets, int lane) {
 #if TYPE2_FB
 #if WEIGHTED
     if (lane == 0) {
@@ -215,7 +215,8 @@ __device__ void warp_type2_fb(uint* ta_state, float* weight, const int* X, int p
 
 // --- Kernels ---
 
-__global__ void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
+__global__ void calc_update_prob(const float* __restrict__ votes, const float* __restrict__ targets, const int e,
+                                 float* __restrict__ prob) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
     for (ull class_id = tid; class_id < (ull)CLASSES; class_id += stride) {
@@ -230,10 +231,12 @@ __global__ void calc_update_prob(const float* votes, const float* targets, const
     }
 }
 
-__global__ void update_clauses(uint* rng, const int* selected_patch_ids, const uint* num_includes,
-                               const int8_t* clause_drop_mask, const int* X, const float* targets, const int e,
-                               const float* prob, uint* ta_states, float* clause_weights, const int* feat_mins,
-                               const int* literal_offsets, int8_t* is_clause_synced) {
+__global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ selected_patch_ids,
+                               const uint* __restrict__ num_includes, const int8_t* __restrict__ clause_drop_mask,
+                               const int* __restrict__ X, const float* __restrict__ targets, const int e,
+                               const float* __restrict__ prob, uint* __restrict__ ta_states,
+                               float* __restrict__ clause_weights, const int* __restrict__ feat_mins,
+                               const int* __restrict__ literal_offsets, int8_t* __restrict__ is_clause_synced) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     int lane = threadIdx.x % WARP_SIZE;
     ull warp_id = tid / WARP_SIZE;
@@ -242,24 +245,12 @@ __global__ void update_clauses(uint* rng, const int* selected_patch_ids, const u
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* targets_e = &targets[(ull)e * CLASSES];
 
-    // Lane 0: load clause RNG state
-    uint local_rng;
-    if (lane == 0)
-        local_rng = rng[warp_id];
-
-    // Per-lane xorshift for parallel feature work
-    uint lane_rng;
+    // Per-thread persistent RNG
+    uint local_rng = rng[tid];
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1)
             continue;
-
-        // Reseed per-lane RNG from lane 0 each clause
-        uint xseed = 0;
-        if (lane == 0)
-            xseed = (uint)(xorshift32(&local_rng) * 4294967295.0f);
-        xseed = __shfl_sync(0xFFFFFFFF, xseed, 0);
-        lane_rng = (xseed ^ (lane * 2654435761u)) | 1u;
 
         uint* ta_state = &ta_states[clause * (ull)N_LITERALS];
         int patch_id = selected_patch_ids[clause];
@@ -296,13 +287,13 @@ __global__ void update_clauses(uint* rng, const int* selected_patch_ids, const u
             bool t1 = (target * sign) > 0;
 
             if (t1 && clause_output && has_space) {
-                warp_type1a_fb(&lane_rng, ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins,
+                warp_type1a_fb(&local_rng, ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins,
                                literal_offsets, lane);
                 is_clause_synced[clause] = 0;
             }
 
             if (t1 && !(clause_output && has_space)) {
-                warp_type1b_fb(&lane_rng, ta_state, lane);
+                warp_type1b_fb(&local_rng, ta_state, lane);
                 is_clause_synced[clause] = 0;
             }
 
@@ -313,8 +304,7 @@ __global__ void update_clauses(uint* rng, const int* selected_patch_ids, const u
         }
     }
 
-    if (lane == 0)
-        rng[warp_id] = local_rng;
+    rng[tid] = local_rng;
 }
 
 } // extern "C"

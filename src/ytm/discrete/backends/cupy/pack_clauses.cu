@@ -31,9 +31,6 @@ typedef unsigned long long ull;
 typedef unsigned int uint;
 
 extern "C" {
-
-// --- Warp-level primitives ---
-
 __device__ inline uint warp_reduce_sum(uint val) {
     for (int d = warpSize / 2; d > 0; d >>= 1)
         val += __shfl_xor_sync(0xFFFFFFFF, val, d);
@@ -62,15 +59,13 @@ __device__ inline int warp_exclusive_prefix_sum(int val) {
 
 __device__ inline bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
-// --- Section 1: Scan position literals, compute bounds ---
-
 struct PositionResult {
     int pos0, pos1, pos2, pos3;
     uint includes;
     bool valid;
 };
 
-__device__ inline PositionResult scan_position_literals(const uint* ta_state, int lane) {
+__device__ inline PositionResult scan_position_literals(const uint* __restrict__ ta_state, int lane) {
 #if POSITION_LITERALS
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
@@ -111,16 +106,17 @@ __device__ inline PositionResult scan_position_literals(const uint* ta_state, in
 #endif
 }
 
-// --- Section 2: Scan feature literals, compute bounds per feature ---
-
 struct FeatureResult {
     int n_constrained;
     uint includes;
     bool all_valid;
 };
 
-__device__ inline FeatureResult scan_feature_literals(const uint* ta_state, const int* feat_mins, const int* feat_maxs,
-                                                      const int* literal_offsets, int* cfb, int* cfids, int lane) {
+__device__ inline FeatureResult scan_feature_literals(const uint* __restrict__ ta_state,
+                                                      const int* __restrict__ feat_mins,
+                                                      const int* __restrict__ feat_maxs,
+                                                      const int* __restrict__ literal_offsets, int* __restrict__ cfb,
+                                                      int* __restrict__ cfids, int lane) {
     int my_cfids[MAX_FIDS_PER_LANE];
     int my_n_constrained = 0;
     uint my_includes = 0;
@@ -131,28 +127,31 @@ __device__ inline FeatureResult scan_feature_literals(const uint* ta_state, cons
         int lstart = N_POSITION_FEATS + literal_offsets[fid];
         bool has_constraint = false;
 
-        cfb[fid * 2 + 0] = feat_mins[fid];
-        cfb[fid * 2 + 1] = feat_maxs[fid];
+        int b0 = feat_mins[fid];
+        int b1 = feat_maxs[fid];
 
         for (int bit = 0; bit < n_bits; ++bit) {
             if (is_included(ta_state[lstart + bit])) {
-                cfb[fid * 2 + 0] = max(cfb[fid * 2 + 0], feat_mins[fid] + bit + 1);
+                b0 = max(b0, feat_mins[fid] + bit + 1);
                 my_includes++;
                 has_constraint = true;
             }
 #if NEGATED_LITERALS
             if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
-                cfb[fid * 2 + 1] = min(cfb[fid * 2 + 1], feat_mins[fid] + bit);
+                b1 = min(b1, feat_mins[fid] + bit);
                 my_includes++;
                 has_constraint = true;
             }
 #endif
         }
 
-        if (cfb[fid * 2 + 0] > cfb[fid * 2 + 1])
+        if (b0 > b1)
             my_valid = false;
-        if (has_constraint)
+        if (has_constraint) {
+            cfb[fid * 2 + 0] = b0;
+            cfb[fid * 2 + 1] = b1;
             my_cfids[my_n_constrained++] = fid;
+        }
     }
 
     // Compact constrained_fids via warp prefix sum
@@ -166,12 +165,12 @@ __device__ inline FeatureResult scan_feature_literals(const uint* ta_state, cons
     return {(int)total_nc, my_includes, all_valid};
 }
 
-// --- Main kernel ---
-
-__global__ void pack_clauses(const uint* global_ta_states, const int* feat_mins, const int* feat_maxs,
-                             const int* literal_offsets, int* clause_position_bounds, int* clause_feat_bounds,
-                             int* constrained_fids, int* n_constrained, uint* num_includes, int8_t* is_clause_valid,
-                             int8_t* is_clause_synced) {
+__global__ void pack_clauses(const uint* __restrict__ global_ta_states, const int* __restrict__ feat_mins,
+                             const int* __restrict__ feat_maxs, const int* __restrict__ literal_offsets,
+                             int* __restrict__ clause_position_bounds, int* __restrict__ clause_feat_bounds,
+                             int* __restrict__ constrained_fids, int* __restrict__ n_constrained,
+                             uint* __restrict__ num_includes, int8_t* __restrict__ is_clause_valid,
+                             int8_t* __restrict__ is_clause_synced) {
     int lane = threadIdx.x % warpSize;
     ull warp_id = (ull)(blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
