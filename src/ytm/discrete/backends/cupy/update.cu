@@ -56,28 +56,37 @@ typedef signed char int8_t;
 
 extern "C" {
 
-__device__ inline float xorshift32(uint* state) {
-    uint x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    return (float)x * UINT_MAX_INV;
+__device__ inline ull splitmix64(ull x) {
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
 }
 
-__device__ inline int geometric_sample(uint* rng, float p) {
-    float u = xorshift32(rng);
+__device__ inline ull rng_key(ull seed, ull tid, uint sample, uint kernel_salt) {
+    return seed
+           ^ (tid              * 0xBB67AE8584CAA73BULL)
+           ^ ((ull)sample      * 0x9E3779B97F4A7C15ULL)
+           ^ ((ull)kernel_salt * 0x94D049BB133111EBULL);
+}
+
+__device__ inline float rng_f32(ull key, uint* ctr) {
+    ull x = key ^ (ull)((*ctr)++);
+    return (float)(splitmix64(x) >> 32) * UINT_MAX_INV;
+}
+
+__device__ inline int geometric_sample(ull key, uint* ctr, float p) {
+    float u = rng_f32(key, ctr);
     if (u >= 1.0f)
         u = 0.9999999f;
     return (int)(logf(1.0f - u) / logf(1.0f - p)) + 1;
 }
 
-__device__ inline void literal_dec_with_p(uint* __restrict__ rng, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
-    int li = start + geometric_sample(rng, p) - 1;
+__device__ inline void literal_dec_with_p(ull key, uint* __restrict__ ctr, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
+    int li = start + geometric_sample(key, ctr, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] > 0)
             ta_state[li + offset] -= 1;
-        li += geometric_sample(rng, p);
+        li += geometric_sample(key, ctr, p);
     }
 }
 
@@ -87,15 +96,15 @@ __device__ inline void literal_inc(uint* __restrict__ ta_state, int start, int e
     }
 }
 
-__device__ inline void literal_inc_maybe_p(uint* __restrict__ rng, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
+__device__ inline void literal_inc_maybe_p(ull key, uint* __restrict__ ctr, uint* __restrict__ ta_state, int start, int end, int offset, float p) {
 #if BOOST_TP_FB
     literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
 #else
-    int li = start + geometric_sample(rng, p) - 1;
+    int li = start + geometric_sample(key, ctr, p) - 1;
     while (li < end) {
         if (ta_state[li + offset] < MAX_TA_STATE)
             ta_state[li + offset] += 1;
-        li += geometric_sample(rng, p);
+        li += geometric_sample(key, ctr, p);
     }
 #endif
 }
@@ -113,7 +122,7 @@ __device__ inline int get_feature_value(const int* __restrict__ X, int patch_idx
 
 // --- Warp-parallel feedback functions ---
 
-__device__ inline void warp_type1a_fb(uint* __restrict__ rng, uint* __restrict__ ta_state, float* __restrict__ weight,
+__device__ inline void warp_type1a_fb(ull key, uint* __restrict__ ctr, uint* __restrict__ ta_state, float* __restrict__ weight,
                                const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int sign,
                                const int* __restrict__ feat_mins, const int* __restrict__ literal_offsets, int lane) {
 #if TYPE1A_FB
@@ -124,18 +133,18 @@ __device__ inline void warp_type1a_fb(uint* __restrict__ rng, uint* __restrict__
 
 #if POSITION_LITERALS
     if (lane == 0) {
-        literal_inc_maybe_p(rng, ta_state, 0, patch_idx_y, 0, 1.0f - S_INV);
-        literal_dec_with_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, 0, patch_idx_y, 0, 1.0f - S_INV);
+        literal_dec_with_p(key, ctr, ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
 
-        literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, 1.0f - S_INV);
-        literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, 1.0f - S_INV);
+        literal_dec_with_p(key, ctr, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
 
 #if NEGATED_LITERALS
-        literal_dec_with_p(rng, ta_state, 0, patch_idx_y, N_LITERALS / 2, S_INV);
-        literal_inc_maybe_p(rng, ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1.0f - S_INV);
+        literal_dec_with_p(key, ctr, ta_state, 0, patch_idx_y, N_LITERALS / 2, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1.0f - S_INV);
 
-        literal_dec_with_p(rng, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
-        literal_inc_maybe_p(rng, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2,
+        literal_dec_with_p(key, ctr, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2,
                             1.0f - S_INV);
 #endif
     }
@@ -146,21 +155,21 @@ __device__ inline void warp_type1a_fb(uint* __restrict__ rng, uint* __restrict__
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
-        literal_inc_maybe_p(rng, ta_state, lit_start, lit_start + shifted_val, 0, 1.0f - S_INV);
-        literal_dec_with_p(rng, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, lit_start, lit_start + shifted_val, 0, 1.0f - S_INV);
+        literal_dec_with_p(key, ctr, ta_state, lit_start + shifted_val, lit_end, 0, S_INV);
 
 #if NEGATED_LITERALS
-        literal_dec_with_p(rng, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
-        literal_inc_maybe_p(rng, ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, 1.0f - S_INV);
+        literal_dec_with_p(key, ctr, ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
+        literal_inc_maybe_p(key, ctr, ta_state, lit_start + shifted_val, lit_end, N_LITERALS / 2, 1.0f - S_INV);
 #endif
     }
 #endif
 }
 
-__device__ inline void warp_type1b_fb(uint* __restrict__ rng, uint* __restrict__ ta_state, int lane) {
+__device__ inline void warp_type1b_fb(ull key, uint* __restrict__ ctr, uint* __restrict__ ta_state, int lane) {
 #if TYPE1B_FB
     for (int li = lane; li < N_LITERALS; li += WARP_SIZE) {
-        if (xorshift32(rng) <= S_INV && ta_state[li] > 0)
+        if (rng_f32(key, ctr) <= S_INV && ta_state[li] > 0)
             ta_state[li] -= 1;
     }
 #endif
@@ -231,7 +240,7 @@ __global__ void calc_update_prob(const float* __restrict__ votes, const float* _
     }
 }
 
-__global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ selected_patch_ids,
+__global__ void update_clauses(const ull seed, const int* __restrict__ selected_patch_ids,
                                const uint* __restrict__ num_includes, const int8_t* __restrict__ clause_drop_mask,
                                const int* __restrict__ X, const float* __restrict__ targets, const int e,
                                const float* __restrict__ prob, uint* __restrict__ ta_states,
@@ -245,8 +254,8 @@ __global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ s
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* targets_e = &targets[(ull)e * CLASSES];
 
-    // Per-thread persistent RNG
-    uint local_rng = rng[tid];
+    ull rng_k = rng_key(seed, tid, (uint)e, 0xEBu);
+    uint rng_c = 0;
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1)
@@ -270,9 +279,9 @@ __global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ s
             bool should_update = false;
             if (lane == 0) {
                 float q_prob = targets_e[class_id];
-                if (q_prob != 0.0f && xorshift32(&local_rng) <= fabsf(q_prob)) {
+                if (q_prob != 0.0f && rng_f32(rng_k, &rng_c) <= fabsf(q_prob)) {
                     target = (q_prob > 0.0f) ? 1 : -1;
-                    should_update = (xorshift32(&local_rng) <= prob[class_id]);
+                    should_update = (rng_f32(rng_k, &rng_c) <= prob[class_id]);
                 }
             }
             target = __shfl_sync(0xFFFFFFFF, target, 0);
@@ -287,13 +296,13 @@ __global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ s
             bool t1 = (target * sign) > 0;
 
             if (t1 && clause_output && has_space) {
-                warp_type1a_fb(&local_rng, ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins,
+                warp_type1a_fb(rng_k, &rng_c, ta_state, weight, Xe, patch_idx_y, patch_idx_x, sign, feat_mins,
                                literal_offsets, lane);
                 is_clause_synced[clause] = 0;
             }
 
             if (t1 && !(clause_output && has_space)) {
-                warp_type1b_fb(&local_rng, ta_state, lane);
+                warp_type1b_fb(rng_k, &rng_c, ta_state, lane);
                 is_clause_synced[clause] = 0;
             }
 
@@ -303,8 +312,6 @@ __global__ void update_clauses(uint* __restrict__ rng, const int* __restrict__ s
             }
         }
     }
-
-    rng[tid] = local_rng;
 }
 
 } // extern "C"

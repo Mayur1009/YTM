@@ -39,13 +39,22 @@ typedef unsigned int uint;
 
 extern "C" {
 
-__device__ inline float xorshift32(uint* state) {
-    uint x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    return (float)x * UINT_MAX_INV;
+__device__ inline ull splitmix64(ull x) {
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+__device__ inline ull rng_key(ull seed, ull tid, uint sample, uint kernel_salt) {
+    return seed
+           ^ (tid              * 0xBB67AE8584CAA73BULL)
+           ^ ((ull)sample      * 0x9E3779B97F4A7C15ULL)
+           ^ ((ull)kernel_salt * 0x94D049BB133111EBULL);
+}
+
+__device__ inline float rng_f32(ull key, uint* ctr) {
+    ull x = key ^ (ull)((*ctr)++);
+    return (float)(splitmix64(x) >> 32) * UINT_MAX_INV;
 }
 
 __device__ inline int get_feature_value(const int* __restrict__ X, int patch_idx_y, int patch_idx_x, int fid) {
@@ -72,7 +81,7 @@ __global__ void evaluate_conv(const int* __restrict__ X, const int e, const int8
                               const int* __restrict__ clause_position_bounds,
                               const int* __restrict__ clause_feat_bounds, const int* __restrict__ constrained_fids,
                               const int* __restrict__ n_constrained, const uint* __restrict__ num_includes,
-                              const int8_t* __restrict__ is_clause_valid, uint* __restrict__ rng,
+                              const int8_t* __restrict__ is_clause_valid, const ull seed,
                               int* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     int lane = threadIdx.x % warpSize;
@@ -80,7 +89,8 @@ __global__ void evaluate_conv(const int* __restrict__ X, const int e, const int8
     ull total_warps = (ull)(blockDim.x * gridDim.x) / warpSize;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    uint local_rng = rng[tid];
+    ull rng_k = rng_key(seed, tid, (uint)e, 0xEAu);
+    uint rng_c = 0;
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         if (clause_drop_mask[clause] == 1 || is_clause_valid[clause] == 0) {
@@ -123,7 +133,7 @@ __global__ void evaluate_conv(const int* __restrict__ X, const int e, const int8
                     int bit = __ffs(mask) - 1;
                     mask &= mask - 1;
                     count++;
-                    if (xorshift32(&local_rng) < 1.0f / count)
+                    if (rng_f32(rng_k, &rng_c) < 1.0f / count)
                         selected_id = base + bit;
                 }
             }
@@ -138,7 +148,6 @@ __global__ void evaluate_conv(const int* __restrict__ X, const int e, const int8
 #endif
         }
     }
-    rng[tid] = local_rng;
 }
 
 // --- Non-convolution: 1 warp per clause, 32 lanes split features via __all_sync ---
