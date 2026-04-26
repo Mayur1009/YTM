@@ -8,10 +8,9 @@ from ..args import TMArgs
 class PackedClauses:
     clause_position_bounds: Any
     clause_feat_bounds: Any
-    constrained_fids: Any
-    n_constrained: Any
-    num_includes: Any
-    is_clause_valid: Any
+    bounded_feat_ids: Any
+    n_bounded_feats: Any
+    clause_density: Any
     is_clause_synced: Any
 
     def to_cpu(self):
