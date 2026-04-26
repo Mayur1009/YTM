@@ -40,28 +40,36 @@
 
 #if COALESCED == 0
 #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+#define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
 #else
 #define CLAUSES_PER_CLASS TOTAL_CLAUSES
+#define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
-namespace cg = cooperative_groups;
-using warp_t = cg::thread_block_tile<32>;
+#if _OPENMP
+#include <omp.h>
+#define GET_THREAD_ID omp_get_thread_num()
+void set_num_threads(int n) { omp_set_num_threads(n); }
+#else
+#define GET_THREAD_ID 0
+void set_num_threads(int n) {}
+#endif
+
+#include <stdbool.h>
+#include <stdint.h>
 typedef unsigned int uint;
-typedef signed char int8_t;
 typedef unsigned long long ull;
 
-__device__ inline ull hash_combine(ull a, ull b) { return a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)); }
+static inline ull hash_combine(ull a, ull b) { return a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)); }
 
-__device__ inline ull rng_hash(ull seed, ull a, ull b, ull c) {
+static inline ull rng_hash(ull seed, ull a, ull b, ull c) {
     ull k = hash_combine(seed, a);
     k = hash_combine(k, b);
     k = hash_combine(k, c);
     return k;
 }
 
-__device__ inline float rand_uniform(ull key, uint* counter) {
+static inline float rand_uniform(ull key, uint* counter) {
     ull x = key ^ (ull)((*counter)++);
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
@@ -69,7 +77,7 @@ __device__ inline float rand_uniform(ull key, uint* counter) {
     return (float)(x >> 32) * 0x1p-32f;
 }
 
-__device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+static inline int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -78,8 +86,8 @@ __device__ inline int get_feature_value(const int* X, int patch_idx_y, int patch
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-__device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* feat_bounds,
-                                   const int* bounded_feat_ids, int n_bounded_feat_ids) {
+static inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* feat_bounds,
+                               const int* bounded_feat_ids, int n_bounded_feat_ids) {
     for (int i = 0; i < n_bounded_feat_ids; ++i) {
         int fid = bounded_feat_ids[i];
         int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
@@ -88,4 +96,5 @@ __device__ inline bool match_patch(const int* X, int patch_idx_y, int patch_idx_
     }
     return true;
 }
-template <typename T> __device__ inline T clip(T val, T lo, T hi) { return val < lo ? lo : (val > hi ? hi : val); }
+
+static inline float clip(float val, float lo, float hi) { return (val < lo) ? lo : ((val > hi) ? hi : val); }

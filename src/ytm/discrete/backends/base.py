@@ -68,7 +68,7 @@ class BaseDevice(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def pack_clauses(self) -> PackedClauses:
+    def pack_clauses(self):
         pass
 
 
