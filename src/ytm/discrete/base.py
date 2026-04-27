@@ -15,7 +15,7 @@ class BaseTM:
     def __init__(
         self,
         n_clauses: int,
-        T: float | int,
+        T: float | tuple[float, float],
         s: float,
         dim: tuple[int, int, int],
         n_classes: int,
@@ -57,17 +57,17 @@ class BaseTM:
     def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)
         if clip_class_sums:
-            class_sums = np.clip(class_sums, -self.args.T, self.args.T)
+            class_sums = np.clip(class_sums, self.args.T[0], self.args.T[1])
         return class_sums
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         patch_outputs = self.dev.transform_patchwise(X, batch_size)
         return patch_outputs
 
-    def _target_sampling(self, one_hot_Y: np.ndarray) -> np.ndarray:
+    def _target_sampling(self, Y: np.ndarray) -> np.ndarray:
         # N = one_hot_Y.shape[0]
-        targets = np.copy(one_hot_Y).astype(np.float32)
-        targets[targets == 0] = -1.0
+        targets = np.copy(Y).astype(np.float32) * self.args.T[1]
+        targets[targets == 0] = self.args.T[0]
         # for i in range(N):
         #     false_classes = np.where(one_hot_Y[i, :] == 0)[0]
         #     if len(false_classes) > 0:

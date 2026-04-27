@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 @dataclass()
 class TMArgs:
     n_clauses: int
-    T: float | int
+    T: float | tuple[float, float]
     s: float
     dim: tuple[int, int, int]
     n_classes: int
@@ -40,6 +40,7 @@ class TMArgs:
     block_size: int = 256
 
     def __post_init__(self):
+        self.T = (-float(self.T), float(self.T)) if not isinstance(self.T, tuple) else self.T
         self.patch_dim = (
             self.dim[0] if self.patch_dim[0] <= 0 or self.patch_dim[0] > self.dim[0] else self.patch_dim[0],
             self.dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self.dim[1] else self.patch_dim[1],

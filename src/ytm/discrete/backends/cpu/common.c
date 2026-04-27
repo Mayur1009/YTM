@@ -1,6 +1,7 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #define TOTAL_CLAUSES 1000
-#define THRESH 100.0f
+#define T_MIN -100.0f
+#define T_MAX 100.0f
 #define S 10.0f
 #define CLASSES 10
 #define Q 1.0f

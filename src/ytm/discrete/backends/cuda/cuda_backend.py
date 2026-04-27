@@ -26,7 +26,8 @@ class CUDADevice(BaseDevice):
     def _build_header(self):
         header = f"""
 #define TOTAL_CLAUSES {self.total_clauses}
-#define THRESH {float(self.args.T)}f
+#define T_MIN {float(self.args.T[0])}f
+#define T_MAX {float(self.args.T[1])}f
 #define S {float(self.args.s)}f
 #define CLASSES {self.args.n_classes}
 #define Q {float(self.args.q)}f

@@ -117,10 +117,10 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
                                        uint* rng_counter) {
     if (targets_e[class_id] == 0.0f ||
         (targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
-        rand_uniform(rng_k, rng_counter) > prob[class_id])
+        prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > fabsf(prob[class_id]))
         return;
 
-    float target = targets_e[class_id];
+    int target = (prob[class_id] > 0.0f) ? 1 : -1;
     is_clause_synced[clause] = 0;
 
     float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -161,14 +161,14 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
     }
 }
 
-static inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+static inline float uprob_fun(float y, float y_hat) { return (y - y_hat) / (T_MAX - T_MIN); }
 
 void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
 #pragma omp parallel for
     for (ull class_id = 0; class_id < (ull)CLASSES; class_id++) {
         float target = targets[(ull)e * CLASSES + class_id];
-        float v = clip(votes[class_id], -THRESH, THRESH);
-        prob[class_id] = uprob_fun(v, (float)THRESH * target);
+        float v = clip(votes[class_id], T_MIN, T_MAX);
+        prob[class_id] = uprob_fun(target, v);
     }
 }
 
