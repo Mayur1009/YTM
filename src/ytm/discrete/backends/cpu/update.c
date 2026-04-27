@@ -42,7 +42,7 @@ static inline void literal_inc_maybe_p(ull rng_key, uint* rng_counter, uint* ta_
 static inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
 
 static inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
-                              int patch_idx_x, const int* feat_mins, const int* literal_offsets) {
+                             int patch_idx_x, const int* feat_mins, const int* literal_offsets) {
 #if POSITION_LITERALS
     literal_inc_maybe_p(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0, 1.0f - S_INV);
     literal_dec_with_p(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
@@ -53,8 +53,7 @@ static inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, co
 
 #if NEGATED_LITERALS
     literal_dec_with_p(rng_key, rng_counter, ta_states, 0, patch_idx_y, N_LITERALS / 2, S_INV);
-    literal_inc_maybe_p(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2,
-                        1.0f - S_INV);
+    literal_inc_maybe_p(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1.0f - S_INV);
 
     literal_dec_with_p(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x,
                        N_LITERALS / 2, S_INV);
@@ -89,7 +88,7 @@ static inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state) {
 }
 
 static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                             const int* literal_offsets) {
+                            const int* literal_offsets) {
 #if POSITION_LITERALS
     literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, INCLUDE_STATE);
     literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, INCLUDE_STATE);
@@ -118,14 +117,12 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
                                        const int* Xe, const float* targets_e, const float* prob, const int* feat_mins,
                                        const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
                                        uint* rng_counter) {
-    float q_prob = targets_e[class_id];
-    if (q_prob == 0.0f || rand_uniform(rng_k, rng_counter) > fabsf(q_prob))
+    if (targets_e[class_id] == 0.0f ||
+        (targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
+        rand_uniform(rng_k, rng_counter) > prob[class_id])
         return;
 
-    int target = (q_prob > 0.0f) ? 1 : -1;
-    if (rand_uniform(rng_k, rng_counter) > prob[class_id])
-        return;
-
+    float target = targets_e[class_id];
     is_clause_synced[clause] = 0;
 
     float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -174,9 +171,9 @@ void calc_update_prob(const float* votes, const float* targets, const int e, flo
             prob[class_id] = 0.0f;
             continue;
         }
-        float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
+        // float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
         float v = clip(votes[class_id], -THRESH, THRESH);
-        prob[class_id] = uprob_fun(v, y);
+        prob[class_id] = uprob_fun(v, (float)THRESH * target);
     }
 }
 

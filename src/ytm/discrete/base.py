@@ -65,12 +65,13 @@ class BaseTM:
         return patch_outputs
 
     def _target_sampling(self, one_hot_Y: np.ndarray) -> np.ndarray:
-        N = one_hot_Y.shape[0]
+        # N = one_hot_Y.shape[0]
         targets = np.copy(one_hot_Y).astype(np.float32)
-        for i in range(N):
-            false_classes = np.where(one_hot_Y[i, :] == 0)[0]
-            if len(false_classes) > 0:
-                targets[i, false_classes] = -self.args.q / max(1, self.args.n_classes - 1)
+        targets[targets == 0] = -1.0
+        # for i in range(N):
+        #     false_classes = np.where(one_hot_Y[i, :] == 0)[0]
+        #     if len(false_classes) > 0:
+        #         targets[i, false_classes] = -self.args.q / max(1, self.args.n_classes - 1)
 
         return targets
 

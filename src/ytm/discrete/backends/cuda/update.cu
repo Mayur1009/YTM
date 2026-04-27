@@ -126,21 +126,17 @@ __device__ inline void update_clause_class(const warp_t& warp, int lane, ull cla
                                            const float* targets_e, const float* prob, const int* feat_mins,
                                            const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
                                            uint* rng_counter) {
-    int target = 0;
-    bool should_update = false;
+    bool skip = false;
     if (lane == 0) {
-        float q_prob = targets_e[class_id];
-        if (q_prob != 0.0f && rand_uniform(rng_k, rng_counter) <= fabsf(q_prob)) {
-            target = (q_prob > 0.0f) ? 1 : -1;
-            should_update = (rand_uniform(rng_k, rng_counter) <= prob[class_id]);
-        }
+        skip = (targets_e[class_id] == 0.0f) ||
+               (targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
+               (rand_uniform(rng_k, rng_counter) > prob[class_id]);
     }
-    target = warp.shfl(target, 0);
-    should_update = warp.shfl((int)should_update, 0);
 
-    if (target == 0 || !should_update)
+    if (warp.any(skip))
         return;
 
+    float target = targets_e[class_id];
     is_clause_synced[clause] = 0;
 
     float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -197,9 +193,9 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* tar
             prob[class_id] = 0.0f;
             continue;
         }
-        float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
-        float v = clip<float>(votes[class_id], -THRESH, THRESH);
-        prob[class_id] = uprob_fun(v, y);
+        // float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
+        float v = clip(votes[class_id], -THRESH, THRESH);
+        prob[class_id] = uprob_fun(v, (float)THRESH * target);
     }
 }
 

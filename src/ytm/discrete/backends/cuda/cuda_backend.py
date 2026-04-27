@@ -26,9 +26,10 @@ class CUDADevice(BaseDevice):
     def _build_header(self):
         header = f"""
 #define TOTAL_CLAUSES {self.total_clauses}
-#define THRESH {float(self.args.T)}
-#define S {float(self.args.s)}
+#define THRESH {float(self.args.T)}f
+#define S {float(self.args.s)}f
 #define CLASSES {self.args.n_classes}
+#define Q {float(self.args.q)}f
 #define HEIGHT {self.args.dim[0]}
 #define WIDTH {self.args.dim[1]}
 #define DEPTH {self.args.dim[2]}
@@ -36,7 +37,7 @@ class CUDADevice(BaseDevice):
 #define PATCH_WIDTH {self.args.patch_dim[1]}
 #define STRIDE_Y {self.args.stride[0]}
 #define STRIDE_X {self.args.stride[1]}
-#define MAX_WEIGHT {float(self.args.max_weight)}
+#define MAX_WEIGHT {float(self.args.max_weight)}f
 #define MAX_INCLUDED_LITERALS {self.args.max_includes}
 #define INCLUDE_STATE {self.args.include_state}
 #define MAX_TA_STATE {self.args.n_states - 1}
