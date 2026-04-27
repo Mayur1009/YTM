@@ -38,8 +38,6 @@ __device__ inline void literal_inc_maybe_p(ull rng_key, uint* rng_counter, uint*
 #endif
 }
 
-__device__ inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
-
 __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
                                  int patch_idx_x, int sign, const int* feat_mins, const int* literal_offsets,
                                  int lane) {
@@ -184,16 +182,13 @@ __device__ inline void update_clause_class(const warp_t& warp, int lane, ull cla
     }
 }
 
+__device__ inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+
 extern "C" __global__ void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
     for (ull class_id = tid; class_id < (ull)CLASSES; class_id += stride) {
         float target = targets[(ull)e * CLASSES + class_id];
-        if (target == 0.0f) {
-            prob[class_id] = 0.0f;
-            continue;
-        }
-        // float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
         float v = clip(votes[class_id], -THRESH, THRESH);
         prob[class_id] = uprob_fun(v, (float)THRESH * target);
     }

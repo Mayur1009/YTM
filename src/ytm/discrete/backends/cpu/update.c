@@ -39,8 +39,6 @@ static inline void literal_inc_maybe_p(ull rng_key, uint* rng_counter, uint* ta_
 #endif
 }
 
-static inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
-
 static inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
                              int patch_idx_x, const int* feat_mins, const int* literal_offsets) {
 #if POSITION_LITERALS
@@ -163,15 +161,12 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
     }
 }
 
+static inline float uprob_fun(float v, float y) { return (y - v) / (2 * y); }
+
 void calc_update_prob(const float* votes, const float* targets, const int e, float* prob) {
 #pragma omp parallel for
     for (ull class_id = 0; class_id < (ull)CLASSES; class_id++) {
         float target = targets[(ull)e * CLASSES + class_id];
-        if (target == 0.0f) {
-            prob[class_id] = 0.0f;
-            continue;
-        }
-        // float y = (float)THRESH * (target > 0.0f ? 1.0f : -1.0f);
         float v = clip(votes[class_id], -THRESH, THRESH);
         prob[class_id] = uprob_fun(v, (float)THRESH * target);
     }
