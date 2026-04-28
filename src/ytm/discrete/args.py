@@ -1,6 +1,8 @@
+import shutil
 import numpy as np
 from typing import Literal, TypedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import importlib.util
 
 
 @dataclass()
@@ -35,12 +37,32 @@ class TMArgs:
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
     n_threads: int = 1
-    compile_flags: list[str] = field(default_factory=lambda: ["-shared", "-fPIC", "-O3", "-ffast-math", "-march=native", "-lm", "-mtune=native"])
+    compile_flags: None | list[str] = None
     grid_size: int | None = None
     block_size: int = 256
 
     def __post_init__(self):
-        self.T = (-float(self.T), float(self.T)) if not isinstance(self.T, tuple) else self.T
+        if self.device == "cuda" and importlib.util.find_spec("cupy") is None:
+            raise ImportError(
+                "`device='cuda'` requires `cupy` to be installed. But `cupy` is not available in the current environment."
+            )
+
+        if self.device == "cpu" and not (shutil.which("gcc") or shutil.which("clang")):
+            raise EnvironmentError(
+                "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
+            )
+
+        self.n_threads = max(1, self.n_threads)
+
+        self.n_clauses = max(1, int(self.n_clauses))
+
+        if isinstance(self.T, (tuple, list)):
+            self.T_min, self.T_max = map(float, self.T)
+        else:
+            self.T_min, self.T_max = map(float, (-self.T, self.T))
+
+        self.s = max(1.0, float(self.s))
+
         self.patch_dim = (
             self.dim[0] if self.patch_dim[0] <= 0 or self.patch_dim[0] > self.dim[0] else self.patch_dim[0],
             self.dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self.dim[1] else self.patch_dim[1],
@@ -48,6 +70,8 @@ class TMArgs:
 
         if self.include_state == -1:
             self.include_state = self.n_states // 2
+        else:
+            self.include_state = min(self.include_state, self.n_states - 1)
 
         if self.seed == 0:
             self.seed = 1

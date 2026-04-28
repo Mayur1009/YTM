@@ -115,11 +115,13 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
                                        const int* Xe, const float* targets_e, const float* prob, const int* feat_mins,
                                        const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
                                        uint* rng_counter) {
-    if ((targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
-        prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > fabsf(prob[class_id]))
+    float update_prob = fabsf(prob[class_id]);
+    int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
+
+    if ((target < 0 && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) || target == 0 ||
+        rand_uniform(rng_k, rng_counter) > update_prob)
         return;
 
-    int target = (prob[class_id] > 0.0f) ? 1 : -1;
     is_clause_synced[clause] = 0;
 
     float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -167,7 +169,7 @@ void calc_update_prob(const float* votes, const float* targets, const int e, flo
     for (ull class_id = 0; class_id < (ull)CLASSES; class_id++) {
         float target = targets[(ull)e * CLASSES + class_id];
         float v = clip(votes[class_id], T_MIN, T_MAX);
-        prob[class_id] = uprob_fun(target, v);
+        prob[class_id] = uprob_fun(target, v); // [-1, 1], sign indicates target
     }
 }
 

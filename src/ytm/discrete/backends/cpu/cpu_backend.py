@@ -1,5 +1,6 @@
 import platform
 import pathlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -16,8 +17,63 @@ int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
+omp_flags = {
+    "gcc": ["-fopenmp"],
+    "clang": ["-fopenmp", "-lomp"],
+}
+
+
+def _check_openmp_support(compiler: str) -> bool:
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w") as f:
+        f.write("""
+#include <omp.h>
+int main() {
+    int n_threads = omp_get_max_threads();
+    return 0;
+}
+        """)
+        f.flush()
+        ext = ".out"
+        out_file = f.name.replace(".c", ext)
+        result = subprocess.run(
+            [compiler] + omp_flags.get(compiler, []) + [f.name, "-o", out_file],
+            capture_output=True,
+        )
+
+        if result.returncode == 0:
+            os.unlink(out_file)
+            supported = True
+        else:
+            warnings.warn(
+                f"OpenMP support check failed for compiler '{compiler}'. Compiler Output:\n{result.stdout.decode()}\nError: {result.stderr.decode()}\n"
+                "Proceeding without OpenMP support."
+            )
+            supported = False
+
+    return supported
+
 
 class CPUDevice(BaseDevice):
+    def _select_compiler(self):
+        if shutil.which("gcc"):
+            self.compiler = "gcc"
+        elif shutil.which("clang"):
+            self.compiler = "clang"
+        else:
+            raise RuntimeError("No suitable C compiler found (clang or gcc)")
+
+        if self.args.compile_flags is None:
+            self.compiler_flags = ["-shared", "-fPIC", "-lm", "-O3", "-ffast-math", "-march=native", "-mtune=native"]
+        else:
+            self.compiler_flags = self.args.compile_flags
+
+    def _openmp_flags(self):
+        if self.args.n_threads > 1 and _check_openmp_support(self.compiler):
+            self.omp_flags = omp_flags[self.compiler]
+        else:
+            self.args.n_threads = 1
+            self.omp_flags = []
+
     def _compile_code(self, code: str):
         with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
             f.write(code)
@@ -26,47 +82,21 @@ class CPUDevice(BaseDevice):
         ext = ".dll" if platform.system() == "Windows" else ".so"
         so_file = c_file.replace(".c", ext)
 
-        compiler_flags = list(self.args.compile_flags)
-
-        if shutil.which("gcc"):
-            compiler = "gcc"
-            omp_args = ["-fopenmp"]
-        elif shutil.which("clang"):
-            compiler = "clang"
-            omp_args = ["-fopenmp", "-lomp"]
-        else:
-            raise RuntimeError("No suitable C compiler found (clang or gcc)")
-
-        if self.args.n_threads > 1:
-            try:
-                subprocess.run(
-                    [compiler] + compiler_flags + omp_args + [c_file, "-o", so_file],
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(
-                    f"Failed to compile. Compiler Output:\n{e.stdout.decode()}\nError: {e.stderr.decode()}"
-                )
-        else:
-            try:
-                subprocess.run(
-                    [compiler] + compiler_flags + [c_file, "-o", so_file],
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(
-                    f"Failed to compile. Compiler Output:\n{e.stdout.decode()}\nError: {e.stderr.decode()}"
-                )
-
+        try:
+            subprocess.run(
+                [self.compiler] + self.compiler_flags + self.omp_flags + [c_file, "-o", so_file],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to compile. Compiler Output:\n{e.stdout.decode()}\nError: {e.stderr.decode()}")
         return CDLL(so_file)
 
     def _build_header(self):
         header = f"""
 #define TOTAL_CLAUSES {self.total_clauses}
-#define T_MIN {float(self.args.T[0])}f
-#define T_MAX {float(self.args.T[1])}f
+#define T_MIN {float(self.args.T_min)}f
+#define T_MAX {float(self.args.T_max)}f
 #define S {float(self.args.s)}f
 #define CLASSES {self.args.n_classes}
 #define Q {float(self.args.q)}f
@@ -168,6 +198,8 @@ class CPUDevice(BaseDevice):
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
 
     def dev_init(self):
+        self._select_compiler()
+        self._openmp_flags()
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()

@@ -57,7 +57,7 @@ class BaseTM:
     def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)
         if clip_class_sums:
-            class_sums = np.clip(class_sums, self.args.T[0], self.args.T[1])
+            class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
         return class_sums
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
@@ -66,8 +66,8 @@ class BaseTM:
 
     def _target_sampling(self, Y: np.ndarray) -> np.ndarray:
         # N = one_hot_Y.shape[0]
-        targets = np.copy(Y).astype(np.float32) * self.args.T[1]
-        targets[targets == 0] = self.args.T[0]
+        targets = np.copy(Y).astype(np.float32) * self.args.T_max
+        targets[targets == 0] = self.args.T_min
         # for i in range(N):
         #     false_classes = np.where(one_hot_Y[i, :] == 0)[0]
         #     if len(false_classes) > 0:
@@ -99,7 +99,7 @@ class BaseTM:
         if self.args.position_literals or self.dev.n_patches > 1:
             position_bounds = buf.clause_position_bounds.reshape((self.dev.n_clause_banks, self.args.n_clauses, 4))
 
-        is_valid = buf.is_clause_valid.reshape((self.dev.n_clause_banks, self.args.n_clauses)).astype(bool)
+        is_valid = buf.is_clause_synced.reshape((self.dev.n_clause_banks, self.args.n_clauses)).astype(bool)
 
         return ClauseInfo(
             feature_bounds=clause_feat_bounds,
