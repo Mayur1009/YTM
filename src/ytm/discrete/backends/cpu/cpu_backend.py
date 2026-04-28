@@ -126,12 +126,16 @@ class CPUDevice(BaseDevice):
         )
 
     def _init_weights(self):
-        n_neg_polarity = self.args.n_clauses // 2
-        self.clause_weights = np.zeros((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
-        for i in range(self.args.n_classes):
-            wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
-            wt[n_neg_polarity:] *= -1.0
-            self.clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
+        self.clause_weights = np.ones((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
+        if self.args.negative_clauses:
+            n_neg_polarity = self.args.n_clauses // 2
+            if self.args.coalesced:
+                for i in range(self.args.n_classes):
+                    wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
+                    wt[n_neg_polarity:] *= -1.0
+                    self.clause_weights[i, :] = self.np_rng.permutation(wt)
+            else:
+                self.clause_weights[:, n_neg_polarity:] *= -1.0
 
         if self.args.track_patch_weights:
             self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)

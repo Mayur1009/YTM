@@ -126,8 +126,7 @@ __device__ inline void update_clause_class(const warp_t& warp, int lane, ull cla
                                            uint* rng_counter) {
     bool skip = false;
     if (lane == 0) {
-        skip = (targets_e[class_id] == 0.0f ||
-                (targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
+        skip = ((targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
                 prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > fabsf(prob[class_id]));
     }
 

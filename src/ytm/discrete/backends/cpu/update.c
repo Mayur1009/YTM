@@ -115,8 +115,7 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
                                        const int* Xe, const float* targets_e, const float* prob, const int* feat_mins,
                                        const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
                                        uint* rng_counter) {
-    if (targets_e[class_id] == 0.0f ||
-        (targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
+    if ((targets_e[class_id] < 0.0f && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) ||
         prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > fabsf(prob[class_id]))
         return;
 
