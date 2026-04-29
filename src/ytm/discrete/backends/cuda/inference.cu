@@ -2,10 +2,9 @@
 #include "common.cu"
 #endif
 
-__device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const int N,
-                                        const int* clause_position_bounds, const int* clause_feat_bounds,
-                                        const int* bounded_feat_ids, const int* n_bounded_feats,
-                                        const int* clause_density) {
+__device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const int N, const int* clause_position_bounds,
+                                   const int* clause_feat_bounds, const int* bounded_feat_ids,
+                                   const int* n_bounded_feats, const int* clause_density) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -53,9 +52,9 @@ __device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const i
     }
 }
 
-__device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const int N,
-                                          const int* clause_feat_bounds, const int* bounded_feat_ids,
-                                          const int* n_bounded_feats, const int* clause_density) {
+__device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const int N, const int* clause_feat_bounds,
+                                     const int* bounded_feat_ids, const int* n_bounded_feats,
+                                     const int* clause_density) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -69,8 +68,9 @@ __device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const
 
         int cd = clause_density[clause];
         if (cd <= 0) {
-            if (lane == 0)
+            if (lane == 0) {
                 clause_outputs[idx] = (cd == 0) ? 1 : 0;
+            }
             continue;
         }
 
@@ -79,20 +79,22 @@ __device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const
         const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
         int n_bounded_fids = n_bounded_feats[clause];
 
-        bool my_match = true;
+        bool is_matching = true;
         for (int base = 0; base < n_bounded_fids; base += 32) {
             int i = base + lane;
             if (i < n_bounded_fids) {
                 int fid = bounded_fids[i];
                 int val = get_feature_value(Xe, 0, 0, fid);
                 if (val < cfb[fid * 2] || val > cfb[fid * 2 + 1])
-                    my_match = false;
+                    is_matching = false;
             }
-            if (warp.any(!my_match)) break;
+            if (warp.any(!is_matching))
+                break;
         }
+        bool matched = warp.all(is_matching);
 
         if (lane == 0)
-            clause_outputs[idx] = warp.all(my_match) ? 1 : 0;
+            clause_outputs[idx] = matched ? 1 : 0;
     }
 }
 
@@ -101,16 +103,15 @@ extern "C" __global__ void infer_clauses(const int* X, int8_t* clause_outputs, c
                                          const int* bounded_feat_ids, const int* n_bounded_feats,
                                          const int* clause_density) {
 #if (N_PATCHES > 1)
-    infer_clauses_conv(X, clause_outputs, N, clause_position_bounds, clause_feat_bounds,
-                            bounded_feat_ids, n_bounded_feats, clause_density);
+    infer_clauses_conv(X, clause_outputs, N, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                       n_bounded_feats, clause_density);
 #else
-    infer_clauses_noconv(X, clause_outputs, N, clause_feat_bounds,
-                              bounded_feat_ids, n_bounded_feats, clause_density);
+    infer_clauses_noconv(X, clause_outputs, N, clause_feat_bounds, bounded_feat_ids, n_bounded_feats, clause_density);
 #endif
 }
 
-extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights,
-                                     float* class_sums, const int N) {
+extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums,
+                                     const int N) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -145,10 +146,9 @@ extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* 
 }
 
 extern "C" __global__ void infer_clauses_patchwise(const int* X, int8_t* patch_output, const int N,
-                                                    const int* clause_position_bounds,
-                                                    const int* clause_feat_bounds,
-                                                    const int* bounded_feat_ids, const int* n_bounded_feats,
-                                                    const int* clause_density) {
+                                                   const int* clause_position_bounds, const int* clause_feat_bounds,
+                                                   const int* bounded_feat_ids, const int* n_bounded_feats,
+                                                   const int* clause_density) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 

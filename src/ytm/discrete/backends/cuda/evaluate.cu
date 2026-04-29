@@ -55,12 +55,13 @@ __device__ void evaluate_conv(const int* X, const int e, const int8_t* clause_dr
                               const ull seed, int* selected_patch_ids, int* patch_weights) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
+    ull tid = grid.thread_rank();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
     ull total_warps = grid.size() / warp.size();
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    ull rng_k = rng_hash(seed, warp_id, (ull)e, 0xDEADBEEFULL);
+    ull rng_k = rng_hash(seed, tid, (ull)e, 0xDEADBEEFULL);
     uint rng_counter = 0;
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {

@@ -6,8 +6,12 @@
 
 static inline int geometric_sample(ull rng_key, uint* rng_counter, float p) {
     float u = rand_uniform(rng_key, rng_counter);
-    float p_clamp = (p > 1e-9f) ? p : 1e-9f;
-    return (int)(logf(1.0f - u + 1e-9f) / logf(1.0f - p_clamp)) + 1;
+    float p_clamp = clip(p, 1e-7f, 1.0f - 1e-7f);
+    float u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
+    double log_u = log(1.0f - u_clamp);
+    double log_p = log(1.0f - p_clamp);
+    int sample = (int)(log_u / log_p) + 1;
+    return sample;
 }
 
 static inline void literal_dec_with_p(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset,
