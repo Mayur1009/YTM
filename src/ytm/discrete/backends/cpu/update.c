@@ -4,41 +4,49 @@
 
 #include <math.h>
 
-static inline int geometric_sample(ull rng_key, uint* rng_counter, float p) {
+static inline int geom_sample(ull rng_key, uint* rng_counter, float p) {
     float u = rand_uniform(rng_key, rng_counter);
-    float p_clamp = clip(p, 1e-7f, 1.0f - 1e-7f);
-    float u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
-    double log_u = log(1.0f - u_clamp);
-    double log_p = log(1.0f - p_clamp);
+    double u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
+    double log_u = log1p(-u_clamp);
+    double log_p = log1p(-p);
     int sample = (int)(log_u / log_p) + 1;
     return sample;
 }
 
-static inline void literal_dec_with_p(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset,
-                                      float p) {
-    int li = start + geometric_sample(rng_key, rng_counter, p) - 1;
-    while (li < end) {
-        if (ta_state[li + offset] > 0)
-            ta_state[li + offset] -= 1;
-        li += geometric_sample(rng_key, rng_counter, p);
+static inline void dec_literals(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset) {
+    if (S > 1.0f) {
+        int li = start + geom_sample(rng_key, rng_counter, S_INV) - 1;
+        while (li < end) {
+            if (ta_state[li + offset] > 0)
+                ta_state[li + offset] -= 1;
+            li += geom_sample(rng_key, rng_counter, S_INV);
+        }
+    } else {
+        for (int li = start; li < end; ++li)
+            if (ta_state[li + offset] > 0)
+                ta_state[li + offset] -= 1;
     }
 }
 
-static inline void literal_inc(uint* ta_state, int start, int end, int offset, uint max_val) {
+static inline void t2_inc_literals(uint* ta_state, int start, int end, int offset) {
     for (int li = start; li < end; ++li)
-        ta_state[li + offset] += (ta_state[li + offset] < max_val);
-}
-
-static inline void literal_inc_maybe_p(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset,
-                                       float p) {
-#if BOOST_TP_FB
-    literal_inc(ta_state, start, end, offset, MAX_TA_STATE);
-#else
-    int li = start + geometric_sample(rng_key, rng_counter, p) - 1;
-    while (li < end) {
         if (ta_state[li + offset] < MAX_TA_STATE)
             ta_state[li + offset] += 1;
-        li += geometric_sample(rng_key, rng_counter, p);
+}
+
+static inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset) {
+#if BOOST_TP_FB
+    for (int li = start; li < end; ++li)
+        if (ta_state[li + offset] < MAX_TA_STATE)
+            ta_state[li + offset] += 1;
+#else
+    if (S > 1.0f) {
+        int li = start + geometric_sample(rng_key, rng_counter, 1 - S_INV) - 1;
+        while (li < end) {
+            if (ta_state[li + offset] < MAX_TA_STATE)
+                ta_state[li + offset] += 1;
+            li += geometric_sample(rng_key, rng_counter, 1 - S_INV);
+        }
     }
 #endif
 }
@@ -46,21 +54,18 @@ static inline void literal_inc_maybe_p(ull rng_key, uint* rng_counter, uint* ta_
 static inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
                              int patch_idx_x, const int* feat_mins, const int* literal_offsets) {
 #if POSITION_LITERALS
-    literal_inc_maybe_p(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0, 1.0f - S_INV);
-    literal_dec_with_p(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, 0, S_INV);
+    t1a_inc_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0);
+    t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0);
 
-    literal_inc_maybe_p(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0,
-                        1.0f - S_INV);
-    literal_dec_with_p(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, S_INV);
-
+    dec_literals(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, 0);
+    dec_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0);
 #if NEGATED_LITERALS
-    literal_dec_with_p(rng_key, rng_counter, ta_states, 0, patch_idx_y, N_LITERALS / 2, S_INV);
-    literal_inc_maybe_p(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, 1.0f - S_INV);
+    t1a_inc_literals(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2);
+    t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS,
+                     N_LITERALS / 2);
 
-    literal_dec_with_p(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x,
-                       N_LITERALS / 2, S_INV);
-    literal_inc_maybe_p(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS,
-                        N_LITERALS / 2, 1.0f - S_INV);
+    dec_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, N_LITERALS / 2);
+    dec_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2);
 #endif
 #endif
 
@@ -69,35 +74,28 @@ static inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, co
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
-        literal_inc_maybe_p(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, 0, 1.0f - S_INV);
-        literal_dec_with_p(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, 0, S_INV);
-
+        t1a_inc_literals(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, 0);
+        dec_literals(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, 0);
 #if NEGATED_LITERALS
-        literal_dec_with_p(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, N_LITERALS / 2, S_INV);
-        literal_inc_maybe_p(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, N_LITERALS / 2,
-                            1.0f - S_INV);
+        t1a_inc_literals(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, N_LITERALS / 2);
+        dec_literals(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, N_LITERALS / 2);
 #endif
     }
 }
 
 static inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state) {
-    int li = geometric_sample(rng_key, rng_counter, S_INV) - 1;
-    while (li < N_LITERALS) {
-        if (ta_state[li] > 0)
-            ta_state[li] -= 1;
-        li += geometric_sample(rng_key, rng_counter, S_INV);
-    }
+    dec_literals(rng_key, rng_counter, ta_state, 0, N_LITERALS, 0);
 }
 
 static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
                             const int* literal_offsets) {
 #if POSITION_LITERALS
-    literal_inc(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0, INCLUDE_STATE);
-    literal_inc(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, INCLUDE_STATE);
+    t2_inc_literals(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0);
+    t2_inc_literals(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0);
 
 #if NEGATED_LITERALS
-    literal_inc(ta_state, 0, patch_idx_y, N_LITERALS / 2, INCLUDE_STATE);
-    literal_inc(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, INCLUDE_STATE);
+    t2_inc_literals(ta_state, 0, patch_idx_y, N_LITERALS / 2);
+    t2_inc_literals(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2);
 #endif
 #endif
 
@@ -106,10 +104,10 @@ static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int p
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
-        literal_inc(ta_state, lit_start + shifted_val, lit_end, 0, INCLUDE_STATE);
+        t2_inc_literals(ta_state, lit_start + shifted_val, lit_end, 0);
 
 #if NEGATED_LITERALS
-        literal_inc(ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2, INCLUDE_STATE);
+        t2_inc_literals(ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2);
 #endif
     }
 }
