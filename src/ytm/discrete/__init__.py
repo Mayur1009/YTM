@@ -1,3 +1,6 @@
-from .multiclass import MultiClassTM
-from .multioutput import MultiOutputTM
-from .regression import RegressionTM
+from .classifier import (
+    BinaryTM as BinaryTM,
+    MultiClassTM as MultiClassTM,
+    MultiOutputTM as MultiOutputTM,
+)
+from .regressor import RegressionTM as RegressionTM
