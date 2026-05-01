@@ -1,7 +1,7 @@
 import numpy as np
-from keras.datasets import mnist
+from datasets import load_dataset
 
-from ytm.discrete.multiclass import MultiClassTM
+from ytm.discrete.classifier import MultiClassTM
 from ytm.utils import Timer
 
 
@@ -27,15 +27,13 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
 
 
 if __name__ == "__main__":
-    (X_train, Y_train_org), (X_test, Y_test_org) = mnist.load_data()
+    ds = load_dataset("ylecun/mnist")
+    Y_train, Y_test = map(lambda x: np.array(x).astype(np.uint8), (ds["train"]["label"], ds["test"]["label"]))
+    X_train, X_test = map(
+        lambda x: np.where(np.array(x) > 75, 1, 0).astype(np.uint8),
+        (ds["train"]["image"], ds["test"]["image"]),
+    )
 
-    # Convert pixel values to binary (0 or 1) based on a threshold of 75
-    X_train = np.where(X_train.reshape((X_train.shape[0], 28 * 28)) > 75, 1, 0)
-    X_test = np.where(X_test.reshape((X_test.shape[0], 28 * 28)) > 75, 1, 0)
-    X_train = np.asarray(X_train, dtype=np.int8)
-    X_test = np.asarray(X_test, dtype=np.int8)
-
-    Y_train, Y_test = Y_train_org, Y_test_org
     tm = MultiClassTM(
         n_clauses=500,
         T=1000,
@@ -44,8 +42,8 @@ if __name__ == "__main__":
         n_classes=10,
         patch_dim=(10, 10),
         stride=(1, 1),
-        feat_mins=X_train.min(), # Since all the features have a min of 0.
-        feat_maxs=X_train.max(), # Since all the features have a max of 1.
+        feat_mins=X_train.min(),  # Since all the features have a min of 0.
+        feat_maxs=X_train.max(),  # Since all the features have a max of 1.
         seed=10,
         device="cpu",
         n_threads=8,

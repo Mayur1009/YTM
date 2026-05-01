@@ -1,10 +1,10 @@
 import numpy as np
-from keras.datasets import cifar10
+from datasets import load_dataset
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 import seaborn as sns
 
-from ytm.discrete.multiclass import MultiClassTM
+from ytm.discrete.classifier import MultiClassTM
 from ytm.discrete.interpret import wac
 from ytm.utils import Timer
 
@@ -63,14 +63,12 @@ def plot_wac(X_org, Y, wac_images):
 
 
 if __name__ == "__main__":
-    (X_train_org, Y_train), (X_test_org, Y_test) = cifar10.load_data()
-
-    # Discretize the pixel values in range [0, 255] to [0, 8] (i.e., 8 bins) per channel.
-    X_train = np.asarray(8 * X_train_org.astype(np.float32) / 255.0, dtype=np.int32)
-    X_test = np.asarray(8 * X_test_org.astype(np.float32) / 255.0, dtype=np.int32)
-    Y_train = Y_train.reshape(Y_train.shape[0]).astype(np.int8)
-    Y_test = Y_test.reshape(Y_test.shape[0]).astype(np.int8)
-
+    ds = load_dataset("uoft-cs/cifar10")
+    Y_train, Y_test = map(np.array, (ds["train"]["label"], ds["test"]["label"]))
+    X_train, X_test = map(
+        lambda x: np.asarray(20 * np.array(x).astype(np.float32) / 255.0, dtype=np.int32),
+        (ds["train"]["img"], ds["test"]["img"]),
+    )
     print(f"X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
     print(f"X_train min: {X_train.min()}, X_train max: {X_train.max()}")
 

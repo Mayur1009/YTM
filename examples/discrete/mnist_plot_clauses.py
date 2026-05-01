@@ -1,10 +1,10 @@
 import numpy as np
-from keras.datasets import mnist
+from datasets import load_dataset
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 import seaborn as sns
 
-from ytm.discrete.multiclass import MultiClassTM
+from ytm.discrete.classifier import MultiClassTM
 from ytm.discrete.interpret import wac
 from ytm.utils import Timer
 
@@ -57,10 +57,12 @@ def plot_wac(X, Y, wac_images):
 
 
 if __name__ == "__main__":
-    (X_train, Y_train), (X_test, Y_test) = mnist.load_data()
-
-    X_train = np.where(X_train.reshape((X_train.shape[0], 28 * 28)) > 75, 1, 0).astype(np.int8)
-    X_test = np.where(X_test.reshape((X_test.shape[0], 28 * 28)) > 75, 1, 0).astype(np.int8)
+    ds = load_dataset("ylecun/mnist")
+    Y_train, Y_test = map(lambda x: np.array(x).astype(np.uint8), (ds["train"]["label"], ds["test"]["label"]))
+    X_train, X_test = map(
+        lambda x: np.where(np.array(x) > 75, 1, 0).astype(np.uint8),
+        (ds["train"]["image"], ds["test"]["image"]),
+    )
 
     tm = MultiClassTM(
         n_clauses=500,

@@ -1,10 +1,10 @@
 import numpy as np
-from keras.datasets import fashion_mnist
+from datasets import load_dataset
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 import seaborn as sns
 
-from ytm.discrete.multiclass import MultiClassTM
+from ytm.discrete.classifier import MultiClassTM
 from ytm.discrete.interpret import wac
 from ytm.utils import Timer
 
@@ -62,12 +62,12 @@ def plot_wac(X, Y, wac_images):
 
 
 if __name__ == "__main__":
-    (X_train, Y_train), (X_test, Y_test) = fashion_mnist.load_data()
-
-    # Discretize the pixel values in range [0, 255] to [0, 8] (i.e., 8 bins).
-    X_train = np.asarray(8 * X_train.astype(np.float32) / 255.0, dtype=np.int32)
-    X_test = np.asarray(8 * X_test.astype(np.float32) / 255.0, dtype=np.int32)
-
+    ds = load_dataset("zalando-datasets/fashion_mnist")
+    Y_train, Y_test = map(np.array, (ds["train"]["label"], ds["test"]["label"]))
+    X_train, X_test = map(
+        lambda x: np.asarray(8 * np.array(x).astype(np.float32) / 255.0, dtype=np.int32),
+        (ds["train"]["image"], ds["test"]["image"]),
+    )
     print(f"X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
     print(f"X_train min: {X_train.min()}, X_train max: {X_train.max()}")
 

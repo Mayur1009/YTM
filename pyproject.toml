@@ -18,7 +18,7 @@ cuda = [
 examples = [
     "matplotlib",
     "seaborn",
-    "tensorflow",
+    "datasets",
     "scikit-learn",
     "medmnist"
 ]
