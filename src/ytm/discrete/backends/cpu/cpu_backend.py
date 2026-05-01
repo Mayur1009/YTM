@@ -19,7 +19,7 @@ float_p = POINTER(c_float)
 
 omp_flags = {
     "gcc": ["-fopenmp"],
-    "clang": ["-fopenmp", "-lomp"],
+    "clang": ["-fopenmp"],
 }
 
 
@@ -55,10 +55,10 @@ int main() {
 
 class CPUDevice(BaseDevice):
     def _select_compiler(self):
-        if shutil.which("gcc"):
-            self.compiler = "gcc"
-        elif shutil.which("clang"):
+        if shutil.which("clang"):
             self.compiler = "clang"
+        elif shutil.which("gcc"):
+            self.compiler = "gcc"
         else:
             raise RuntimeError("No suitable C compiler found (clang or gcc)")
 

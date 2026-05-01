@@ -7,7 +7,7 @@ dependencies = [
 ]
 name = "YTM"
 requires-python = ">=3.11,<3.14"
-version = "0.6.0+dev6"
+version = "0.6.0+dev7"
 
 [project.optional-dependencies]
 cuda = [
@@ -43,35 +43,25 @@ exclude = [
 [tool.ruff]
 line-length = 120
 
-## PIXI configuration
+# PIXI configuration
 [tool.pixi.environments]
-default = ["default", "examples"]
-cuda = ["default", "cuda", "examples"]
+default = ["examples"]
+cuda = ["cuda", "examples"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["linux-64", "osx-arm64"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
 
 [tool.pixi.pypi-dependencies]
-ytm = { path = ".", editable = true, extras = ["examples"] }
+ytm = { path = ".", editable = true }
 
 [tool.pixi.dependencies]
-
-[tool.pixi.feature.cuda]
-platforms = ["linux-64"]
-
-[tool.pixi.feature.cuda.system-requirements]
-cuda = "12"
-
-[tool.pixi.feature.cuda.dependencies]
-cuda = "*"
-cuda-nsight = "*"
-openmp = "*"
+clang = "*"
+llvm-openmp = "*"
 seaborn = "*"
 jupyterlab = "*"
 ipdb = "*"
 
-[tool.pixi.feature.cuda.pypi-dependencies]
-ytm = { path = ".", editable = true, extras = ["examples", "cuda"] }
-
-[tool.pixi.feature.examples.dependencies]
+[tool.pixi.feature.cuda]
+platforms = ["linux-64", "win-64"]
+system-requirements = { cuda = "12" }
