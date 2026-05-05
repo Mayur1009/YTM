@@ -8492,8 +8492,8 @@ packages:
   requires_python: '>=3.10'
 - pypi: ./
   name: ytm
-  version: 0.6.0+dev7
-  sha256: fc6475df29a70869eb1db0907319583e89137047c8919cceff866ed024da0d48
+  version: 0.6.0+dev8
+  sha256: c8b08b8f0572b7dfe56bc38a292a5e72c4a48459299bd932eb54ea2546c1207d
   requires_dist:
   - numpy
   - tqdm
