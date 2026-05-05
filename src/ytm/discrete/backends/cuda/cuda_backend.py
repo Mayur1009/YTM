@@ -8,13 +8,15 @@ from ..base import BaseDevice, PackedClauses
 
 
 class PackedClausesCUDA(PackedClauses):
-    def to_cpu(self):
-        self.clause_position_bounds = self.clause_position_bounds.get()
-        self.clause_feat_bounds = self.clause_feat_bounds.get()
-        self.bounded_feat_ids = self.bounded_feat_ids.get()
-        self.n_bounded_feats = self.n_bounded_feats.get()
-        self.clause_density = self.clause_density.get()
-        self.is_clause_synced = self.is_clause_synced.get()
+    def get(self):
+        return PackedClauses(
+            clause_position_bounds=self.clause_position_bounds.get(),
+            clause_feat_bounds=self.clause_feat_bounds.get(),
+            bounded_feat_ids=self.bounded_feat_ids.get(),
+            n_bounded_feats=self.n_bounded_feats.get(),
+            clause_density=self.clause_density.get(),
+            is_clause_synced=self.is_clause_synced.get(),
+        )
 
 
 def read_file(path):
@@ -131,7 +133,7 @@ class CUDADevice(BaseDevice):
         clause_density = cp.empty(self.total_clauses, dtype=np.int32)
         is_clause_synced = cp.zeros(self.total_clauses, dtype=np.int8)
 
-        self.packed_clauses_gpu = PackedClausesCUDA(
+        self.packed_clauses = PackedClausesCUDA(
             clause_position_bounds=clause_position_bounds,
             clause_feat_bounds=clause_feat_bounds,
             bounded_feat_ids=bounded_feat_ids,
@@ -195,12 +197,12 @@ class CUDADevice(BaseDevice):
                         self.feat_mins_gpu,
                         self.feat_maxs_gpu,
                         self.literal_offsets_gpu,
-                        self.packed_clauses_gpu.clause_position_bounds,
-                        self.packed_clauses_gpu.clause_feat_bounds,
-                        self.packed_clauses_gpu.bounded_feat_ids,
-                        self.packed_clauses_gpu.n_bounded_feats,
-                        self.packed_clauses_gpu.clause_density,
-                        self.packed_clauses_gpu.is_clause_synced,
+                        self.packed_clauses.clause_position_bounds,
+                        self.packed_clauses.clause_feat_bounds,
+                        self.packed_clauses.bounded_feat_ids,
+                        self.packed_clauses.n_bounded_feats,
+                        self.packed_clauses.clause_density,
+                        self.packed_clauses.is_clause_synced,
                     ),
                 )
                 self.k_evaluate(
@@ -209,11 +211,11 @@ class CUDADevice(BaseDevice):
                         X_batch,
                         np.int32(e),
                         clause_drop_mask_gpu,
-                        self.packed_clauses_gpu.clause_position_bounds,
-                        self.packed_clauses_gpu.clause_feat_bounds,
-                        self.packed_clauses_gpu.bounded_feat_ids,
-                        self.packed_clauses_gpu.n_bounded_feats,
-                        self.packed_clauses_gpu.clause_density,
+                        self.packed_clauses.clause_position_bounds,
+                        self.packed_clauses.clause_feat_bounds,
+                        self.packed_clauses.bounded_feat_ids,
+                        self.packed_clauses.n_bounded_feats,
+                        self.packed_clauses.clause_density,
                         self.seed,
                         selected_patch_ids,
                         self.patch_weights,
@@ -232,7 +234,7 @@ class CUDADevice(BaseDevice):
                     (
                         self.seed,
                         selected_patch_ids,
-                        self.packed_clauses_gpu.clause_density,
+                        self.packed_clauses.clause_density,
                         clause_drop_mask_gpu,
                         X_batch,
                         tar_batch,
@@ -242,13 +244,13 @@ class CUDADevice(BaseDevice):
                         self.clause_weights,
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
-                        self.packed_clauses_gpu.is_clause_synced,
+                        self.packed_clauses.is_clause_synced,
                     ),
                 )
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
-            self.packed_clauses_gpu.is_clause_synced.fill(0)
+            self.packed_clauses.is_clause_synced.fill(0)
 
         self.k_pack_clauses(
             *self.kconf_clauses,
@@ -257,12 +259,12 @@ class CUDADevice(BaseDevice):
                 self.feat_mins_gpu,
                 self.feat_maxs_gpu,
                 self.literal_offsets_gpu,
-                self.packed_clauses_gpu.clause_position_bounds,
-                self.packed_clauses_gpu.clause_feat_bounds,
-                self.packed_clauses_gpu.bounded_feat_ids,
-                self.packed_clauses_gpu.n_bounded_feats,
-                self.packed_clauses_gpu.clause_density,
-                self.packed_clauses_gpu.is_clause_synced,
+                self.packed_clauses.clause_position_bounds,
+                self.packed_clauses.clause_feat_bounds,
+                self.packed_clauses.bounded_feat_ids,
+                self.packed_clauses.n_bounded_feats,
+                self.packed_clauses.clause_density,
+                self.packed_clauses.is_clause_synced,
             ),
         )
 
@@ -286,11 +288,11 @@ class CUDADevice(BaseDevice):
                     batch_X,
                     co_batch,
                     np.int32(bs),
-                    self.packed_clauses_gpu.clause_position_bounds,
-                    self.packed_clauses_gpu.clause_feat_bounds,
-                    self.packed_clauses_gpu.bounded_feat_ids,
-                    self.packed_clauses_gpu.n_bounded_feats,
-                    self.packed_clauses_gpu.clause_density,
+                    self.packed_clauses.clause_position_bounds,
+                    self.packed_clauses.clause_feat_bounds,
+                    self.packed_clauses.bounded_feat_ids,
+                    self.packed_clauses.n_bounded_feats,
+                    self.packed_clauses.clause_density,
                 ),
             )
 
@@ -326,11 +328,11 @@ class CUDADevice(BaseDevice):
                     batch_X,
                     co_batch,
                     np.int32(bs),
-                    self.packed_clauses_gpu.clause_position_bounds,
-                    self.packed_clauses_gpu.clause_feat_bounds,
-                    self.packed_clauses_gpu.bounded_feat_ids,
-                    self.packed_clauses_gpu.n_bounded_feats,
-                    self.packed_clauses_gpu.clause_density,
+                    self.packed_clauses.clause_position_bounds,
+                    self.packed_clauses.clause_feat_bounds,
+                    self.packed_clauses.bounded_feat_ids,
+                    self.packed_clauses.n_bounded_feats,
+                    self.packed_clauses.clause_density,
                 ),
             )
             clause_outputs[i:batch_end] = co_batch.get()
@@ -357,11 +359,11 @@ class CUDADevice(BaseDevice):
                     batch_X,
                     po_batch,
                     np.int32(bs),
-                    self.packed_clauses_gpu.clause_position_bounds,
-                    self.packed_clauses_gpu.clause_feat_bounds,
-                    self.packed_clauses_gpu.bounded_feat_ids,
-                    self.packed_clauses_gpu.n_bounded_feats,
-                    self.packed_clauses_gpu.clause_density,
+                    self.packed_clauses.clause_position_bounds,
+                    self.packed_clauses.clause_feat_bounds,
+                    self.packed_clauses.bounded_feat_ids,
+                    self.packed_clauses.n_bounded_feats,
+                    self.packed_clauses.clause_density,
                 ),
             )
             patch_output[i:batch_end] = po_batch.get()
@@ -392,4 +394,4 @@ class CUDADevice(BaseDevice):
         self.ta_states = cp.asarray(state_dict["ta_states"])
         self.clause_weights = cp.asarray(state_dict["clause_weights"])
         self.patch_weights = cp.asarray(state_dict["patch_weights"])
-        self.packed_clauses_gpu.is_clause_synced.fill(0)
+        self.packed_clauses.is_clause_synced.fill(0)

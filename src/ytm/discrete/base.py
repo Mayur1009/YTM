@@ -81,9 +81,9 @@ class BaseTM:
     def get_patch_weights(self) -> np.ndarray:
         return self.dev.get_patch_weights()
 
-    def get_clauses(self) -> ClauseInfo:
-        buf: PackedClauses = self.dev.pack_clauses()
-        buf.to_cpu()
+    def get_clauses(self, force_repack=False) -> ClauseInfo:
+        self.dev.pack_clauses(force_repack)
+        buf = self.dev.packed_clauses.get()
 
         clause_feat_bounds = buf.clause_feat_bounds.reshape(
             (self.dev.n_clause_banks, self.args.n_clauses, self.dev.n_raw_patch_feats * 2)

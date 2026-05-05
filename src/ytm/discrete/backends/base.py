@@ -13,8 +13,15 @@ class PackedClauses:
     clause_density: Any
     is_clause_synced: Any
 
-    def to_cpu(self):
-        pass
+    def get(self)-> "PackedClauses":
+        return PackedClauses(
+            clause_position_bounds=np.asarray(self.clause_position_bounds),
+            clause_feat_bounds=np.asarray(self.clause_feat_bounds),
+            bounded_feat_ids=np.asarray(self.bounded_feat_ids),
+            n_bounded_feats=np.asarray(self.n_bounded_feats),
+            clause_density=np.asarray(self.clause_density),
+            is_clause_synced=np.asarray(self.is_clause_synced),
+        )
 
 
 class BaseDevice(abc.ABC):
