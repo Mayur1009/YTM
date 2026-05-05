@@ -129,5 +129,5 @@ class BaseTM:
 
     def __setstate__(self, state):
         state["args"]["device"] = "cpu"
-        self.__init__(**state["args"])
+        BaseTM.__init__(self, **state["args"])
         self.dev.load_state_dict(state["params"])
