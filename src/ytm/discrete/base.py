@@ -44,6 +44,8 @@ class BaseTM:
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
     ) -> None:
+        assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
+
         N = X.shape[0]
         iota = np.arange(N)
         if shuffle:
