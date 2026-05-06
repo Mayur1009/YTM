@@ -20,7 +20,8 @@ examples = [
     "seaborn",
     "datasets",
     "scikit-learn",
-    "medmnist"
+    "medmnist",
+    "albumentationsx[headless]"
 ]
 
 [build-system]
