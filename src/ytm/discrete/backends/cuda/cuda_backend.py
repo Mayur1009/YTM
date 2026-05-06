@@ -143,7 +143,7 @@ class CUDADevice(BaseDevice):
         )
 
     def _init_frozen_clauses(self):
-        self.frozen_clauses = cp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=cp.uint8)
+        self.frozen_clauses = cp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=cp.int8)
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -186,11 +186,11 @@ class CUDADevice(BaseDevice):
 
         # Clause dropout mask (same for entire epoch)
         if clause_drop_p > 0.0:
-            clause_drop_mask_gpu = cp.asarray(self.np_rng.random(self.total_clauses) <= clause_drop_p, dtype=cp.uint8)
+            clause_drop_mask_gpu = cp.asarray(self.np_rng.random(self.total_clauses) <= clause_drop_p, dtype=cp.int8)
         else:
-            clause_drop_mask_gpu = cp.zeros(self.total_clauses, dtype=np.uint8)
+            clause_drop_mask_gpu = cp.zeros(self.total_clauses, dtype=np.int8)
 
-        clause_drop_mask_gpu = cp.logical_or(clause_drop_mask_gpu, self.frozen_clauses.flatten()).astype(cp.uint8)
+        clause_drop_mask_gpu = cp.logical_or(clause_drop_mask_gpu, self.frozen_clauses.flatten()).astype(cp.int8)
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.zeros(self.args.n_classes, dtype=np.float32)

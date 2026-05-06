@@ -73,7 +73,13 @@ class BaseTM:
         return targets
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
-        self.dev.freeze_clauses(class_id, clause_ids)
+        if self.args.coalesced:
+            if class_id != 0:
+                print(f"Warning: coalesced is true, ignoring class_id {class_id} and freezing clauses for all classes")
+            self.dev.freeze_clauses(0, clause_ids)
+        else:
+            assert class_id < self.args.n_classes, f"Invalid class_id {class_id} for n_classes {self.args.n_classes}"
+            self.dev.freeze_clauses(class_id, clause_ids)
 
     def unfreeze_clauses(self):
         self.dev.unfreeze_clauses()

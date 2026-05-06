@@ -183,7 +183,7 @@ class CPUDevice(BaseDevice):
         )
 
     def _init_frozen_clauses(self):
-        self.frozen_clauses = np.zeros((self.n_clause_banks, self.args.n_clauses), dtype=np.uint8)
+        self.frozen_clauses = np.zeros((self.n_clause_banks, self.args.n_clauses), dtype=np.int8)
 
     def _init_pointers(self):
         self.p_clause_position_bounds = self.packed_clauses.clause_position_bounds.ctypes.data_as(int32_p)
@@ -226,11 +226,11 @@ class CPUDevice(BaseDevice):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
-            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.uint8)
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
-            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.uint8)
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
-        clause_drop_mask = np.logical_or(clause_drop_mask, self.frozen_clauses.flatten()).astype(np.uint8)
+        clause_drop_mask = np.logical_or(clause_drop_mask, self.frozen_clauses.flatten()).astype(np.int8)
 
         X = X.astype(np.int32)
         targets = targets.astype(np.float32)
