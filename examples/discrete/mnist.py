@@ -41,7 +41,6 @@ if __name__ == "__main__":
         dim=(28, 28, 1),
         n_classes=10,
         patch_dim=(10, 10),
-        stride=(1, 1),
         feat_mins=X_train.min(),  # Since all the features have a min of 0.
         feat_maxs=X_train.max(),  # Since all the features have a max of 1.
         seed=10,
