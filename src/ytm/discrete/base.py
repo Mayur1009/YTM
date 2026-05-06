@@ -1,8 +1,9 @@
-import numpy as np
-from typing import Literal, NamedTuple, Unpack
 from dataclasses import asdict
-from .args import TMArgs, T_args
-from .backends.base import PackedClauses
+from typing import Literal, NamedTuple, Unpack
+
+import numpy as np
+
+from .args import T_args, TMArgs
 
 
 class ClauseInfo(NamedTuple):
@@ -68,6 +69,12 @@ class BaseTM:
         targets = np.copy(Y).astype(np.float32) * self.args.T_max
         targets[targets == 0] = self.args.T_min
         return targets
+
+    def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
+        self.dev.freeze_clauses(class_id, clause_ids)
+
+    def unfreeze_clauses(self):
+        self.dev.unfreeze_clauses()
 
     def get_weights(self) -> np.ndarray:
         return self.dev.get_weights()

@@ -182,6 +182,9 @@ class CPUDevice(BaseDevice):
             is_clause_synced=np.zeros(self.total_clauses, dtype=np.int8),
         )
 
+    def _init_frozen_clauses(self):
+        self.frozen_clauses = np.zeros((self.n_clause_banks, self.args.n_clauses), dtype=np.uint8)
+
     def _init_pointers(self):
         self.p_clause_position_bounds = self.packed_clauses.clause_position_bounds.ctypes.data_as(int32_p)
         self.p_clause_feat_bounds = self.packed_clauses.clause_feat_bounds.ctypes.data_as(int32_p)
@@ -203,6 +206,7 @@ class CPUDevice(BaseDevice):
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()
+        self._init_frozen_clauses()
         self._init_lib()
         self._init_pointers()
 
@@ -211,13 +215,22 @@ class CPUDevice(BaseDevice):
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(n))
 
+    def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
+        clause_ids = np.asarray(clause_ids, dtype=np.int32)
+        self.frozen_clauses[class_id, clause_ids] = 1
+
+    def unfreeze_clauses(self):
+        self.frozen_clauses.fill(0)
+
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
-            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.uint8)
         else:
-            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.uint8)
+
+        clause_drop_mask = np.logical_or(clause_drop_mask, self.frozen_clauses.flatten()).astype(np.uint8)
 
         X = X.astype(np.int32)
         targets = targets.astype(np.float32)

@@ -142,6 +142,9 @@ class CUDADevice(BaseDevice):
             is_clause_synced=is_clause_synced,
         )
 
+    def _init_frozen_clauses(self):
+        self.frozen_clauses = cp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=cp.uint8)
+
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
         if self.args.grid_size is None:
@@ -163,10 +166,18 @@ class CUDADevice(BaseDevice):
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()
+        self._init_frozen_clauses()
         self._init_kernels()
         self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
+
+    def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
+        clause_ids = np.asarray(clause_ids, dtype=np.int32)
+        self.frozen_clauses[class_id, clause_ids] = 1
+
+    def unfreeze_clauses(self):
+        self.frozen_clauses.fill(0)
 
     def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
@@ -178,6 +189,8 @@ class CUDADevice(BaseDevice):
             clause_drop_mask_gpu = cp.asarray(self.np_rng.random(self.total_clauses) <= clause_drop_p, dtype=cp.uint8)
         else:
             clause_drop_mask_gpu = cp.zeros(self.total_clauses, dtype=np.uint8)
+
+        clause_drop_mask_gpu = cp.logical_or(clause_drop_mask_gpu, self.frozen_clauses.flatten()).astype(cp.uint8)
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.zeros(self.args.n_classes, dtype=np.float32)
