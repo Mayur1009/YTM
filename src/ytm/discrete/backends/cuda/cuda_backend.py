@@ -179,7 +179,7 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -200,6 +200,7 @@ class CUDADevice(BaseDevice):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
             encoded_Y_batch = cp.asarray(encoded_Y[i:batch_end], dtype=np.float32)
+            label_probs_batch = cp.asarray(label_probs[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
             for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):
@@ -253,6 +254,7 @@ class CUDADevice(BaseDevice):
                         encoded_Y_batch,
                         np.int32(e),
                         prob,
+                        label_probs_batch,
                         self.ta_states,
                         self.clause_weights,
                         self.feat_mins_gpu,

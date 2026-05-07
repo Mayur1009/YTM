@@ -136,14 +136,14 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
 __device__ inline void update_clause_class(const warp_t& warp, int lane, ull class_id, ull clause, ull rel_clause,
                                            int clause_output, int patch_idx_y, int patch_idx_x, int clause_density,
                                            uint* ta_states, float* clause_weights, const int* Xe,
-                                           const float* encoded_Y_e, const float* prob, const int* feat_mins,
-                                           const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
-                                           uint* rng_counter) {
+                                           const float* encoded_Y_e, const float* prob, float label_prob_c,
+                                           const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced,
+                                           ull rng_k, uint* rng_counter) {
     float update_prob = fabsf(prob[class_id]);
     int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
     bool skip = false;
     if (lane == 0) {
-        skip = ((target < 0 && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) || target == 0 ||
+        skip = (rand_uniform(rng_k, rng_counter) > label_prob_c || target == 0 ||
                 prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > update_prob);
     }
 
@@ -211,8 +211,9 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                                           const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,
-                                          const int e, const float* prob, uint* global_ta_states, float* clause_weights,
-                                          const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced) {
+                                          const int e, const float* prob, const float* label_probs,
+                                          uint* global_ta_states, float* clause_weights, const int* feat_mins,
+                                          const int* literal_offsets, int8_t* is_clause_synced) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
     ull tid = grid.thread_rank();
@@ -222,6 +223,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
+    const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
     ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
     uint rng_counter = 0;
@@ -246,13 +248,13 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                            ta_states, clause_weights, Xe, encoded_Y_e, prob, feat_mins, literal_offsets,
-                            is_clause_synced, rng_k, &rng_counter);
+                            ta_states, clause_weights, Xe, encoded_Y_e, prob, label_probs_e[class_id], feat_mins,
+                            literal_offsets, is_clause_synced, rng_k, &rng_counter);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                                ta_states, clause_weights, Xe, encoded_Y_e, prob, feat_mins, literal_offsets,
-                                is_clause_synced, rng_k, &rng_counter);
+                                ta_states, clause_weights, Xe, encoded_Y_e, prob, label_probs_e[class_id], feat_mins,
+                                literal_offsets, is_clause_synced, rng_k, &rng_counter);
         }
 #endif
     }

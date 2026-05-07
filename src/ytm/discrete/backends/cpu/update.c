@@ -114,13 +114,13 @@ static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int p
 
 static inline void update_clause_class(ull class_id, ull clause, ull rel_clause, int clause_output, int patch_idx_y,
                                        int patch_idx_x, int clause_density, uint* ta_states, float* clause_weights,
-                                       const int* Xe, const float* encoded_Y_e, const float* prob, const int* feat_mins,
-                                       const int* literal_offsets, int8_t* is_clause_synced, ull rng_k,
-                                       uint* rng_counter) {
+                                       const int* Xe, const float* encoded_Y_e, const float* prob,
+                                       float label_prob_c, const int* feat_mins, const int* literal_offsets,
+                                       int8_t* is_clause_synced, ull rng_k, uint* rng_counter) {
     float update_prob = fabsf(prob[class_id]);
     int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
 
-    if ((target < 0 && rand_uniform(rng_k, rng_counter) > (Q / fmaxf(1.0f, (CLASSES - 1)))) || target == 0 ||
+    if (rand_uniform(rng_k, rng_counter) > label_prob_c || target == 0 ||
         rand_uniform(rng_k, rng_counter) > update_prob)
         return;
 
@@ -176,11 +176,12 @@ void calc_update_prob(const float* votes, const float* encoded_Y, const int e, f
 }
 
 void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
-                    const int8_t* clause_drop_mask, const int* X, const float* encoded_Y, const int e, const float* prob,
-                    uint* global_ta_states, float* clause_weights, const int* feat_mins, const int* literal_offsets,
-                    int8_t* is_clause_synced) {
+                    const int8_t* clause_drop_mask, const int* X, const float* encoded_Y, const int e,
+                    const float* prob, const float* label_probs, uint* global_ta_states, float* clause_weights,
+                    const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
+    const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -206,8 +207,8 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* cl
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
             update_clause_class(class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd, ta_states,
-                                clause_weights, Xe, encoded_Y_e, prob, feat_mins, literal_offsets, is_clause_synced,
-                                rng_k, &rng_counter);
+                                clause_weights, Xe, encoded_Y_e, prob, label_probs_e[class_id], feat_mins,
+                                literal_offsets, is_clause_synced, rng_k, &rng_counter);
         }
     }
 }
