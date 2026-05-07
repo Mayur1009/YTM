@@ -39,7 +39,7 @@ class BaseTM:
     def _fit(
         self,
         X: np.ndarray,
-        one_hot_Y: np.ndarray,
+        Y: np.ndarray,
         shuffle: bool = True,
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
@@ -51,11 +51,11 @@ class BaseTM:
         if shuffle:
             self.rng.shuffle(iota)
         X = X[iota]
-        one_hot_Y = one_hot_Y[iota]
+        Y = Y[iota]
 
-        targets = self._target_sampling(one_hot_Y)
+        encoded_Y = self._encode_Y(Y)
 
-        self.dev.fit_epoch(X, targets, clause_drop_p, batch_size)
+        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size)
 
     def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)
@@ -67,10 +67,10 @@ class BaseTM:
         patch_outputs = self.dev.transform_patchwise(X, batch_size)
         return patch_outputs
 
-    def _target_sampling(self, Y: np.ndarray) -> np.ndarray:
-        targets = np.copy(Y).astype(np.float32) * self.args.T_max
-        targets[targets == 0] = self.args.T_min
-        return targets
+    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
+        encoded_Y = np.copy(Y).astype(np.float32) * self.args.T_max
+        encoded_Y[encoded_Y == 0] = self.args.T_min
+        return encoded_Y
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         if self.args.coalesced:

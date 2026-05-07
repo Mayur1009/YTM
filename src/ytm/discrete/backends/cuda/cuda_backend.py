@@ -179,7 +179,7 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -199,7 +199,7 @@ class CUDADevice(BaseDevice):
         for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
-            tar_batch = cp.asarray(targets[i:batch_end], dtype=np.float32)
+            encoded_Y_batch = cp.asarray(encoded_Y[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
             for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):
@@ -240,7 +240,7 @@ class CUDADevice(BaseDevice):
                 )
                 self.k_calc_update_prob(
                     *self.kconf_classes,
-                    (votes, tar_batch, np.int32(e), prob),
+                    (votes, encoded_Y_batch, np.int32(e), prob),
                 )
                 self.k_update_clauses(
                     *self.kconf_clauses,
@@ -250,7 +250,7 @@ class CUDADevice(BaseDevice):
                         self.packed_clauses.clause_density,
                         clause_drop_mask_gpu,
                         X_batch,
-                        tar_batch,
+                        encoded_Y_batch,
                         np.int32(e),
                         prob,
                         self.ta_states,

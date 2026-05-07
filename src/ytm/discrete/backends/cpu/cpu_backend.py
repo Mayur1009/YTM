@@ -222,7 +222,7 @@ class CPUDevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, targets: np.ndarray, clause_drop_p: float, batch_size: int):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -233,14 +233,14 @@ class CPUDevice(BaseDevice):
         clause_drop_mask = np.logical_or(clause_drop_mask, self.frozen_clauses.flatten()).astype(np.int8)
 
         X = X.astype(np.int32)
-        targets = targets.astype(np.float32)
+        encoded_Y = encoded_Y.astype(np.float32)
 
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         prob = np.empty(self.args.n_classes, dtype=np.float32)
 
         p_X = X.ctypes.data_as(int32_p)
-        p_targets = targets.ctypes.data_as(float_p)
+        p_encoded_Y = encoded_Y.ctypes.data_as(float_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
@@ -279,7 +279,7 @@ class CPUDevice(BaseDevice):
             )
             self.lib.calc_update_prob(
                 p_votes,
-                p_targets,
+                p_encoded_Y,
                 c_int(e),
                 p_prob,
             )
@@ -289,7 +289,7 @@ class CPUDevice(BaseDevice):
                 self.p_clause_density,
                 p_clause_drop_mask,
                 p_X,
-                p_targets,
+                p_encoded_Y,
                 c_int(e),
                 p_prob,
                 self.p_ta_states,
