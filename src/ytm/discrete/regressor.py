@@ -7,6 +7,10 @@ class RegressionTM(BaseTM):
         assert y_range[0] < y_range[1], "y_range[0] must be < y_range[1]"
         self.y_range = y_range
         opt_args["negative_clauses"] = False
+        q = opt_args.get("q", 1.0)
+        if q > 1.0:
+            print(f"Warning: Got q = {q}, q > 1.0 not supported for regression, setting q=1.0")
+        opt_args["q"] = 1.0
         super().__init__(n_clauses=n_clauses, T=(0.0, float(T)), s=s, dim=dim, n_classes=1, **opt_args)
 
     def _target_sampling(self, Y: np.ndarray) -> np.ndarray:
