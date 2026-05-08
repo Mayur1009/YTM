@@ -130,3 +130,22 @@ class BinaryTM(Classifier):
         class_sums = self.score(X, batch_size, clip_class_sums)
         preds = (class_sums[:, 0] >= 0).astype(np.uint32)
         return preds, class_sums
+
+    def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
+        label_probs = np.ones_like(encoded_Y, dtype=np.float32)
+        if label_sampling:
+            pos_indices = np.where(encoded_Y[:, 0] == self.args.T_max)[0]
+            neg_indices = np.where(encoded_Y[:, 0] == self.args.T_min)[0]
+            min_count = min(len(pos_indices), len(neg_indices))
+
+            if len(pos_indices) > min_count:
+                selected = self.rng.choice(pos_indices, size=min_count, replace=False)
+                unselected = np.setdiff1d(pos_indices, selected)
+                label_probs[unselected, 0] = 0.0
+
+            if len(neg_indices) > min_count:
+                selected = self.rng.choice(neg_indices, size=min_count, replace=False)
+                unselected = np.setdiff1d(neg_indices, selected)
+                label_probs[unselected, 0] = 0.0
+
+        return label_probs
