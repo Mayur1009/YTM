@@ -28,10 +28,6 @@ examples = [
 build-backend = "hatchling.build"
 requires = ["hatchling"]
 
-[tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
-testpaths = ["tests"]
-
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportUnusedImport = false
@@ -44,25 +40,32 @@ exclude = [
 [tool.ruff]
 line-length = 120
 
-# PIXI configuration
-[tool.pixi.environments]
-default = ["examples"]
-cuda = ["cuda", "examples"]
-
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64", "win-64"]
 
 [tool.pixi.pypi-dependencies]
-ytm = { path = ".", editable = true }
+ytm = { path = ".", editable = true, extras = ["examples"] }
 
 [tool.pixi.dependencies]
 clang = "*"
 llvm-openmp = "*"
-seaborn = "*"
+
+[tool.pixi.feature.dev.dependencies]
 jupyterlab = "*"
 ipdb = "*"
+
+[tool.pixi.feature.cpu.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
 
 [tool.pixi.feature.cuda]
 platforms = ["linux-64", "win-64"]
 system-requirements = { cuda = "12" }
+
+[tool.pixi.feature.cuda.dependencies]
+cuda = "*"
+
+[tool.pixi.environments]
+default = { features = ["cpu"] }
+cpu = { features = ["dev", "cpu"] }
+cuda = { features = ["dev", "cuda"] }
