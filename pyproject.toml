@@ -6,8 +6,8 @@ dependencies = [
     "psutil",
 ]
 name = "YTM"
-requires-python = ">=3.11,<3.14"
-version = "0.6.0+dev8"
+requires-python = ">=3.11"
+version = "0.6.0+dev9"
 
 [project.optional-dependencies]
 cuda = [
