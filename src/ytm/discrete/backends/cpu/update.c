@@ -41,11 +41,11 @@ static inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta_sta
             ta_state[li + offset] += 1;
 #else
     if (S > 1.0f) {
-        int li = start + geometric_sample(rng_key, rng_counter, 1 - S_INV) - 1;
+        int li = start + geom_sample(rng_key, rng_counter, 1 - S_INV) - 1;
         while (li < end) {
             if (ta_state[li + offset] < MAX_TA_STATE)
                 ta_state[li + offset] += 1;
-            li += geometric_sample(rng_key, rng_counter, 1 - S_INV);
+            li += geom_sample(rng_key, rng_counter, 1 - S_INV);
         }
     }
 #endif
