@@ -1,5 +1,6 @@
-BasedOnStyle: Google
+# BasedOnStyle: GNU
 IndentWidth: 4
 ColumnLimit: 120
-IndentPPDirectives: BeforeHash
-IndentExternBlock: true
+# IndentPPDirectives: BeforeHash
+IndentExternBlock: false
+PointerAlignment: Left

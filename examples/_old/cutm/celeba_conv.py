@@ -92,12 +92,12 @@ def train(tm: MultiOutputTM, file, ids_train, Ytrain, ids_test, Ytest, ch, epoch
         train_fit_timer = Timer()
         with train_fit_timer:
             tm.fit(Xtrain_suf, Ytrain_suf, is_X_encoded=True)
-        train_time = train_fit_timer.elapsed()
+        train_time = train_fit_timer.elapsed
 
         test_timer = Timer()
         with test_timer:
             test_preds, test_cs = tm.predict(encoded_X_test, is_X_encoded=True)
-        test_time = test_timer.elapsed()
+        test_time = test_timer.elapsed
 
         test_prob = (np.clip(test_cs, -tm.T, tm.T) + tm.T) / (2 * tm.T)
         test_metrics = metrics(Ytest, test_preds, test_prob)

@@ -31,7 +31,7 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
         print(
-            f"Epoch {epoch + 1} | Acc> Train: {train_acc * 100:.4f}% Test: {test_acc * 100:.4f}% | Time> Fit: {train_fit_timer.elapsed():.4f}s Infer Train: {train_timer.elapsed():.4f}s Infer Test: {test_timer.elapsed():.4f}s"
+            f"Epoch {epoch + 1} | Acc> Train: {train_acc * 100:.4f}% Test: {test_acc * 100:.4f}% | Time> Fit: {train_fit_timer.elapsed:.4f}s Infer Train: {train_timer.elapsed:.4f}s Infer Test: {test_timer.elapsed:.4f}s"
         )
 
 

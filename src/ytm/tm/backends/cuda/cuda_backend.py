@@ -1,10 +1,11 @@
 import os
+import warnings
 
 import numpy as np
 import pycuda.gpuarray as ga
 from pycuda.compiler import SourceModule
 from pycuda.curandom import XORWOWRandomNumberGenerator
-from pycuda.driver import Context, device_attribute, memset_d32  # pyright: ignore # ty: ignore
+from pycuda.driver import Context, device_attribute, memset_d32, memset_d32_async  # pyright: ignore # ty: ignore
 from tqdm import tqdm
 
 from .. import BaseDevice, FitBuffers
@@ -59,23 +60,24 @@ class CUDADevice(BaseDevice):
             clause_weights[i, :] = self.np_rng.permutation(wt) if self.args.coalesced else wt
 
         self.clause_weights = ga.to_gpu(clause_weights)
-        self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        if self.args.track_patch_weights:
+            self.patch_weights = ga.to_gpu(np.zeros((self.total_clauses, self.n_patches), dtype=np.int32))
+        else:
+            self.patch_weights = ga.to_gpu(np.zeros((1, 1), dtype=np.int32))
 
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
 
-        mod_kernels = self._load_kernel(
-            os.path.join(cur_dir, "kernels.cu"),
-            f"""
+        self.header = f"""
             #define TOTAL_CLAUSES {int(self.total_clauses)}
             #define THRESH {int(self.args.T)}
             #define S {float(self.args.s)}
-            #define DIM0 {int(self.args.dim[0])}
-            #define DIM1 {int(self.args.dim[1])}
-            #define DIM2 {int(self.args.dim[2])}
+            #define HEIGHT {int(self.args.dim[0])}
+            #define WIDTH {int(self.args.dim[1])}
+            #define DEPTH {int(self.args.dim[2])}
             #define CLASSES {int(self.args.n_classes)}
-            #define PATCH_DIM0 {int(self.args.patch_dim[0])}
-            #define PATCH_DIM1 {int(self.args.patch_dim[1])}
+            #define PATCH_HEIGHT {int(self.args.patch_dim[0])}
+            #define PATCH_WIDTH {int(self.args.patch_dim[1])}
             #define WEIGHTED {1 if self.args.weighted else 0}
             #define MAX_WEIGHT {float(self.args.max_weight)}f
             #define COALESCED {1 if self.args.coalesced else 0}
@@ -89,13 +91,13 @@ class CUDADevice(BaseDevice):
             #define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
             #define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
             #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
-            #define PATCHES {int(self.n_patches)}
-            #define LITERALS {int(self.n_literals)}
-            """,
-        )
+            #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
+            #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
+        """
+
+        mod_kernels = self._load_kernel(os.path.join(cur_dir, "kernels.cu"), self.header)
 
         self.kernel_encode = mod_kernels.get_function("encode")
-        self.kernel_decode = mod_kernels.get_function("decode")
         self.kernel_pack_clauses = mod_kernels.get_function("pack_clauses")
         self.kernel_eval_clauses = mod_kernels.get_function("eval_clauses")
         self.kernel_select_patch = mod_kernels.get_function("select_patch_and_count_votes")
@@ -104,7 +106,6 @@ class CUDADevice(BaseDevice):
         self.kernel_clause_inference = mod_kernels.get_function("clause_inference")
 
         self.kernel_encode.prepare("PiP")
-        self.kernel_decode.prepare("PiP")
         self.kernel_pack_clauses.prepare("PPP")
         self.kernel_eval_clauses.prepare("PPPPiP")
         self.kernel_select_patch.prepare("PPPPPPP")
@@ -157,51 +158,30 @@ class CUDADevice(BaseDevice):
 
         return encoded_X_gpu.get()
 
-    def decode(self, encoded_X: np.ndarray):
-        N = encoded_X.shape[0]
-        encoded_X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
-        X_gpu = ga.to_gpu(
-            np.zeros(
-                (N, self.args.dim[0] * self.args.dim[1] * self.args.dim[2]),
-                dtype=np.int8,
-            )
-        )
-
-        self.kernel_decode.prepared_call(
-            *self._kernel_config(N * self.n_patches),
-            encoded_X_gpu.gpudata,
-            np.int32(N),
-            X_gpu.gpudata,
-        )
-        self.ctx.synchronize()
-
-        return X_gpu.get()
-
     def prepare_fit_buffers(
         self, encoded_X: np.ndarray, targets: np.ndarray, clause_drop_mask: np.ndarray
     ) -> FitBuffers:
         return FitBuffers(
             encoded_X=ga.to_gpu(encoded_X.astype(np.uint32)),
-            targets=ga.to_gpu(targets.astype(np.int8)),
+            targets=ga.to_gpu(targets.astype(np.float32)),
             packed_clauses=ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32),
             n_includes=ga.empty((self.total_clauses,), dtype=np.uint32),
-            clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32),
+            clause_outputs=ga.empty((self.total_clauses * self.n_patches,), dtype=np.int8),
             selected_patch_ids=ga.empty((self.total_clauses,), dtype=np.int32),
             pos_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
             neg_votes=ga.empty((self.args.n_classes,), dtype=np.float32),
             update_probs=ga.empty((self.args.n_classes,), dtype=np.float32),
-            clause_drop_mask=ga.to_gpu(clause_drop_mask.astype(np.uint32)),
+            clause_drop_mask=ga.to_gpu(clause_drop_mask.astype(np.int8)),
         )
 
     def pack_clauses(self, packed_clauses: ga.GPUArray, n_includes: ga.GPUArray):
-        memset_d32(packed_clauses.gpudata, 0, self.total_clauses * self.n_literal_chunks)
+        memset_d32_async(packed_clauses.gpudata, 0, self.total_clauses * self.n_literal_chunks)
         self.kernel_pack_clauses.prepared_call(
             *self._kernel_config(self.total_clauses),
             self.ta_states.gpudata,
             packed_clauses.gpudata,
             n_includes.gpudata,
         )
-        self.ctx.synchronize()
 
     def eval_clauses(
         self,
@@ -221,7 +201,6 @@ class CUDADevice(BaseDevice):
             np.int32(e),
             clause_outputs.gpudata,
         )
-        self.ctx.synchronize()
 
     def select_patch_and_count_votes(
         self,
@@ -230,8 +209,8 @@ class CUDADevice(BaseDevice):
         pos_votes: ga.GPUArray,
         neg_votes: ga.GPUArray,
     ):
-        memset_d32(pos_votes.gpudata, 0, self.args.n_classes)
-        memset_d32(neg_votes.gpudata, 0, self.args.n_classes)
+        memset_d32_async(pos_votes.gpudata, 0, self.args.n_classes)
+        memset_d32_async(neg_votes.gpudata, 0, self.args.n_classes)
         self.kernel_select_patch.prepared_call(
             *self.kernel_select_patch_launch_config,
             self.rng.state,
@@ -242,7 +221,6 @@ class CUDADevice(BaseDevice):
             pos_votes.gpudata,
             neg_votes.gpudata,
         )
-        self.ctx.synchronize()
 
     def calc_update_prob(
         self,
@@ -260,7 +238,6 @@ class CUDADevice(BaseDevice):
             np.int32(e),
             update_probs.gpudata,
         )
-        self.ctx.synchronize()
 
     def update_clauses(
         self,
@@ -285,7 +262,54 @@ class CUDADevice(BaseDevice):
             self.ta_states.gpudata,
             self.clause_weights.gpudata,
         )
-        self.ctx.synchronize()
+
+    def fit_epoch(self, encoded_X, targets, clause_drop_p):
+        N = encoded_X.shape[0]
+        if clause_drop_p > 0.0:
+            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
+        else:
+            clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
+
+        dev_buffers: FitBuffers = self.prepare_fit_buffers(encoded_X, targets, clause_drop_mask)
+
+        pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
+        for e in pbar:
+            # If all the targets are zero, then there is nothing to learn, so skip.
+            if np.all(targets[e, :] == 0):
+                continue
+
+            self.pack_clauses(dev_buffers.packed_clauses, dev_buffers.n_includes)
+            self.eval_clauses(
+                dev_buffers.packed_clauses,
+                dev_buffers.n_includes,
+                dev_buffers.clause_drop_mask,
+                dev_buffers.clause_outputs,
+                dev_buffers.encoded_X,
+                e,
+            )
+            self.select_patch_and_count_votes(
+                dev_buffers.clause_outputs,
+                dev_buffers.selected_patch_ids,
+                dev_buffers.pos_votes,
+                dev_buffers.neg_votes,
+            )
+            self.calc_update_prob(
+                dev_buffers.pos_votes,
+                dev_buffers.neg_votes,
+                dev_buffers.targets,
+                dev_buffers.update_probs,
+                e,
+            )
+            self.update_clauses(
+                dev_buffers.n_includes,
+                dev_buffers.selected_patch_ids,
+                dev_buffers.clause_drop_mask,
+                dev_buffers.update_probs,
+                dev_buffers.encoded_X,
+                dev_buffers.targets,
+                e,
+            )
+            self.ctx.synchronize()
 
     def infer(self, encoded_X: np.ndarray, batch_size: int = -1):
         N = encoded_X.shape[0]
@@ -296,6 +320,7 @@ class CUDADevice(BaseDevice):
         n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
 
         self.pack_clauses(packed_clauses, n_includes)
+        self.ctx.synchronize()
 
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
         for i in tqdm(range(0, N, batch_size), desc="Inference", leave=False, dynamic_ncols=True):
@@ -324,17 +349,23 @@ class CUDADevice(BaseDevice):
         n_clause_banks = 1 if self.args.coalesced else self.args.n_classes
         return self.ta_states.get().reshape((n_clause_banks, self.args.n_clauses, self.n_literals))
 
+    def get_patch_weights(self) -> np.ndarray:
+        if not self.args.track_patch_weights:
+            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
+            return self.patch_weights.get()
+        return self.patch_weights.get().reshape(self.total_clauses, self.n_patches_y, self.n_patches_x)
+
     def transform_patchwise(
         self, encoded_X: np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]
     ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
         N = encoded_X.shape[0]
-        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.uint32)
+        co_patchwise = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
 
         X_gpu = ga.to_gpu(encoded_X.astype(np.uint32))
         packed_clauses = ga.empty((self.total_clauses, self.n_literal_chunks), dtype=np.uint32)
         n_includes = ga.empty((self.total_clauses,), dtype=np.uint32)
-        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.uint32))
-        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.uint32)
+        clause_drop_mask = ga.to_gpu(np.zeros((self.total_clauses,), dtype=np.int8))
+        clause_outputs = ga.empty((self.total_clauses * self.n_patches,), dtype=np.int8)
         self.pack_clauses(packed_clauses, n_includes)
 
         for i in tqdm(range(N), desc="Patchwise Transform", leave=False, dynamic_ncols=True):
@@ -361,7 +392,9 @@ class CUDADevice(BaseDevice):
             "patch_weights": self.patch_weights.get(),
         }
 
-    def load_state_dict(self, state: dict):
-        self.ta_states = ga.to_gpu(state["ta_states"])
-        self.clause_weights = ga.to_gpu(state["clause_weights"])
-        self.patch_weights = ga.to_gpu(state["patch_weights"])
+    def load_state_dict(self, state_dict: dict):
+        self.ta_states = ga.to_gpu(state_dict["ta_states"])
+        self.clause_weights = ga.to_gpu(state_dict["clause_weights"])
+        self.patch_weights = ga.to_gpu(state_dict["patch_weights"])
+
+

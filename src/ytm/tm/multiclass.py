@@ -1,6 +1,7 @@
 import numpy as np
 from .base import BaseTM
 
+
 class MultiClassTM(BaseTM):
     def fit(
         self,
@@ -20,9 +21,8 @@ class MultiClassTM(BaseTM):
         encoded_X = self.encode(X) if not is_X_encoded else X
         return self._fit(encoded_X, encoded_Y, shuffle, clause_drop_p)
 
-    def predict(self, X: np.ndarray, is_X_encoded: bool = False):
+    def predict(self, X: np.ndarray, is_X_encoded: bool = False, clip_class_sums: bool = False):
         encoded_X = self.encode(X) if not is_X_encoded else X
-        class_sums = self.score(encoded_X)
+        class_sums = self.score(encoded_X, clip_class_sums)
         preds = np.argmax(class_sums, axis=1)
         return preds, class_sums
-

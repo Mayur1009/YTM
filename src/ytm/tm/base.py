@@ -1,10 +1,7 @@
 import numpy as np
 from typing import Literal
 from dataclasses import asdict
-from tqdm import tqdm
 from .args import TMArgs
-
-from .backends import FitBuffers
 
 
 class BaseTM:
@@ -39,9 +36,7 @@ class BaseTM:
         if batch_size == -1:
             batch_size = X.shape[0]
 
-        encoded_X = np.empty(
-            (X.shape[0], self.dev.n_patches, self.dev.n_literal_chunks), dtype=np.uint32
-        )
+        encoded_X = np.empty((X.shape[0], self.dev.n_patches, self.dev.n_literal_chunks), dtype=np.uint32)
         for i in range(0, X.shape[0], batch_size):
             X_batch = X[i : i + batch_size]
             encoded_X[i : i + batch_size] = self.dev.encode(X_batch)
@@ -64,86 +59,48 @@ class BaseTM:
         # Precompute targets for each sample. 1 means the sample belongs to the class. -1 means, selected not classes. 0 means ignore.
         targets = self._target_sampling(one_hot_Y)
 
-        if clause_drop_p > 0.0:
-            clause_drop_mask = (
-                self.rng.random(self.dev.total_clauses) <= clause_drop_p
-            ).astype(np.uint32)
-        else:
-            clause_drop_mask = np.zeros(self.dev.total_clauses, dtype=np.uint32)
+        self.dev.fit_epoch(encoded_X, targets, clause_drop_p)
 
-        dev_buffers: FitBuffers = self.dev.prepare_fit_buffers(
-            encoded_X, targets, clause_drop_mask
-        )
-
-        pbar = tqdm(range(N), desc="Fitting Batch", leave=False, dynamic_ncols=True)
-        for e in pbar:
-            # If all the targets are zero, then there is nothing to learn, so skip.
-            if np.all(targets[e, :] == 0):
-                continue
-
-            self.dev.pack_clauses(dev_buffers.packed_clauses, dev_buffers.n_includes)
-            self.dev.eval_clauses(
-                dev_buffers.packed_clauses,
-                dev_buffers.n_includes,
-                dev_buffers.clause_drop_mask,
-                dev_buffers.clause_outputs,
-                dev_buffers.encoded_X,
-                e,
-            )
-            self.dev.select_patch_and_count_votes(
-                dev_buffers.clause_outputs,
-                dev_buffers.selected_patch_ids,
-                dev_buffers.pos_votes,
-                dev_buffers.neg_votes,
-            )
-            self.dev.calc_update_prob(
-                dev_buffers.pos_votes,
-                dev_buffers.neg_votes,
-                dev_buffers.targets,
-                dev_buffers.update_probs,
-                e,
-            )
-            self.dev.update_clauses(
-                dev_buffers.n_includes,
-                dev_buffers.selected_patch_ids,
-                dev_buffers.clause_drop_mask,
-                dev_buffers.update_probs,
-                dev_buffers.encoded_X,
-                dev_buffers.targets,
-                e,
-            )
-
-    def score(self, encoded_X: np.ndarray):
+    def score(self, encoded_X: np.ndarray, clip_class_sums: bool = False):
         class_sums = self.dev.infer(encoded_X)
+        if clip_class_sums:
+            class_sums = np.clip(class_sums, -self.args.T, self.args.T)
         return class_sums
 
-    def _target_sampling(self, one_hot_Y: np.ndarray[tuple[int, int], np.dtype[np.int8]]) -> np.ndarray[tuple[int, int], np.dtype[np.int8]]:
+    def _target_sampling(self, one_hot_Y: np.ndarray) -> np.ndarray:
         N = one_hot_Y.shape[0]
-        targets = np.copy(one_hot_Y).astype(np.int8)
-        p = self.args.q / max(1, self.args.n_classes - 1)
+        targets = np.copy(one_hot_Y).astype(np.float32)
         for i in range(N):
-            # Each negative class can get feedback with prob (q / number_of_outputs - 1)
             false_classes = np.where(one_hot_Y[i, :] == 0)[0]
             if len(false_classes) > 0:
-                not_skip = self.rng.random(size=len(false_classes)) <= p
-                targets[i, false_classes[not_skip]] = -1
+                targets[i, false_classes] = -self.args.q / max(1, self.args.n_classes - 1)
 
         return targets
 
-    def get_weights(self)->np.ndarray[tuple[int, int], np.dtype[np.float32]]:
+    def get_weights(self) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         return self.dev.get_weights()
 
-    def get_ta_states(self)->np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
+    def get_ta_states(self) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint32]]:
         return self.dev.get_ta_states()
 
-    def transform(self, X: np.ndarray, is_X_encoded: bool = False)->np.ndarray[tuple[int, int, int], np.dtype[np.bool]]:
+    def get_literals(self) -> np.ndarray:
+        return np.asarray(self.get_ta_states() >= self.args.include_state, dtype=np.uint8)
+
+    def get_patch_weights(self) -> np.ndarray:
+        return self.dev.get_patch_weights()
+
+    def transform(
+        self, X: np.ndarray, is_X_encoded: bool = False
+    ) -> np.ndarray[tuple[int, int, int], np.dtype[np.bool]]:
         encoded_X = self.encode(X) if not is_X_encoded else X
 
         clause_output_patchwise = self.dev.transform_patchwise(encoded_X)
         clause_outputs = np.any(clause_output_patchwise, axis=-1).astype(np.uint8)
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, is_X_encoded: bool = False)-> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
+    def transform_patchwise(
+        self, X: np.ndarray, is_X_encoded: bool = False
+    ) -> np.ndarray[tuple[int, int, int, int], np.dtype[np.bool]]:
         encoded_X = self.encode(X) if not is_X_encoded else X
 
         clause_output_patchwise = self.dev.transform_patchwise(encoded_X)
