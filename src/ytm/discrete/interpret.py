@@ -2,7 +2,7 @@ import numpy as np
 from .base import BaseTM
 
 
-def wac(tm: BaseTM, X, target_classes=None):
+def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False):
     """
     A template to compute the local interpretation, also called the WAC (Weighted Activated Clauses) for a set of input samples. This should work for image data, but can be adpated to other domains as well.
     """
@@ -13,7 +13,7 @@ def wac(tm: BaseTM, X, target_classes=None):
 
     weights = tm.get_weights()  # (n_classes, n_clauses) or (n_clause_banks, n_clauses)
     feature_bounds, position_bounds, is_valid = (
-        tm.get_clauses()
+        tm.get_clauses(force_repack)
     )  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
     feature_bounds = feature_bounds.reshape(
         feature_bounds.shape[0], feature_bounds.shape[1], tm.dev.n_raw_patch_feats, 2
@@ -34,7 +34,7 @@ def wac(tm: BaseTM, X, target_classes=None):
     )
 
     # Get activations per patch
-    patch_outputs = tm.transform_patchwise(X)  # (N, n_clause_banks, n_clauses, n_patches_y, n_patches_x)
+    patch_outputs = tm.transform_patchwise(X, batch_size)  # (N, n_clause_banks, n_clauses, n_patches_y, n_patches_x)
 
     # Determine target class per sample if not specified
     if target_classes is None:
