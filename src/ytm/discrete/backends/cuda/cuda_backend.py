@@ -172,6 +172,8 @@ class CUDADevice(BaseDevice):
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
 
+    def set_threads(self, n_threads: int):
+        raise RuntimeError("set_nthreads is only supported for CPU device")
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         clause_ids = np.asarray(clause_ids, dtype=np.int32)
         self.frozen_clauses[class_id, clause_ids] = 1

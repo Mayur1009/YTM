@@ -137,11 +137,9 @@ class BaseTM:
         self.dev.load_state_dict(orig_dev_state)
         self.args.device = device
 
-    def set_nthreads(self, n: int) -> None:
-        if self.args.device != "cpu":
-            raise RuntimeError("set_nthreads is only supported for CPU device")
-        self.args.n_threads = max(1, n)
-        self.dev.set_threads(self.args.n_threads)
+    def set_threads(self, n: int) -> None:
+            self.args.n_threads = max(1, n)
+            self.dev.set_threads(self.args.n_threads)
 
     def get_state_dict(self) -> dict:
         return {"args": asdict(self.args), "params": self.dev.get_state_dict()}
