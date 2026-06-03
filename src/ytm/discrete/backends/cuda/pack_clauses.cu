@@ -107,9 +107,11 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
 
         uint mask = warp.ballot(is_bounded);
         int slot = write_offset + __popc(mask & ((1u << lane) - 1));
-        if (is_bounded) {
+        if (in_range) {
             feat_bounds[fid * 2 + 0] = lb;
             feat_bounds[fid * 2 + 1] = ub;
+        }
+        if (is_bounded) {
             bounded_feat_id[slot] = fid;
         }
         write_offset += __popc(mask);

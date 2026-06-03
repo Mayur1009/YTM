@@ -94,9 +94,9 @@ static inline FeatureResult scan_feature_literals(const uint* ta_state, const in
 #endif
         }
 
+        feat_bounds[fid * 2 + 0] = lb;
+        feat_bounds[fid * 2 + 1] = ub;
         if (is_bounded) {
-            feat_bounds[fid * 2 + 0] = lb;
-            feat_bounds[fid * 2 + 1] = ub;
             bounded_feat_ids[write_offset++] = fid;
         }
 
