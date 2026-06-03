@@ -122,9 +122,6 @@ class BaseTM:
         )
 
     def to(self, device: Literal["cpu", "cuda"]):
-        if device == self.args.device:
-            return
-
         orig_dev_state = self.dev.get_state_dict()
         if device == "cpu":
             from .backends.cpu.cpu_backend import CPUDevice
@@ -140,14 +137,28 @@ class BaseTM:
         self.dev.load_state_dict(orig_dev_state)
         self.args.device = device
 
-    def __getstate__(self):
-        state = {
-            "args": asdict(self.args),
-            "params": self.dev.get_state_dict(),
-        }
-        return state
+    def set_nthreads(self, n: int) -> None:
+        if self.args.device != "cpu":
+            raise RuntimeError("set_nthreads is only supported for CPU device")
+        self.args.n_threads = max(1, n)
+        self.dev.set_threads(self.args.n_threads)
 
-    def __setstate__(self, state):
+    def get_state_dict(self) -> dict:
+        return {"args": asdict(self.args), "params": self.dev.get_state_dict()}
+
+    def load_state_dict(self, state: dict) -> None:
         state["args"]["device"] = "cpu"
         BaseTM.__init__(self, **state["args"])
         self.dev.load_state_dict(state["params"])
+
+    @classmethod
+    def from_state_dict(cls, state: dict) -> "BaseTM":
+        instance = cls.__new__(cls)
+        instance.load_state_dict(state)
+        return instance
+
+    def __getstate__(self):
+        return self.get_state_dict()
+
+    def __setstate__(self, state):
+        self.load_state_dict(state)
