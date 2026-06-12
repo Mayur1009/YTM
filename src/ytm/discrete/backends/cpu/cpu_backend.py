@@ -155,16 +155,9 @@ class CPUDevice(BaseDevice):
         )
 
     def _init_weights(self):
-        self.clause_weights = np.ones((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
-        if self.args.negative_clauses:
-            n_neg_polarity = self.args.n_clauses // 2
-            if self.args.coalesced:
-                for i in range(self.args.n_classes):
-                    wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
-                    wt[n_neg_polarity:] *= -1.0
-                    self.clause_weights[i, :] = self.np_rng.permutation(wt)
-            else:
-                self.clause_weights[:, n_neg_polarity:] *= -1.0
+        self.clause_weights = self.np_rng.uniform(
+            -1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)
+        ).astype(np.float32)
 
         if self.args.track_patch_weights:
             self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
@@ -278,7 +271,7 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            self.lib.calc_update_prob(
+            self.lib.calc_gradient(
                 p_votes,
                 p_encoded_Y,
                 c_int(e),
@@ -299,6 +292,13 @@ class CPUDevice(BaseDevice):
                 self.p_feat_mins,
                 self.p_literal_offsets,
                 self.p_is_clause_synced,
+            )
+            self.lib.update_weights(
+                p_selected_pids,
+                p_clause_drop_mask,
+                p_prob,
+                c_float(self.args.lr),
+                self.p_clause_weights,
             )
 
     def pack_clauses(self, force_repack: bool = False):

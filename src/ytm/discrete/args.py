@@ -17,6 +17,7 @@ class TMArgs:
     patch_dim: tuple[int, int] = (0, 0)
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
+    lr: float = 0.1
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
@@ -105,6 +106,7 @@ class T_args(TypedDict, total=False):
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
     q: float
+    lr: float
     weighted: bool
     max_weight: float
     coalesced: bool

@@ -87,8 +87,9 @@ class CUDADevice(BaseDevice):
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
             options=("--use_fast_math",),
         )
-        self.k_calc_update_prob = update_mod.get_function("calc_update_prob")
+        self.k_calc_gradient = update_mod.get_function("calc_gradient")
         self.k_update_clauses = update_mod.get_function("update_clauses")
+        self.k_update_weights = update_mod.get_function("update_weights")
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
@@ -109,16 +110,10 @@ class CUDADevice(BaseDevice):
         )
 
     def _init_weights(self):
-        self.clause_weights = cp.ones((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
-        if self.args.negative_clauses:
-            n_neg_polarity = self.args.n_clauses // 2
-            if self.args.coalesced:
-                for i in range(self.args.n_classes):
-                    wt = np.ones((self.args.n_clauses,), dtype=np.float32)
-                    wt[n_neg_polarity:] *= -1.0
-                    self.clause_weights[i, :] = cp.asarray(self.np_rng.permutation(wt))
-            else:
-                self.clause_weights[:, n_neg_polarity:] *= -1.0
+        self.clause_weights = cp.asarray(
+            self.np_rng.uniform(-1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)),
+            dtype=np.float32,
+        )
 
         if self.args.track_patch_weights:
             self.patch_weights = cp.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
@@ -242,8 +237,9 @@ class CUDADevice(BaseDevice):
                     *self.kconf_classes,
                     (selected_patch_ids, self.clause_weights, votes),
                 )
-                self.k_calc_update_prob(
-                    *self.kconf_classes,
+                self.k_calc_gradient(
+                    (1, 1, 1),
+                    (1, 1, 1),
                     (votes, encoded_Y_batch, np.int32(e), prob),
                 )
                 self.k_update_clauses(
@@ -264,6 +260,16 @@ class CUDADevice(BaseDevice):
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
                         self.packed_clauses.is_clause_synced,
+                    ),
+                )
+                self.k_update_weights(
+                    *self._kernel_config(self.total_clauses),
+                    (
+                        selected_patch_ids,
+                        clause_drop_mask_gpu,
+                        prob,
+                        np.float32(self.args.lr),
+                        self.clause_weights,
                     ),
                 )
 
