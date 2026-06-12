@@ -17,6 +17,7 @@ class TMArgs:
     patch_dim: tuple[int, int] = (0, 0)
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
+    lr: float = 0.1
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
@@ -73,12 +74,10 @@ class TMArgs:
         else:
             self.include_state = min(self.include_state, self.n_states - 1)
 
-        if self.seed is None or self.seed < 0:
-            self.seed = np.random.randint(0, 1 << 30)
-        elif self.seed == 0:
+        if self.seed == 0:
             self.seed = 1
-        else:
-            self.seed = int(self.seed)
+        elif self.seed < 0:
+            self.seed = np.random.randint(0, 1 << 30)
 
         n_feat = self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
 
@@ -105,6 +104,7 @@ class T_args(TypedDict, total=False):
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
     q: float
+    lr: float
     weighted: bool
     max_weight: float
     coalesced: bool

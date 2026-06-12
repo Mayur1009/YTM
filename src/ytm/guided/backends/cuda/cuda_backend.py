@@ -1,10 +1,10 @@
 import os
 import warnings
 
-import cupy as cp
 import numpy as np
-
-from ..base import BaseDevice, PackedClauses, tqdm_bar
+import cupy as cp
+from tqdm import tqdm
+from ..base import BaseDevice, PackedClauses
 
 
 class PackedClausesCUDA(PackedClauses):
@@ -87,8 +87,9 @@ class CUDADevice(BaseDevice):
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
             options=("--use_fast_math",),
         )
-        self.k_calc_update_prob = update_mod.get_function("calc_update_prob")
+        self.k_calc_gradient = update_mod.get_function("calc_gradient")
         self.k_update_clauses = update_mod.get_function("update_clauses")
+        self.k_update_weights = update_mod.get_function("update_weights")
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
@@ -109,16 +110,10 @@ class CUDADevice(BaseDevice):
         )
 
     def _init_weights(self):
-        self.clause_weights = cp.ones((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
-        if self.args.negative_clauses:
-            n_neg_polarity = self.args.n_clauses // 2
-            if self.args.coalesced:
-                for i in range(self.args.n_classes):
-                    wt = np.ones((self.args.n_clauses,), dtype=np.float32)
-                    wt[n_neg_polarity:] *= -1.0
-                    self.clause_weights[i, :] = cp.asarray(self.np_rng.permutation(wt))
-            else:
-                self.clause_weights[:, n_neg_polarity:] *= -1.0
+        self.clause_weights = cp.asarray(
+            self.np_rng.uniform(-1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)),
+            dtype=np.float32,
+        )
 
         if self.args.track_patch_weights:
             self.patch_weights = cp.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
@@ -162,6 +157,7 @@ class CUDADevice(BaseDevice):
             "warp_size": props["warpSize"],
         }
 
+        self.seed = np.uint64(self.args.seed)
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()
@@ -180,7 +176,7 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, rng_state: int):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -197,15 +193,14 @@ class CUDADevice(BaseDevice):
         votes = cp.zeros(self.args.n_classes, dtype=np.float32)
         prob = cp.empty(self.args.n_classes, dtype=np.float32)
 
-        pbar = tqdm_bar(None, desc="Fit", total=N)
-        for i in range(0, N, batch_size):
+        for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
             encoded_Y_batch = cp.asarray(encoded_Y[i:batch_end], dtype=np.float32)
             label_probs_batch = cp.asarray(label_probs[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
-            for e in range(bs):
+            for e in tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True):
                 self.k_pack_clauses(
                     *self.kconf_clauses,
                     (
@@ -226,14 +221,13 @@ class CUDADevice(BaseDevice):
                     (
                         X_batch,
                         np.int32(e),
-                        np.int32(i + e),
                         clause_drop_mask_gpu,
                         self.packed_clauses.clause_position_bounds,
                         self.packed_clauses.clause_feat_bounds,
                         self.packed_clauses.bounded_feat_ids,
                         self.packed_clauses.n_bounded_feats,
                         self.packed_clauses.clause_density,
-                        np.uint64(rng_state),
+                        self.seed,
                         selected_patch_ids,
                         self.patch_weights,
                     ),
@@ -242,21 +236,21 @@ class CUDADevice(BaseDevice):
                     *self.kconf_classes,
                     (selected_patch_ids, self.clause_weights, votes),
                 )
-                self.k_calc_update_prob(
-                    *self.kconf_classes,
+                self.k_calc_gradient(
+                    (1, 1, 1),
+                    (1, 1, 1),
                     (votes, encoded_Y_batch, np.int32(e), prob),
                 )
                 self.k_update_clauses(
                     *self.kconf_clauses,
                     (
-                        np.uint64(rng_state),
+                        self.seed,
                         selected_patch_ids,
                         self.packed_clauses.clause_density,
                         clause_drop_mask_gpu,
                         X_batch,
                         encoded_Y_batch,
                         np.int32(e),
-                        np.int32(i + e),
                         prob,
                         label_probs_batch,
                         self.ta_states,
@@ -266,9 +260,16 @@ class CUDADevice(BaseDevice):
                         self.packed_clauses.is_clause_synced,
                     ),
                 )
-
-                pbar.update(1)
-        pbar.close()
+                self.k_update_weights(
+                    *self._kernel_config(self.total_clauses),
+                    (
+                        selected_patch_ids,
+                        clause_drop_mask_gpu,
+                        prob,
+                        np.float32(self.args.lr),
+                        self.clause_weights,
+                    ),
+                )
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
@@ -298,7 +299,7 @@ class CUDADevice(BaseDevice):
         class_sums = cp.zeros((N, self.args.n_classes), dtype=np.float32)
         self.pack_clauses()
 
-        for i in tqdm_bar(range(0, N, batch_size), desc="Infer batch"):
+        for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             bs = batch_end - i
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
@@ -338,7 +339,7 @@ class CUDADevice(BaseDevice):
         clause_outputs = np.zeros((N, self.total_clauses), dtype=np.int8)
         self.pack_clauses()
 
-        for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
+        for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             bs = batch_end - i
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
@@ -369,7 +370,7 @@ class CUDADevice(BaseDevice):
         patch_output = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
         self.pack_clauses()
 
-        for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
+        for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
             batch_end = min(i + batch_size, N)
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
             bs = batch_end - i

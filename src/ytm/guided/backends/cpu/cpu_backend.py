@@ -8,8 +8,9 @@ import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 
 import numpy as np
+from tqdm import tqdm
 
-from ..base import BaseDevice, PackedClauses, tqdm_bar
+from ..base import BaseDevice, PackedClauses
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -155,16 +156,9 @@ class CPUDevice(BaseDevice):
         )
 
     def _init_weights(self):
-        self.clause_weights = np.ones((self.args.n_classes, self.args.n_clauses), dtype=np.float32)
-        if self.args.negative_clauses:
-            n_neg_polarity = self.args.n_clauses // 2
-            if self.args.coalesced:
-                for i in range(self.args.n_classes):
-                    wt = np.ones((self.args.n_clauses,), dtype=np.float32) * 1.0
-                    wt[n_neg_polarity:] *= -1.0
-                    self.clause_weights[i, :] = self.np_rng.permutation(wt)
-            else:
-                self.clause_weights[:, n_neg_polarity:] *= -1.0
+        self.clause_weights = self.np_rng.uniform(
+            -1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)
+        ).astype(np.float32)
 
         if self.args.track_patch_weights:
             self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
@@ -221,7 +215,7 @@ class CPUDevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, rng_state: int):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -247,7 +241,7 @@ class CPUDevice(BaseDevice):
         p_votes = votes.ctypes.data_as(float_p)
         p_prob = prob.ctypes.data_as(float_p)
 
-        for e in tqdm_bar(range(N), desc="Fit"):
+        for e in tqdm(range(N), desc="Fit", leave=False):
             self.lib.pack_clauses(
                 self.p_ta_states,
                 self.p_feat_mins,
@@ -269,7 +263,7 @@ class CPUDevice(BaseDevice):
                 self.p_bounded_feat_ids,
                 self.p_n_bounded_feats,
                 self.p_clause_density,
-                c_uint64(rng_state),
+                c_uint64(self.args.seed),
                 p_selected_pids,
                 self.p_patch_weights,
             )
@@ -278,14 +272,14 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            self.lib.calc_update_prob(
+            self.lib.calc_gradient(
                 p_votes,
                 p_encoded_Y,
                 c_int(e),
                 p_prob,
             )
             self.lib.update_clauses(
-                c_uint64(rng_state),
+                c_uint64(self.args.seed),
                 p_selected_pids,
                 self.p_clause_density,
                 p_clause_drop_mask,
@@ -299,6 +293,13 @@ class CPUDevice(BaseDevice):
                 self.p_feat_mins,
                 self.p_literal_offsets,
                 self.p_is_clause_synced,
+            )
+            self.lib.update_weights(
+                p_selected_pids,
+                p_clause_drop_mask,
+                p_prob,
+                c_float(self.args.lr),
+                self.p_clause_weights,
             )
 
     def pack_clauses(self, force_repack: bool = False):
@@ -325,7 +326,7 @@ class CPUDevice(BaseDevice):
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
         self.pack_clauses()
 
-        for e in tqdm_bar(range(N), desc="Infer"):
+        for e in tqdm(range(N), desc="Infer", leave=False):
             self.lib.infer_sample(
                 self.p_clause_weights,
                 self.p_clause_position_bounds,
@@ -352,7 +353,7 @@ class CPUDevice(BaseDevice):
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
 
-        for e in tqdm_bar(range(N), desc="Transform"):
+        for e in tqdm(range(N), desc="Transform", leave=False):
             self.lib.evaluate(
                 p_X,
                 c_int(e),
@@ -377,7 +378,7 @@ class CPUDevice(BaseDevice):
         patch_outputs = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
         self.pack_clauses()
 
-        for e in tqdm_bar(range(N), desc="Transform"):
+        for e in tqdm(range(N), desc="Transform", leave=False):
             self.lib.eval_sample_patchwise(
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,

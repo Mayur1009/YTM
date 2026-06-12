@@ -113,7 +113,7 @@ static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int p
 }
 
 static inline void update_clause_class(ull class_id, ull clause, ull rel_clause, int clause_output, int patch_idx_y,
-                                       int patch_idx_x, int clause_density, uint* ta_states, float* clause_weights,
+                                       int patch_idx_x, int clause_density, uint* ta_states, const float* clause_weights,
                                        const int* Xe, const float* encoded_Y_e, const float* prob,
                                        float label_prob_c, const int* feat_mins, const int* literal_offsets,
                                        int8_t* is_clause_synced, ull rng_k, uint* rng_counter) {
@@ -126,17 +126,13 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
 
     is_clause_synced[clause] = 0;
 
-    float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
-    int sign = (*weight >= 0) - (*weight < 0);
+    float weight_val = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+    int sign = (weight_val >= 0) - (weight_val < 0);
     bool has_space = (clause_density <= (int)MAX_INCLUDED_LITERALS);
     bool t1 = (target * sign) > 0;
 
     if (t1 && clause_output && has_space) {
 #if TYPE1A_FB
-#if WEIGHTED
-        if (fabsf(*weight) < MAX_WEIGHT)
-            (*weight) += sign * 1.0f;
-#endif
         type1a_fb(rng_k, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets);
 #endif
     } else if (t1 && !(clause_output && has_space)) {
@@ -145,39 +141,48 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
 #endif
     } else if ((target * sign) < 0 && clause_output) {
 #if TYPE2_FB
-#if WEIGHTED
-        if (fabsf(*weight) < MAX_WEIGHT)
-            (*weight) -= sign * 1.0f;
-#if ALLOW_POLARITY_CHANGE == 0
-        if (sign == 1 && *weight < 0)
-            *weight = 1;
-        if (sign == -1 && *weight >= 0)
-            *weight = -1;
-#endif
-#endif
-#if NEGATIVE_CLAUSES == 0
-        if (*weight < 1)
-            *weight = 1;
-#endif
         type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets);
 #endif
     }
 }
 
-static inline float uprob_fun(float y, float y_hat) { return (y - y_hat) / (T_MAX - T_MIN); }
+void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask, const float* prob,
+                    const float lr, float* clause_weights) {
+#pragma omp parallel for schedule(dynamic)
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        if (clause_drop_mask[clause] == 1 || selected_patch_ids[clause] < 0)
+            continue;
 
-void calc_update_prob(const float* votes, const float* encoded_Y, const int e, float* prob) {
-#pragma omp parallel for
-    for (ull class_id = 0; class_id < (ull)CLASSES; class_id++) {
-        float target = encoded_Y[(ull)e * CLASSES + class_id];
-        float v = clip(votes[class_id], T_MIN, T_MAX);
-        prob[class_id] = uprob_fun(target, v); // [-1, 1], sign indicates target
+        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+        ull class_id;
+        LOOP_CLASS_ID(class_id, clause) {
+            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * prob[class_id];
+        }
+    }
+}
+
+void calc_gradient(const float* votes, const float* encoded_Y, const int e, float* prob) {
+    float z[CLASSES];
+    float zmax = -INFINITY;
+    for (int c = 0; c < CLASSES; c++) {
+        z[c] = votes[c] / (float)CLAUSES_PER_CLASS;
+        if (z[c] > zmax)
+            zmax = z[c];
+    }
+    float sum = 0.0f;
+    for (int c = 0; c < CLASSES; c++) {
+        z[c] = expf(z[c] - zmax);
+        sum += z[c];
+    }
+    for (int c = 0; c < CLASSES; c++) {
+        float y = (encoded_Y[(ull)e * CLASSES + c] > 0.0f) ? 1.0f : 0.0f;
+        prob[c] = y - z[c] / sum;
     }
 }
 
 void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                     const int8_t* clause_drop_mask, const int* X, const float* encoded_Y, const int e,
-                    const float* prob, const float* label_probs, uint* global_ta_states, float* clause_weights,
+                    const float* prob, const float* label_probs, uint* global_ta_states, const float* clause_weights,
                     const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
