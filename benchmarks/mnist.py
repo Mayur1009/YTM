@@ -43,7 +43,7 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test):
     run_path = BASE_DIR / f"{name}_seed{tm_args['seed']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_path.mkdir(parents=True)
 
-    with open(run_path / "args.csv") as f:
+    with open(run_path / "args.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(tm_args.keys()))
         writer.writeheader()
         writer.writerow(tm_args)
