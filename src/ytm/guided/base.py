@@ -44,7 +44,7 @@ class BaseTM:
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         label_sampling: bool = False,
-    ) -> None:
+    ) -> np.ndarray:
         assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
 
         N = X.shape[0]
@@ -57,7 +57,7 @@ class BaseTM:
         encoded_Y = self._encode_Y(Y)
         label_probs = self._label_sampler(encoded_Y, label_sampling)
 
-        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
+        return self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
 
     def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)

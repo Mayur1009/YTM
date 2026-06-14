@@ -10,7 +10,7 @@ from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_u
 import numpy as np
 from tqdm import tqdm
 
-from ..base import BaseDevice, PackedClauses
+from ..base import BaseDevice, PackedClauses, PROB_FN_MAP, LOSS_FN_MAP
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -129,6 +129,8 @@ class CPUDevice(BaseDevice):
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
+#define PROB_FN {PROB_FN_MAP[self.args.prob_fn]}
+#define LOSS_FN {LOSS_FN_MAP[self.args.loss_fn]}
 """
         return header
 
@@ -232,6 +234,9 @@ class CPUDevice(BaseDevice):
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         prob = np.empty(self.args.n_classes, dtype=np.float32)
+        loss_val = np.zeros(1, dtype=np.float32)
+        loss_per_sample = np.zeros(N, dtype=np.float32)
+        running_loss = 0.0
 
         p_X = X.ctypes.data_as(int32_p)
         p_encoded_Y = encoded_Y.ctypes.data_as(float_p)
@@ -240,8 +245,10 @@ class CPUDevice(BaseDevice):
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
         p_prob = prob.ctypes.data_as(float_p)
+        p_loss = loss_val.ctypes.data_as(float_p)
 
-        for e in tqdm(range(N), desc="Fit", leave=False):
+        pbar = tqdm(range(N), desc="Fit", leave=False, dynamic_ncols=True)
+        for e in pbar:
             self.lib.pack_clauses(
                 self.p_ta_states,
                 self.p_feat_mins,
@@ -272,12 +279,20 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            self.lib.calc_gradient(
+            self.lib.calc_prob(
                 p_votes,
+                p_prob,
+            )
+            self.lib.calc_loss(
+                p_prob,
                 p_encoded_Y,
                 c_int(e),
                 p_prob,
+                p_loss,
             )
+            loss_per_sample[e] = loss_val[0]
+            running_loss += loss_val[0]
+            pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
             self.lib.update_clauses(
                 c_uint64(self.args.seed),
                 p_selected_pids,
@@ -301,6 +316,7 @@ class CPUDevice(BaseDevice):
                 c_float(self.args.lr),
                 self.p_clause_weights,
             )
+        return loss_per_sample
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:

@@ -18,6 +18,8 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     lr: float = 0.1
+    loss_fn: str = "ce"
+    prob_fn: str = "softmax"
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
@@ -52,6 +54,12 @@ class TMArgs:
             raise EnvironmentError(
                 "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
             )
+
+        if self.prob_fn not in ("softmax", "sigmoid"):
+            raise ValueError(f"prob_fn must be 'softmax' or 'sigmoid', got '{self.prob_fn}'")
+
+        if self.loss_fn not in ("ce", "bce"):
+            raise ValueError(f"loss_fn must be 'ce' or 'bce', got '{self.loss_fn}'")
 
         self.n_threads = max(1, self.n_threads)
 
@@ -105,6 +113,8 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     q: float
     lr: float
+    loss_fn: str
+    prob_fn: str
     weighted: bool
     max_weight: float
     coalesced: bool

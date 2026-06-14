@@ -198,27 +198,46 @@ extern "C" __global__ void update_weights(const int* selected_patch_ids, const i
     }
 }
 
-extern "C" __global__ void calc_gradient(const float* votes, const float* encoded_Y, const int e, float* prob) {
+extern "C" __global__ void calc_prob(const float* votes, float* prob) {
     if (threadIdx.x != 0 || blockIdx.x != 0)
         return;
-
-    float zmax = -INFINITY;
+#if PROB_FN == 0 /* softmax */
+    float vmax = -INFINITY;
     for (int c = 0; c < CLASSES; c++) {
-        float z = votes[c] / (float)CLAUSES_PER_CLASS;
-        prob[c] = z;
-        if (z > zmax)
-            zmax = z;
+        prob[c] = votes[c] / (float)CLAUSES_PER_CLASS;
+        if (prob[c] > vmax) vmax = prob[c];
     }
     float sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
-        prob[c] = expf(prob[c] - zmax);
+        prob[c] = expf(prob[c] - vmax);
         sum += prob[c];
     }
     for (int c = 0; c < CLASSES; c++) {
+        prob[c] /= sum;
+    }
+#else /* sigmoid */
+    for (int c = 0; c < CLASSES; c++) {
+        float v = votes[c] / (float)CLAUSES_PER_CLASS;
+        prob[c] = 1.0f / (1.0f + expf(-v));
+    }
+#endif
+}
+
+extern "C" __global__ void calc_loss(const float* prob, const float* encoded_Y, const int e, float* grad, float* loss) {
+    if (threadIdx.x != 0 || blockIdx.x != 0)
+        return;
+    *loss = 0.0f;
+    for (int c = 0; c < CLASSES; c++) {
         float y = (encoded_Y[(ull)e * CLASSES + c] > 0.0f) ? 1.0f : 0.0f;
-        prob[c] = y - prob[c] / sum;
+#if LOSS_FN == 0 /* ce */
+        *loss -= y * logf(prob[c] + 1e-7f);
+#else /* bce */
+        *loss -= y * logf(prob[c] + 1e-7f) + (1.0f - y) * logf(1.0f - prob[c] + 1e-7f);
+#endif
+        grad[c] = y - prob[c];
     }
 }
+
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                                           const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,

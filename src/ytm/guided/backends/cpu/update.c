@@ -161,24 +161,42 @@ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mas
     }
 }
 
-void calc_gradient(const float* votes, const float* encoded_Y, const int e, float* prob) {
-    float z[CLASSES];
-    float zmax = -INFINITY;
+void calc_prob(const float* votes, float* prob) {
+#if PROB_FN == 0 /* softmax */
+    float vmax = -INFINITY;
     for (int c = 0; c < CLASSES; c++) {
-        z[c] = votes[c] / (float)CLAUSES_PER_CLASS;
-        if (z[c] > zmax)
-            zmax = z[c];
+        prob[c] = votes[c] / (float)CLAUSES_PER_CLASS;
+        if (prob[c] > vmax) vmax = prob[c];
     }
     float sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
-        z[c] = expf(z[c] - zmax);
-        sum += z[c];
+        prob[c] = expf(prob[c] - vmax);
+        sum += prob[c];
     }
     for (int c = 0; c < CLASSES; c++) {
+        prob[c] /= sum;
+    }
+#else /* sigmoid */
+    for (int c = 0; c < CLASSES; c++) {
+        float v = votes[c] / (float)CLAUSES_PER_CLASS;
+        prob[c] = 1.0f / (1.0f + expf(-v));
+    }
+#endif
+}
+
+void calc_loss(const float* prob, const float* encoded_Y, const int e, float* grad, float* loss) {
+    *loss = 0.0f;
+    for (int c = 0; c < CLASSES; c++) {
         float y = (encoded_Y[(ull)e * CLASSES + c] > 0.0f) ? 1.0f : 0.0f;
-        prob[c] = y - z[c] / sum;
+#if LOSS_FN == 0 /* ce */
+        *loss -= y * logf(prob[c] + 1e-7f);
+#else /* bce */
+        *loss -= y * logf(prob[c] + 1e-7f) + (1.0f - y) * logf(1.0f - prob[c] + 1e-7f);
+#endif
+        grad[c] = y - prob[c];
     }
 }
+
 
 void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                     const int8_t* clause_drop_mask, const int* X, const float* encoded_Y, const int e,
