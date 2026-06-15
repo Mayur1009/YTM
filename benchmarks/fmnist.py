@@ -1,3 +1,4 @@
+import argparse
 import csv
 import lzma
 import pickle
@@ -40,7 +41,7 @@ CSV_HEADER = ["epoch", "train_acc", "test_acc", "mean_loss", "fit_time_s", "infe
 BASE_DIR = Path(__file__).parent / "results" / "fmnist"
 
 
-def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test):
+def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs):
     run_path = BASE_DIR / f"{name}_seed{tm_args['seed']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_path.mkdir(parents=True)
 
@@ -60,7 +61,7 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test):
         writer = csv.DictWriter(f, fieldnames=CSV_HEADER)
         writer.writeheader()
 
-        for epoch in range(1, EPOCHS + 1):
+        for epoch in range(1, epochs + 1):
             with fit_timer:
                 result = model.fit(X_train, Y_train)
 
@@ -89,7 +90,7 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test):
             f.flush()
 
             print(
-                f"[{name}] {epoch:3d}/{EPOCHS} | "
+                f"[{name}] {epoch:3d}/{epochs} | "
                 f"train {train_acc * 100:.2f}% test {test_acc * 100:.2f}% | "
                 f"loss {mean_loss:.4f} | fit {fit_timer.elapsed:.1f}s"
             )
@@ -102,6 +103,13 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--scheme", nargs="+", choices=["discrete", "guided"], default=None)
+    args = parser.parse_args()
+
+    schemes = [s for s in SCHEMES if args.scheme is None or s[0] in args.scheme]
+
     print("Loading Fashion-MNIST...")
 
     ds = load_dataset("zalando-datasets/fashion_mnist")
@@ -113,5 +121,5 @@ if __name__ == "__main__":
 
     print(f"X_train {X_train.shape} range [{X_train.min()}, {X_train.max()}]")
 
-    for name, TM, tm_args in SCHEMES:
-        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test)
+    for name, TM, tm_args in schemes:
+        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, args.epochs)
