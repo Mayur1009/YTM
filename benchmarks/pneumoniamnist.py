@@ -29,7 +29,7 @@ common_args = dict(
 )
 
 discrete_args = dict(**common_args)
-guided_args = dict(**common_args, lr=0.5)
+guided_args = dict(**common_args, lr=0.1)
 
 SCHEMES = [
     ("discrete", DiscreteTM, discrete_args),

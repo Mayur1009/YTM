@@ -17,8 +17,8 @@ EPOCHS = 100
 LVLS = 8
 
 common_args = dict(
-    n_clauses=1000,
-    T=5000,
+    n_clauses=6000,
+    T=10000,
     s=10,
     dim=(28, 28, 1),
     n_classes=4,
@@ -30,7 +30,7 @@ common_args = dict(
 )
 
 discrete_args = dict(**common_args)
-guided_args = dict(**common_args, lr=0.5)
+guided_args = dict(**common_args, lr=0.3)
 
 SCHEMES = [
     ("discrete", DiscreteTM, discrete_args),
