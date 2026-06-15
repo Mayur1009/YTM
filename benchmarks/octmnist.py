@@ -32,22 +32,29 @@ common_args = dict(
 discrete_args = dict(**common_args)
 guided_args = dict(**common_args, lr=0.3)
 
+def _cs_to_prob_discrete(cs, T):
+    cs_clipped = np.clip(cs.astype(np.float64), -T, T)
+    prob = (cs_clipped + T) / (2 * T)
+    return prob / (prob.sum(axis=1, keepdims=True) + 1e-7)
+
+
+def _softmax(cs):
+    x = cs.astype(np.float64)
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+
 SCHEMES = [
-    ("discrete", DiscreteTM, discrete_args),
-    ("guided", GuidedTM, guided_args),
+    ("discrete", DiscreteTM, discrete_args, lambda cs: _cs_to_prob_discrete(cs, discrete_args["T"])),
+    ("guided", GuidedTM, guided_args, _softmax),
 ]
 
 CSV_HEADER = ["epoch", "train_acc", "test_acc", "train_f1", "test_f1", "train_auc", "test_auc", "mean_loss", "fit_time_s", "infer_train_s", "infer_test_s"]
 
-
-def _softmax(x):
-    e = np.exp(x - x.max(axis=1, keepdims=True))
-    return e / e.sum(axis=1, keepdims=True)
-
 BASE_DIR = Path(__file__).parent / "results" / "octmnist"
 
 
-def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs):
+def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs, to_prob):
     run_path = BASE_DIR / f"{name}_seed{tm_args['seed']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_path.mkdir(parents=True, exist_ok=True)
 
@@ -79,8 +86,8 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs):
             with infer_test_timer:
                 test_preds, test_cs = model.predict(X_test)
 
-            train_probs = _softmax(train_cs.astype(np.float64))
-            test_probs = _softmax(test_cs.astype(np.float64))
+            train_probs = to_prob(train_cs)
+            test_probs = to_prob(test_cs)
 
             train_acc = accuracy_score(Y_train, train_preds)
             test_acc = accuracy_score(Y_test, test_preds)
@@ -143,5 +150,5 @@ if __name__ == "__main__":
 
     print(f"X_train {X_train.shape} range [{X_train.min()}, {X_train.max()}]")
 
-    for name, TM, tm_args in schemes:
-        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, args.epochs)
+    for name, TM, tm_args, to_prob in schemes:
+        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, args.epochs, to_prob)

@@ -7,6 +7,7 @@ from datetime import datetime
 
 import numpy as np
 from medmnist import PneumoniaMNIST
+from scipy.special import expit
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from ytm.discrete.classifier import BinaryTM as DiscreteTM
@@ -31,21 +32,25 @@ common_args = dict(
 discrete_args = dict(**common_args)
 guided_args = dict(**common_args, lr=0.1)
 
+def _cs_to_prob_discrete(cs, T):
+    return (np.clip(cs.squeeze().astype(np.float64), -T, T) + T) / (2 * T)
+
+
+def _sigmoid(cs):
+    return expit(cs.squeeze().astype(np.float64))
+
+
 SCHEMES = [
-    ("discrete", DiscreteTM, discrete_args),
-    ("guided", GuidedTM, guided_args),
+    ("discrete", DiscreteTM, discrete_args, lambda cs: _cs_to_prob_discrete(cs, discrete_args["T"])),
+    ("guided", GuidedTM, guided_args, _sigmoid),
 ]
 
 CSV_HEADER = ["epoch", "train_acc", "test_acc", "train_f1", "test_f1", "train_auc", "test_auc", "mean_loss", "fit_time_s", "infer_train_s", "infer_test_s"]
 
-
-def _sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x.squeeze().astype(np.float64)))
-
 BASE_DIR = Path(__file__).parent / "results" / "pneumoniamnist"
 
 
-def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs):
+def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs, to_prob):
     run_path = BASE_DIR / f"{name}_seed{tm_args['seed']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_path.mkdir(parents=True, exist_ok=True)
 
@@ -77,8 +82,8 @@ def run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, epochs):
             with infer_test_timer:
                 test_preds, test_cs = model.predict(X_test)
 
-            train_probs = _sigmoid(train_cs)
-            test_probs = _sigmoid(test_cs)
+            train_probs = to_prob(train_cs)
+            test_probs = to_prob(test_cs)
 
             train_acc = accuracy_score(Y_train, train_preds)
             test_acc = accuracy_score(Y_test, test_preds)
@@ -141,5 +146,5 @@ if __name__ == "__main__":
 
     print(f"X_train {X_train.shape} range [{X_train.min()}, {X_train.max()}]")
 
-    for name, TM, tm_args in schemes:
-        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, args.epochs)
+    for name, TM, tm_args, to_prob in schemes:
+        run(name, TM, tm_args, X_train, Y_train, X_test, Y_test, args.epochs, to_prob)
