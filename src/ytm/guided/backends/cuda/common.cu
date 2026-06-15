@@ -46,6 +46,10 @@
 #define CLAUSES_PER_CLASS TOTAL_CLAUSES
 #endif
 
+#ifndef INFINITY
+#define INFINITY __int_as_float(0x7f800000)
+#endif
+
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
