@@ -211,24 +211,24 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                                           const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,
-                                          const int e, const float* prob, const float* label_probs,
+                                          const int e, const int e_global, const float* prob, const float* label_probs,
                                           uint* global_ta_states, float* clause_weights, const int* feat_mins,
                                           const int* literal_offsets, int8_t* is_clause_synced) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
-    ull tid = grid.thread_rank();
     int lane = warp.thread_rank();
-    ull warp_id = tid / warp.size();
+    ull warp_id = grid.thread_rank() / warp.size();
     ull total_warps = grid.size() / warp.size();
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
-    ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
-    uint rng_counter = 0;
-
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+        ull rng_id = clause * warp.size() + (ull)lane;
+        ull rng_k = rng_hash(seed, rng_id, (ull)e_global, 0xCAFEBABEULL);
+        uint rng_counter = 0;
+
         if (clause_drop_mask[clause] == 1)
             continue;
 

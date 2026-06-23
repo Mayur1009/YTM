@@ -162,7 +162,6 @@ class CUDADevice(BaseDevice):
             "warp_size": props["warpSize"],
         }
 
-        self.seed = np.uint64(self.args.seed)
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()
@@ -181,7 +180,7 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, rng_state: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -226,13 +225,14 @@ class CUDADevice(BaseDevice):
                     (
                         X_batch,
                         np.int32(e),
+                        np.int32(i + e),
                         clause_drop_mask_gpu,
                         self.packed_clauses.clause_position_bounds,
                         self.packed_clauses.clause_feat_bounds,
                         self.packed_clauses.bounded_feat_ids,
                         self.packed_clauses.n_bounded_feats,
                         self.packed_clauses.clause_density,
-                        self.seed,
+                        np.uint64(rng_state),
                         selected_patch_ids,
                         self.patch_weights,
                     ),
@@ -248,13 +248,14 @@ class CUDADevice(BaseDevice):
                 self.k_update_clauses(
                     *self.kconf_clauses,
                     (
-                        self.seed,
+                        np.uint64(rng_state),
                         selected_patch_ids,
                         self.packed_clauses.clause_density,
                         clause_drop_mask_gpu,
                         X_batch,
                         encoded_Y_batch,
                         np.int32(e),
+                        np.int32(i + e),
                         prob,
                         label_probs_batch,
                         self.ta_states,

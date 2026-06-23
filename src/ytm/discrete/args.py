@@ -73,10 +73,12 @@ class TMArgs:
         else:
             self.include_state = min(self.include_state, self.n_states - 1)
 
-        if self.seed == 0:
-            self.seed = 1
-        elif self.seed < 0:
+        if self.seed is None or self.seed < 0:
             self.seed = np.random.randint(0, 1 << 30)
+        elif self.seed == 0:
+            self.seed = 1
+        else:
+            self.seed = int(self.seed)
 
         n_feat = self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
 
