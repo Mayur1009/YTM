@@ -8,9 +8,8 @@ import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 
 import numpy as np
-from tqdm import tqdm
 
-from ..base import BaseDevice, PackedClauses
+from ..base import BaseDevice, PackedClauses, tqdm_bar
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -248,7 +247,7 @@ class CPUDevice(BaseDevice):
         p_votes = votes.ctypes.data_as(float_p)
         p_prob = prob.ctypes.data_as(float_p)
 
-        for e in tqdm(range(N), desc="Fit", leave=False):
+        for e in tqdm_bar(range(N), desc="Fit"):
             self.lib.pack_clauses(
                 self.p_ta_states,
                 self.p_feat_mins,
@@ -326,7 +325,7 @@ class CPUDevice(BaseDevice):
         class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
         self.pack_clauses()
 
-        for e in tqdm(range(N), desc="Infer", leave=False):
+        for e in tqdm_bar(range(N), desc="Infer"):
             self.lib.infer_sample(
                 self.p_clause_weights,
                 self.p_clause_position_bounds,
@@ -353,7 +352,7 @@ class CPUDevice(BaseDevice):
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
 
-        for e in tqdm(range(N), desc="Transform", leave=False):
+        for e in tqdm_bar(range(N), desc="Transform"):
             self.lib.evaluate(
                 p_X,
                 c_int(e),
@@ -378,7 +377,7 @@ class CPUDevice(BaseDevice):
         patch_outputs = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
         self.pack_clauses()
 
-        for e in tqdm(range(N), desc="Transform", leave=False):
+        for e in tqdm_bar(range(N), desc="Transform"):
             self.lib.eval_sample_patchwise(
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,

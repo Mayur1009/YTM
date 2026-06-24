@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import abc
 import numpy as np
 from ..args import TMArgs
+from tqdm import tqdm
+
 
 @dataclass
 class PackedClauses:
@@ -13,7 +15,7 @@ class PackedClauses:
     clause_density: Any
     is_clause_synced: Any
 
-    def get(self)-> "PackedClauses":
+    def get(self) -> "PackedClauses":
         return PackedClauses(
             clause_position_bounds=np.asarray(self.clause_position_bounds),
             clause_feat_bounds=np.asarray(self.clause_feat_bounds),
@@ -79,3 +81,12 @@ class BaseDevice(abc.ABC):
         pass
 
 
+def tqdm_bar(iter, **kwargs):
+    args = dict(
+        leave=False,
+        dynamic_ncols=True,
+        bar_format="{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+    )
+    for k, v in kwargs.items():
+        args[k] = v
+    return tqdm(iter, **args)
