@@ -212,7 +212,7 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                                           const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,
                                           const int e, const int e_global, const float* prob, const float* label_probs,
-                                          uint* global_ta_states, const float* clause_weights, const int* feat_mins,
+                                          uint* global_ta_states, float* clause_weights, const int* feat_mins,
                                           const int* literal_offsets, int8_t* is_clause_synced) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
