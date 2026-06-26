@@ -14,13 +14,13 @@ from ytm.discrete.classifier import BinaryTM as DiscreteTM
 from ytm.guided.classifier import BinaryTM as GuidedTM
 from ytm.utils.timer import Timer
 
-EPOCHS = 100
+EPOCHS = 500
 LVLS = 8
 
 common_args = dict(
-    n_clauses=1000,
-    T=2000,
-    s=2,
+    n_clauses=100,
+    T=800,
+    s=5.0,
     dim=(28, 28, 1),
     patch_dim=(10, 10),
     feat_mins=0,

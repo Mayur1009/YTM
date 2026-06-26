@@ -17,12 +17,12 @@ EPOCHS = 100
 LVLS = 8
 
 common_args = dict(
-    n_clauses=6000,
+    n_clauses=2000,
     T=10000,
-    s=10,
+    s=20.0,
     dim=(28, 28, 1),
     n_classes=4,
-    patch_dim=(9, 9),
+    patch_dim=(5, 5),
     feat_mins=0,
     feat_maxs=LVLS,
     seed=10,
