@@ -11,7 +11,7 @@ version = "0.7.3"
 
 [project.optional-dependencies]
 cuda = [
-    "cupy-cuda13x[ctk]",
+    "cupy-cuda12x[ctx]",
     "nvidia-ml-py",
 ]
 examples = [
@@ -41,7 +41,13 @@ line-length = 140
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["linux-64", "osx-arm64", "win-64"]
+platforms = [
+    { name = "linux-cpu", platform = "linux-64" },
+    { name = "win-cpu", platform = "win-64" },
+    "osx-arm64",
+    { name = "linux-cuda", platform = "linux-64", cuda = "12" },
+    { name = "win-cuda", platform = "win-64", cuda = "12" },
+]
 
 [tool.pixi.pypi-dependencies]
 ytm = { path = ".", editable = true, extras = ["examples"] }
@@ -55,17 +61,12 @@ jupyterlab = "*"
 ipdb = "*"
 marimo = "*"
 
-[tool.pixi.feature.cpu.pypi-options]
-extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
-
 [tool.pixi.feature.cuda]
-platforms = ["linux-64", "win-64"]
-# system-requirements = { cuda = "12" }
+platforms = ["linux-cuda", "win-cuda"]
 
 [tool.pixi.feature.cuda.dependencies]
-# cuda = "*"
+cuda = "*"
 
 [tool.pixi.environments]
-default = { features = ["cpu"] }
-cpu = { features = ["dev", "cpu"] }
+default = { features = ["dev"] }
 cuda = { features = ["dev", "cuda"] }
