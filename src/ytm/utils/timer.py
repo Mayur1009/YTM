@@ -2,6 +2,16 @@ from time import time
 
 
 class Timer:
+    """Context manager for measuring elapsed wall-clock time.
+
+    Examples
+    --------
+    >>> timer = Timer()
+    >>> with timer:
+    ...     do_work()
+    >>> print(timer.elapsed)
+    """
+
     start_time: float
     end_time: float
 
@@ -16,7 +26,19 @@ class Timer:
         self.end_time = time()
 
     @property
-    def elapsed(self):
+    def elapsed(self) -> float:
+        """Elapsed time in seconds. Must be accessed after the context exits.
+
+        Returns
+        -------
+        float
+            Wall-clock seconds between ``__enter__`` and ``__exit__``.
+
+        Raises
+        ------
+        RuntimeError
+            If accessed before the context has exited.
+        """
         if self.end_time is None:
             raise RuntimeError("elapsed must be accessed after context is ended.")
         return self.end_time - self.start_time

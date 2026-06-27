@@ -14,6 +14,18 @@ except ImportError:
 
 
 class _Sampler(threading.Thread):
+    """Background thread that polls RAM and VRAM usage at a fixed interval.
+
+    Parameters
+    ----------
+    pid : int
+        PID of the process to monitor.
+    poll_rate : int, default=100
+        Sampling interval in milliseconds.
+    cuda_id : int, optional
+        CUDA device index. If ``None``, searches all devices for ``pid``.
+    """
+
     def __init__(self, pid: int, poll_rate: int = 100, cuda_id: int | None = None):
         super().__init__(daemon=False)
         self._process = psutil.Process(pid)
@@ -48,14 +60,16 @@ class _Sampler(threading.Thread):
                 return proc.usedGpuMemory
         return 0
 
-    def run(self):
+    def run(self) -> None:
+        """Poll memory until :meth:`stop` is called."""
         while not self._stop_event.is_set():
             self.cpu_samples.append(self._process.memory_info().rss)
             if self._gpu_handle:
                 self.gpu_samples.append(self._sample_gpu())
             self._stop_event.wait(self._interval)
 
-    def stop(self):
+    def stop(self) -> None:
+        """Signal the thread to stop, join it, and shut down NVML if active."""
         self._stop_event.set()
         self.join()
         if self._gpu_handle:
@@ -63,6 +77,27 @@ class _Sampler(threading.Thread):
 
 
 class Profiler:
+    """Context manager for profiling CPU and GPU memory usage over time.
+
+    Samples RAM (and optionally VRAM) at a fixed poll rate while the block
+    executes. Call :meth:`get_profile` or :meth:`summary` after the block
+    to inspect results. Requires ``pynvml`` for GPU metrics.
+
+    Parameters
+    ----------
+    poll_rate : int, default=100
+        Sampling frequency in milliseconds.
+    cuda_id : int, optional
+        Index of the CUDA device to monitor. If ``None``, auto-detects the
+        device used by the current process.
+
+    Examples
+    --------
+    >>> with Profiler() as p:
+    ...     run_experiment()
+    >>> p.summary()
+    """
+
     def __init__(self, poll_rate: int = 100, cuda_id: int | None = None):
         self._poll_rate = poll_rate
         self._cuda_id = cuda_id
@@ -97,6 +132,18 @@ class Profiler:
         return self._end_time - self._start_time
 
     def get_profile(self) -> "Profile":
+        """Return a :class:`Profile` snapshot after the context exits.
+
+        Returns
+        -------
+        Profile
+            Frozen dataclass with elapsed time and RAM/VRAM statistics.
+
+        Raises
+        ------
+        RuntimeError
+            If called before the context has exited.
+        """
         cpu = self._cpu_samples
         gpu = self._gpu_samples
         ram_start = cpu[0]
@@ -112,7 +159,8 @@ class Profiler:
             vram_delta=gpu[-1] - gpu[0] if gpu else None,
         )
 
-    def summary(self):
+    def summary(self) -> None:
+        """Print a formatted summary table of the profile to stdout."""
         p = self.get_profile()
         p.summary()
 
@@ -127,6 +175,11 @@ def _fmt_bytes(b: int | float) -> str:
 
 @dataclass(frozen=True)
 class Profile:
+    """Immutable snapshot of profiling results produced by :class:`Profiler`.
+
+    All memory values are in bytes. VRAM fields are ``None`` if no GPU was
+    detected or ``pynvml`` is not installed.
+    """
     elapsed: float
     ram_start: int
     ram_peak: int
@@ -137,7 +190,8 @@ class Profile:
     vram_mean: int | None = None
     vram_delta: int | None = None
 
-    def summary(self):
+    def summary(self) -> None:
+        """Print elapsed time and peak/mean/delta RAM and VRAM to stdout."""
         rows = [
             ("Elapsed time", f"{self.elapsed:.3f} s"),
             ("RAM start", _fmt_bytes(self.ram_start)),

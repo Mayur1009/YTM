@@ -3,6 +3,12 @@ import numpy as np
 
 
 class ThermometerBinarizer:
+    """Simple thermometer binarizer for image data.
+
+    .. deprecated::
+        Prefer :class:`Binarizer` with ``type="thermometer"`` for more control.
+    """
+
     def __init__(self, ch: int = 8):
         self.ch = ch
 
@@ -22,6 +28,34 @@ class ThermometerBinarizer:
 
 
 class Binarizer:
+    """Binarize continuous features into thermometer or one-hot encoded bins.
+
+    Transforms features into binary representations suitable for TM input.
+
+    Parameters
+    ----------
+    bins : int
+        Number of inner bins (thresholds). Thermometer output has ``bins``
+        bits per feature; one-hot has ``bins + 1``.
+    edge_bins : bool, default=False
+        If True, add two extra bins covering values below ``min_val`` and
+        above ``max_val``.
+    method : {"uniform", "quantile"}, default="uniform"
+        Strategy for computing thresholds. ``"uniform"`` spaces thresholds
+        evenly between min and max. ``"quantile"`` places thresholds at
+        equal-frequency percentiles.
+    type : {"thermometer", "onehot"}, default="thermometer"
+        Encoding type. ``"thermometer"`` sets all bits up to the bin index;
+        ``"onehot"`` sets exactly one bit.
+
+    Examples
+    --------
+    >>> binarizer = Binarizer(bins=8)
+    >>> binarizer.fit(X_train)
+    >>> X_bin = binarizer.transform(X_train)
+    >>> X_tr = binarizer.collapse_bins(X_bin)
+    """
+
     def __init__(
         self,
         bins: int,
@@ -34,7 +68,20 @@ class Binarizer:
         self.method = method
         self.type = type
 
-    def fit(self, X, thresholds=None, min_val=None, max_val=None):
+    def fit(self, X: np.ndarray, thresholds=None, min_val=None, max_val=None) -> None:
+        """Compute bin thresholds from data.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ...)
+            Input data used to compute thresholds.
+        thresholds : array-like of shape (bins,), optional
+            Explicit inner thresholds. Ignores ``method`` if provided.
+        min_val : float, optional
+            Override minimum value. Defaults to ``X.min()``.
+        max_val : float, optional
+            Override maximum value. Defaults to ``X.max()``.
+        """
         assert X.ndim >= 2
         self.min_val = np.min(X) if min_val is None else min_val
         self.max_val = np.max(X) if max_val is None else max_val
@@ -95,7 +142,19 @@ class Binarizer:
 
         return out
 
-    def collapse_bins(self, X):
+    def collapse_bins(self, X: np.ndarray) -> np.ndarray:
+        """Reverse a binarized array back to integer bin indices.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ..., binned_dim)
+            Binarized array produced by :meth:`transform`.
+
+        Returns
+        -------
+        ndarray of shape (N, ...)
+            Integer bin index per feature.
+        """
 
         assert X.ndim >= 3, "Input should be at least a 3D array (N, ... , binned_dim)"
 
@@ -121,7 +180,20 @@ class Binarizer:
         else:
             raise ValueError(f"Unknown type: {self.type}")
 
-    def transform(self, X):
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Binarize ``X`` using the fitted thresholds.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ...)
+            Input data.
+
+        Returns
+        -------
+        ndarray of shape (N, ..., bins) or (N, ..., bins+1)
+            Binarized output. Last dimension size depends on ``type`` and
+            ``edge_bins``.
+        """
         if self.type == "thermometer":
             return self._transform_thermometer(X)
         elif self.type == "onehot":
@@ -129,7 +201,19 @@ class Binarizer:
         else:
             raise ValueError(f"Unknown type: {self.type}")
 
-    def fit_transform(self, X):
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        """Fit thresholds and binarize ``X`` in one step.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ...)
+            Input data.
+
+        Returns
+        -------
+        ndarray
+            Binarized output. See :meth:`transform` for shape details.
+        """
         self.fit(X)
         return self.transform(X)
 
