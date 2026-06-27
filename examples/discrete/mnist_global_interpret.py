@@ -43,12 +43,7 @@ def plot_wic(wic_images, n_classes):
     fig, axes = plt.subplots(1, n_classes, figsize=(2 * n_classes, 2), layout="compressed")
 
     for c in range(n_classes):
-        img = wic_images[c].copy()
-        if img.min() < 0:
-            img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
-        if img.max() > 0:
-            img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
-        img = Normalize(-1, 1)(img)
+        img = Normalize(-1, 1)(wic_images[c].copy())
 
         axes[c].imshow(img, cmap="coolwarm")
         axes[c].set_title(f"Class {c}")

@@ -3,7 +3,6 @@ import argparse
 import numpy as np
 from datasets import load_dataset
 from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
 
 from ytm.discrete.classifier import MultiClassTM
 from ytm.discrete.interpret import wac
@@ -49,15 +48,9 @@ def plot_wac(X_org, Y, wac_images):
         axes[0, i].set_title(CIFAR10_LABELS[Y[i]], fontsize=8)
         axes[0, i].axis("off")
 
-        img = wac_images[i].sum(axis=-1)
-        img_copy = img.copy()
-        if img_copy.min() < 0:
-            img_copy[img_copy < 0] = img_copy[img_copy < 0] / (-1 * img_copy[img_copy < 0].min() + 1e-7)
-        if img_copy.max() > 0:
-            img_copy[img_copy > 0] = img_copy[img_copy > 0] / (img_copy[img_copy > 0].max() + 1e-7)
-        img_copy = Normalize(-1, 1)(img_copy)
+        img_copy = np.clip((wac_images[i] + 1) / 2, 0, 1)
 
-        axes[1, i].imshow(img_copy, cmap="coolwarm")
+        axes[1, i].imshow(img_copy)
         axes[1, i].axis("off")
 
     return fig

@@ -48,13 +48,7 @@ def plot_wac(X, Y, wac_images):
         axes[0, i].set_title(f"Label: {Y[i]}")
         axes[0, i].axis("off")
 
-        img = wac_images[i].copy()
-        # Normalize positive and negative independently
-        if img.min() < 0:
-            img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
-        if img.max() > 0:
-            img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
-        img = Normalize(-1, 1)(img)
+        img = Normalize(-1, 1)(wac_images[i].copy())
 
         axes[1, i].imshow(img, cmap="coolwarm")
         axes[1, i].axis("off")

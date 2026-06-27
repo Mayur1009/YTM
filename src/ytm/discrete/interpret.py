@@ -2,7 +2,7 @@ import numpy as np
 from .base import BaseTM
 
 
-def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False):
+def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False, normalize: bool = True):
     """Compute local interpretation (WAC).
 
     Each pixel in the output accumulates the weighted clause patterns of all
@@ -24,6 +24,10 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
         all at once.
     force_repack : bool, default=False
         Force clause repacking even if a cached result exists.
+    normalize : bool, default=True
+        If ``True``, normalize each sample's map independently: negative
+        values scaled to ``[-1, 0]`` by their minimum, positive values
+        scaled to ``[0, 1]`` by their maximum.
 
     Returns
     -------
@@ -81,10 +85,18 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
                         x0 = px * sx
                         wac_output[e, y0 : y0 + ph, x0 : x0 + pw, :] += cp * w
 
+    if normalize:
+        for e in range(N):
+            img = wac_output[e]
+            if img.min() < 0:
+                img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
+            if img.max() > 0:
+                img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
+
     return wac_output
 
 
-def wic(tm: BaseTM, force_repack: bool = False):
+def wic(tm: BaseTM, force_repack: bool = False, normalize: bool = True):
     """Compute global interpretation(WIC).
 
     Accumulates clause patterns weighted by clause weight and normalized
@@ -98,6 +110,10 @@ def wic(tm: BaseTM, force_repack: bool = False):
         ``track_patch_weights=True`` (default).
     force_repack : bool, default=False
         Force clause repacking even if a cached result exists.
+    normalize : bool, default=True
+        If ``True``, normalize each class map independently: negative
+        values scaled to ``[-1, 0]`` by their minimum, positive values
+        scaled to ``[0, 1]`` by their maximum.
 
     Returns
     -------
@@ -164,5 +180,13 @@ def wic(tm: BaseTM, force_repack: bool = False):
                         clause_pw[y0 : y0 + ph, x0 : x0 + pw, :] += cp * pw_val
 
             wic_output[class_id] += w * clause_pw
+
+    if normalize:
+        for c in range(n_classes):
+            img = wic_output[c]
+            if img.min() < 0:
+                img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
+            if img.max() > 0:
+                img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
 
     return wic_output
