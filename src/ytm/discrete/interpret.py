@@ -3,8 +3,33 @@ from .base import BaseTM
 
 
 def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False):
-    """
-    A template to compute the local interpretation, also called the WAC (Weighted Activated Clauses) for a set of input samples. This should work for image data, but can be adpated to other domains as well.
+    """Compute local interpretation (WAC).
+
+    Each pixel in the output accumulates the weighted clause patterns of all
+    positively-weighted clauses that activate on that patch position. Designed
+    for image data; adapt ``clause_patterns`` for other domains.
+
+    Parameters
+    ----------
+    tm : BaseTM
+        Trained TM model. Must have been trained with a patch-based ``dim``
+        and ``patch_dim``.
+    X : ndarray of shape (N, ...)
+        Input samples. Reshaped internally to ``(N, *tm.args.dim)``.
+    target_classes : array-like of int of shape (N,), optional
+        Target class index per sample. If ``None``, uses ``argmax`` of
+        ``score(X)`` (i.e., the predicted class).
+    batch_size : int, default=-1
+        Batch size for :meth:`~BaseTM.transform_patchwise`. ``-1`` processes
+        all at once.
+    force_repack : bool, default=False
+        Force clause repacking even if a cached result exists.
+
+    Returns
+    -------
+    ndarray of shape (N, H, W, D)
+        Positive values indicate features voting high, negative values low,
+        zero means no contribution.
     """
 
     # X shoudld be (N, *tm.args.dim)
@@ -60,8 +85,30 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
 
 
 def wic(tm: BaseTM, force_repack: bool = False):
-    """
-    A template to compute the global interpretation, also called the WIC for a set of input samples. This should work for image data, but can be adpated to other domains as well.
+    """Compute global interpretation(WIC).
+
+    Accumulates clause patterns weighted by clause weight and normalized
+    patch-vote counts across all valid, positively-weighted clauses.
+    Designed for image data; adapt ``clause_patterns`` for other domains.
+
+    Parameters
+    ----------
+    tm : BaseTM
+        Trained TM model. Must have been trained with
+        ``track_patch_weights=True`` (default).
+    force_repack : bool, default=False
+        Force clause repacking even if a cached result exists.
+
+    Returns
+    -------
+    ndarray of shape (n_classes, H, W, D)
+        Per-class global interpretation map. Positive values indicate
+        features strongly associated with the class.
+
+    Raises
+    ------
+    ValueError
+        If ``tm`` was trained with ``track_patch_weights=False``.
     """
     if not tm.args.track_patch_weights:
         raise ValueError("The model should be trained with `track_patch_weights=True` to get the global interpretation.")
