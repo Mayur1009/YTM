@@ -1,9 +1,11 @@
+import argparse
+
 import numpy as np
 from medmnist import PneumoniaMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
 from ytm.discrete.classifier import BinaryTM
-from ytm.utils import Timer
+from ytm.utils import Timer, print_table
 
 
 def load_data(n_levels=8):
@@ -43,31 +45,46 @@ def train(tm: BinaryTM, X_train, Y_train, X_val, Y_val, X_test, Y_test, epochs=1
         val_acc, val_auc, _ = evaluate(tm, X_val, Y_val)
         test_acc, test_auc, test_pred = evaluate(tm, X_test, Y_test)
 
-        print(
-            f"Epoch {epoch + 1} | Fit: {fit_timer.elapsed:.2f}s | "
-            f"Train Acc: {train_acc:.4f} AUC: {train_auc:.4f} | "
-            f"Val Acc: {val_acc:.4f} AUC: {val_auc:.4f} | "
-            f"Test Acc: {test_acc:.4f} AUC: {test_auc:.4f}"
+        print_table(
+            f"Epoch {epoch + 1}/{epochs}",
+            {
+                "Train": {"Acc": f"{train_acc:.4f}", "AUC": f"{train_auc:.4f}", "Fit Time": f"{fit_timer.elapsed:.2f}s"},
+                "Val":   {"Acc": f"{val_acc:.4f}", "AUC": f"{val_auc:.4f}"},
+                "Test":  {"Acc": f"{test_acc:.4f}", "AUC": f"{test_auc:.4f}"},
+            },
         )
         print(f"Confusion Matrix:\n{confusion_matrix(Y_test, test_pred)}")
 
 
 if __name__ == "__main__":
-    n_levels = 8
-    (X_train, Y_train), (X_val, Y_val), (X_test, Y_test) = load_data(n_levels)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_clauses", type=int, default=1000)
+    parser.add_argument("--T", type=int, default=2000)
+    parser.add_argument("--s", type=float, default=2.0)
+    parser.add_argument("--patch", type=int, nargs=2, default=[10, 10], metavar=("H", "W"))
+    parser.add_argument("--n_levels", type=int, default=8)
+    parser.add_argument("--seed", type=lambda x: None if x == "None" else int(x), default=10)
+    parser.add_argument("--coalesced", type=int, choices=[0, 1], default=1)
+    parser.add_argument("--n_threads", type=int, default=8)
+    parser.add_argument("--device", type=str, choices=["cpu", "cuda"], default="cpu")
+    parser.add_argument("--epochs", type=int, default=100)
+    args = parser.parse_args()
+
+    (X_train, Y_train), (X_val, Y_val), (X_test, Y_test) = load_data(args.n_levels)
     print(f"Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
 
     tm = BinaryTM(
-        n_clauses=1000,
-        T=2000,
-        s=2,
+        n_clauses=args.n_clauses,
+        T=args.T,
+        s=args.s,
         dim=(28, 28, 1),
-        patch_dim=(10, 10),
+        patch_dim=tuple(args.patch),
         feat_mins=X_train.min(),
         feat_maxs=X_train.max(),
-        seed=10,
-        device="cuda",
-        n_threads=8,
+        seed=args.seed,
+        coalesced=True if args.coalesced == 1 else False,
+        device=args.device,
+        n_threads=args.n_threads,
     )
 
-    train(tm, X_train, Y_train, X_val, Y_val, X_test, Y_test, epochs=100)
+    train(tm, X_train, Y_train, X_val, Y_val, X_test, Y_test, epochs=args.epochs)

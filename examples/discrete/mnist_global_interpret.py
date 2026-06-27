@@ -1,14 +1,13 @@
+import argparse
+
 import numpy as np
 from datasets import load_dataset
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
-import seaborn as sns
 
 from ytm.discrete.classifier import MultiClassTM
 from ytm.discrete.interpret import wic
-from ytm.utils import Timer
-
-icefire = sns.color_palette("icefire", as_cmap=True)
+from ytm.utils import Timer, print_table
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
@@ -27,13 +26,21 @@ def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):
 
         test_acc = np.mean(Y_test == test_pred)
         train_acc = np.mean(Y_train == train_pred)
-        print(
-            f"Epoch {epoch + 1} | Acc> Train: {train_acc * 100:.4f}% Test: {test_acc * 100:.4f}% | Time> Fit: {train_fit_timer.elapsed:.4f}s Infer Train: {train_timer.elapsed:.4f}s Infer Test: {test_timer.elapsed:.4f}s"
+        print_table(
+            f"Epoch {epoch + 1}/{epochs}",
+            {
+                "Train": {
+                    "Acc": f"{train_acc * 100:.4f}%",
+                    "Fit Time": f"{train_fit_timer.elapsed:.4f}s",
+                    "Infer Time": f"{train_timer.elapsed:.4f}s",
+                },
+                "Test": {"Acc": f"{test_acc * 100:.4f}%", "Infer Time": f"{test_timer.elapsed:.4f}s"},
+            },
         )
 
 
 def plot_wic(wic_images, n_classes):
-    fig, axes = plt.subplots(1, n_classes, figsize=(2 * n_classes, 2))
+    fig, axes = plt.subplots(1, n_classes, figsize=(2 * n_classes, 2), layout="compressed")
 
     for c in range(n_classes):
         img = wic_images[c].copy()
@@ -43,15 +50,26 @@ def plot_wic(wic_images, n_classes):
             img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
         img = Normalize(-1, 1)(img)
 
-        axes[c].imshow(img, cmap=icefire)
+        axes[c].imshow(img, cmap="coolwarm")
         axes[c].set_title(f"Class {c}")
         axes[c].axis("off")
 
-    fig.tight_layout()
     return fig
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_clauses", type=int, default=500)
+    parser.add_argument("--T", type=int, default=1000)
+    parser.add_argument("--s", type=float, default=10.0)
+    parser.add_argument("--patch", type=int, nargs=2, default=[10, 10], metavar=("H", "W"))
+    parser.add_argument("--seed", type=lambda x: None if x == "None" else int(x), default=10)
+    parser.add_argument("--coalesced", type=int, choices=[0, 1], default=1)
+    parser.add_argument("--n_threads", type=int, default=8)
+    parser.add_argument("--device", type=str, choices=["cpu", "cuda"], default="cpu")
+    parser.add_argument("--epochs", type=int, default=10)
+    args = parser.parse_args()
+
     ds = load_dataset("ylecun/mnist")
     Y_train, Y_test = map(lambda x: np.array(x).astype(np.uint8), (ds["train"]["label"], ds["test"]["label"]))
     X_train, X_test = map(
@@ -60,23 +78,24 @@ if __name__ == "__main__":
     )
 
     tm = MultiClassTM(
-        n_clauses=500,
-        T=1000,
-        s=10,
+        n_clauses=args.n_clauses,
+        T=args.T,
+        s=args.s,
         dim=(28, 28, 1),
         n_classes=10,
-        patch_dim=(10, 10),
+        patch_dim=tuple(args.patch),
         stride=(1, 1),
         feat_mins=0,
         feat_maxs=1,
-        seed=10,
-        device="cuda",
-        n_threads=8,
+        seed=args.seed,
+        coalesced=True if args.coalesced == 1 else False,
+        device=args.device,
+        n_threads=args.n_threads,
     )
 
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=1)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=args.epochs)
 
-    wic_output = wic(tm)          # (10, H, W, D)
+    wic_output = wic(tm)  # (10, H, W, D)
     wic_images = wic_output.sum(axis=-1)  # (10, H, W)
 
     fig = plot_wic(wic_images, n_classes=10)

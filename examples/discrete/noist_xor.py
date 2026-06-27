@@ -48,5 +48,3 @@ if __name__ == "__main__":
     )
 
     train(tm, X_train, Y_train, X_test, Y_test, epochs=100)
-
-

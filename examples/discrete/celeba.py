@@ -1,9 +1,12 @@
-import numpy as np
+import argparse
+
 import albumentations as A
+import numpy as np
 from datasets import load_dataset
-from ytm.discrete.classifier import MultiOutputTM
-from ytm.utils import Timer
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
+
+from ytm.discrete.classifier import MultiOutputTM
+from ytm.utils import Timer, print_table
 
 label_names = [
     "Attractive",
@@ -33,40 +36,14 @@ def process_dataset():
     X_train = preprocessing(ds["train"]["image"], train_transforms)
     X_test = preprocessing(ds["test"]["image"], test_transforms)
 
-    # Remove samples with no classes.
     mask = Y_train.any(axis=1)
-
     return X_train[mask], Y_train[mask], X_test, Y_test
-
-
-def print_metrics(epoch, train_met: dict, test_met: dict):
-    """Prints the training and testing metrics in a formatted table."""
-    col_width = 9
-    metrics = train_met.keys()
-    header = f"| {'Epoch = ' + str(epoch):^{col_width}} |"
-    for metric in metrics:
-        header += f" {metric:>{col_width}} |"
-    print(header)
-    separator = "+" + "+".join(["-" * (col_width + 2)] * (len(metrics) + 1)) + "+"
-    print(separator)
-    for name, data in [("Train", train_met), ("Test", test_met)]:
-        row = f"| {name:>{col_width}} |"
-        for metric in metrics:
-            row += f" {data[metric]:>{col_width}.4f} |"
-        print(row)
-    print(separator)
 
 
 def multilabel_metrics(y_true, y_pred, y_prob):
     precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="weighted")
     auc = roc_auc_score(y_true, y_prob, average="weighted")
-
-    return {
-        "precision": precision,
-        "recall": recall,
-        "f1_score": f1,
-        "auc": auc,
-    }
+    return {"precision": precision, "recall": recall, "f1_score": f1, "auc": auc}
 
 
 def cs_to_prob(cs, t):
@@ -90,29 +67,47 @@ def train(tm: MultiOutputTM, X_train, Y_train, X_test, Y_test, epochs=1):
         train_mets = multilabel_metrics(Y_train, train_pred, cs_to_prob(train_cs, tm.args.T_max))
         test_mets = multilabel_metrics(Y_test, test_pred, cs_to_prob(test_cs, tm.args.T_max))
 
-        print_metrics(epoch + 1, train_mets, test_mets)
-        print(
-            f"Training time: {train_fit_timer.elapsed:.2f}s, Testing time: {test_timer.elapsed:.2f}s, Train prediction time: {train_timer.elapsed:.2f}s\n"
+        print_table(
+            f"Epoch {epoch + 1}/{epochs}",
+            {
+                "Train": {**{k: f"{v:.4f}" for k, v in train_mets.items()}, "Fit Time": f"{train_fit_timer.elapsed:.2f}s", "Infer Time": f"{train_timer.elapsed:.2f}s"},
+                "Test":  {**{k: f"{v:.4f}" for k, v in test_mets.items()}, "Infer Time": f"{test_timer.elapsed:.2f}s"},
+            },
         )
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_clauses", type=int, default=25000)
+    parser.add_argument("--T", type=int, default=40000)
+    parser.add_argument("--s", type=float, default=27.0)
+    parser.add_argument("--q", type=int, default=4)
+    parser.add_argument("--patch", type=int, nargs=2, default=[3, 3], metavar=("H", "W"))
+    parser.add_argument("--seed", type=lambda x: None if x == "None" else int(x), default=10)
+    parser.add_argument("--coalesced", type=int, choices=[0, 1], default=1)
+    parser.add_argument("--n_threads", type=int, default=8)
+    parser.add_argument("--device", type=str, choices=["cpu", "cuda"], default="cpu")
+    parser.add_argument("--epochs", type=int, default=100)
+    args = parser.parse_args()
+
     X_train, Y_train, X_test, Y_test = process_dataset()
     print(f"X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
     print(f"X_train min: {X_train.min()}, X_train max: {X_train.max()}")
     print(f"Y_train shape: {Y_train.shape}, Y_test shape: {Y_test.shape}")
 
     tm = MultiOutputTM(
-        n_clauses=25000,
-        T=40000,
-        s=27,
-        q=4,
+        n_clauses=args.n_clauses,
+        T=args.T,
+        s=args.s,
+        q=args.q,
         dim=X_train.shape[1:],
         n_classes=len(label_names),
-        patch_dim=(3, 3),
+        patch_dim=tuple(args.patch),
         feat_mins=X_train.min(),
         feat_maxs=X_train.max(),
-        seed=10,
-        device="cuda",
+        seed=args.seed,
+        coalesced=True if args.coalesced == 1 else False,
+        device=args.device,
+        n_threads=args.n_threads,
     )
-    train(tm, X_train, Y_train, X_test, Y_test, epochs=100)
+    train(tm, X_train, Y_train, X_test, Y_test, epochs=args.epochs)
