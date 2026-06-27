@@ -11,7 +11,7 @@ version = "0.7.3"
 
 [project.optional-dependencies]
 cuda = [
-    "cupy-cuda12x[ctx]",
+    "cupy-cuda12x[ctk]",
     "nvidia-ml-py",
 ]
 examples = [
@@ -65,7 +65,7 @@ marimo = "*"
 platforms = ["linux-cuda", "win-cuda"]
 
 [tool.pixi.feature.cuda.dependencies]
-cuda = "*"
+# cuda = "*"
 
 [tool.pixi.environments]
 default = { features = ["dev"] }
