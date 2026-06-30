@@ -2,7 +2,7 @@ import numpy as np
 from .base import BaseTM
 
 
-def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False):
+def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: bool = False, normalize: bool = True):
     """
     A template to compute the local interpretation, also called the WAC (Weighted Activated Clauses) for a set of input samples. This should work for image data, but can be adpated to other domains as well.
     """
@@ -55,6 +55,14 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
                         y0 = py * sy
                         x0 = px * sx
                         wac_output[e, y0 : y0 + ph, x0 : x0 + pw, :] += cp * w
+
+    if normalize:
+        for e in range(N):
+            img = wac_output[e]
+            if img.min() < 0:
+                img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
+            if img.max() > 0:
+                img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
 
     return wac_output
 

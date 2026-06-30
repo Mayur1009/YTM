@@ -35,7 +35,7 @@ class TMArgs:
     skip_t2_fb: bool = False
     track_patch_weights: bool = True
     boost_tp_fb: bool = True
-    seed: int = -1
+    seed: int | None = None
 
     # Device specific arguments
     device: Literal["cpu", "cuda"] = "cpu"
@@ -82,10 +82,12 @@ class TMArgs:
         else:
             self.include_state = min(self.include_state, self.n_states - 1)
 
-        if self.seed == 0:
-            self.seed = 1
-        elif self.seed < 0:
+        if self.seed is None or self.seed < 0:
             self.seed = np.random.randint(0, 1 << 30)
+        elif self.seed == 0:
+            self.seed = 1
+        else:
+            self.seed = int(self.seed)
 
         n_feat = self.patch_dim[0] * self.patch_dim[1] * self.dim[2]
 
@@ -130,7 +132,7 @@ class T_args(TypedDict, total=False):
     skip_t2_fb: bool
     track_patch_weights: bool
     boost_tp_fb: bool
-    seed: int
+    seed: int | None
     device: Literal["cpu", "cuda"]
     n_threads: int
     compile_flags: list[str]

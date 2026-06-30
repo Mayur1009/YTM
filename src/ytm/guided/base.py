@@ -23,7 +23,8 @@ class BaseTM:
         **opt_args: Unpack[T_args],
     ):
         self.args = TMArgs(n_clauses, T, s, dim, n_classes, **opt_args)
-        self.rng = np.random.default_rng(self.args.seed)
+        self.np_rng = np.random.default_rng(self.args.seed)
+        self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
 
         if self.args.device == "cpu":
             from .backends.cpu.cpu_backend import CPUDevice
@@ -50,14 +51,16 @@ class BaseTM:
         N = X.shape[0]
         iota = np.arange(N)
         if shuffle:
-            self.rng.shuffle(iota)
+            self.np_rng.shuffle(iota)
         X = X[iota]
         Y = Y[iota]
 
         encoded_Y = self._encode_Y(Y)
         label_probs = self._label_sampler(encoded_Y, label_sampling)
 
-        return self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
+        loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
+        self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
+        return loss
 
     def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.dev.infer(X, batch_size)
@@ -138,16 +141,24 @@ class BaseTM:
         self.args.device = device
 
     def set_threads(self, n: int) -> None:
-            self.args.n_threads = max(1, n)
-            self.dev.set_threads(self.args.n_threads)
+        self.args.n_threads = max(1, n)
+        self.dev.set_threads(self.args.n_threads)
 
     def get_state_dict(self) -> dict:
-        return {"args": asdict(self.args), "params": self.dev.get_state_dict()}
+        return {
+            "args": asdict(self.args),
+            "params": self.dev.get_state_dict(),
+            "rng_state": self.rng_state,
+            "np_rng_state": self.np_rng.bit_generator.state,
+        }
 
     def load_state_dict(self, state: dict) -> None:
         state["args"]["device"] = "cpu"
         BaseTM.__init__(self, **state["args"])
         self.dev.load_state_dict(state["params"])
+
+        self.rng_state = state.get("rng_state", self.rng_state)
+        self.np_rng.bit_generator.state = state.get("np_rng_state", self.np_rng.bit_generator.state)
 
     @classmethod
     def from_state_dict(cls, state: dict) -> "BaseTM":

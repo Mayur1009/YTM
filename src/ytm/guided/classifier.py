@@ -59,7 +59,7 @@ class MultiClassTM(Classifier):
             for i in range(self.args.n_classes):
                 class_indices = np.where(encoded_Y[:, i] == self.args.T_max)[0]
                 if len(class_indices) > min_count:
-                    selected_indices = self.rng.choice(class_indices, size=min_count, replace=False)
+                    selected_indices = self.np_rng.choice(class_indices, size=min_count, replace=False)
                     unselected_indices = np.setdiff1d(class_indices, selected_indices)
                     label_probs[selected_indices, i] = 1.0
                     label_probs[unselected_indices, i] = 0.0
@@ -103,12 +103,12 @@ class MultiOutputTM(Classifier):
             min_count = min(len(pos_indices), len(neg_indices))
 
             if len(pos_indices) > min_count:
-                selected = self.rng.choice(pos_indices, size=min_count, replace=False)
+                selected = self.np_rng.choice(pos_indices, size=min_count, replace=False)
                 unselected = np.setdiff1d(pos_indices, selected)
                 label_probs[unselected, c] = 0.0
 
             if len(neg_indices) > min_count:
-                selected = self.rng.choice(neg_indices, size=min_count, replace=False)
+                selected = self.np_rng.choice(neg_indices, size=min_count, replace=False)
                 unselected = np.setdiff1d(neg_indices, selected)
                 label_probs[unselected, c] = 0.0
 
@@ -151,12 +151,12 @@ class BinaryTM(Classifier):
             min_count = min(len(pos_indices), len(neg_indices))
 
             if len(pos_indices) > min_count:
-                selected = self.rng.choice(pos_indices, size=min_count, replace=False)
+                selected = self.np_rng.choice(pos_indices, size=min_count, replace=False)
                 unselected = np.setdiff1d(pos_indices, selected)
                 label_probs[unselected, 0] = 0.0
 
             if len(neg_indices) > min_count:
-                selected = self.rng.choice(neg_indices, size=min_count, replace=False)
+                selected = self.np_rng.choice(neg_indices, size=min_count, replace=False)
                 unselected = np.setdiff1d(neg_indices, selected)
                 label_probs[unselected, 0] = 0.0
 

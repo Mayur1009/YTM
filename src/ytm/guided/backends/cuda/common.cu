@@ -58,7 +58,13 @@ typedef unsigned int uint;
 typedef signed char int8_t;
 typedef unsigned long long ull;
 
-__device__ inline ull hash_combine(ull a, ull b) { return a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)); }
+__device__ inline ull mix64(ull x) {
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+__device__ inline ull hash_combine(ull a, ull b) { return a ^ mix64(b + 0x9e3779b97f4a7c15ULL); }
 
 __device__ inline ull rng_hash(ull seed, ull a, ull b, ull c) {
     ull k = hash_combine(seed, a);
@@ -69,9 +75,7 @@ __device__ inline ull rng_hash(ull seed, ull a, ull b, ull c) {
 
 __device__ inline float rand_uniform(ull key, uint* counter) {
     ull x = key ^ (ull)((*counter)++);
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-    x = x ^ (x >> 31);
+    x = mix64(x);
     return (float)(x >> 32) * 0x1p-32f;
 }
 

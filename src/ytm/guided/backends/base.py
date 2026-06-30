@@ -2,6 +2,7 @@ from typing import Any
 from dataclasses import dataclass
 import abc
 import numpy as np
+from tqdm import tqdm
 from ..args import TMArgs
 
 @dataclass
@@ -26,6 +27,17 @@ class PackedClauses:
 
 PROB_FN_MAP = {"softmax": 0, "sigmoid": 1}
 LOSS_FN_MAP = {"ce": 0, "bce": 1}
+
+
+def tqdm_bar(iter, **kwargs):
+    args = dict(
+        leave=False,
+        dynamic_ncols=True,
+        bar_format="{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+    )
+    for k, v in kwargs.items():
+        args[k] = v
+    return tqdm(iter, **args)
 
 
 class BaseDevice(abc.ABC):

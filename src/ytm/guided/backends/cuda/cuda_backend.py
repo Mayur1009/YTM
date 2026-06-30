@@ -3,8 +3,7 @@ import warnings
 
 import numpy as np
 import cupy as cp
-from tqdm import tqdm
-from ..base import BaseDevice, PackedClauses, PROB_FN_MAP, LOSS_FN_MAP
+from ..base import BaseDevice, PackedClauses, PROB_FN_MAP, LOSS_FN_MAP, tqdm_bar
 
 
 class PackedClausesCUDA(PackedClauses):
@@ -199,14 +198,14 @@ class CUDADevice(BaseDevice):
         running_loss = 0.0
         sample_count = 0
 
-        for i in tqdm(range(0, N, batch_size), desc="Fit batch", leave=False, dynamic_ncols=True):
+        for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
             encoded_Y_batch = cp.asarray(encoded_Y[i:batch_end], dtype=np.float32)
             label_probs_batch = cp.asarray(label_probs[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
-            pbar = tqdm(range(bs), desc="Sample", leave=False, dynamic_ncols=True)
+            pbar = tqdm_bar(range(bs), desc="Sample")
             for e in pbar:
                 self.k_pack_clauses(
                     *self.kconf_clauses,
@@ -315,7 +314,7 @@ class CUDADevice(BaseDevice):
         class_sums = cp.zeros((N, self.args.n_classes), dtype=np.float32)
         self.pack_clauses()
 
-        for i in tqdm(range(0, N, batch_size), desc="Infer batch", leave=False, dynamic_ncols=True):
+        for i in tqdm_bar(range(0, N, batch_size), desc="Infer batch"):
             batch_end = min(i + batch_size, N)
             bs = batch_end - i
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
@@ -355,7 +354,7 @@ class CUDADevice(BaseDevice):
         clause_outputs = np.zeros((N, self.total_clauses), dtype=np.int8)
         self.pack_clauses()
 
-        for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
+        for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
             batch_end = min(i + batch_size, N)
             bs = batch_end - i
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
@@ -386,7 +385,7 @@ class CUDADevice(BaseDevice):
         patch_output = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
         self.pack_clauses()
 
-        for i in tqdm(range(0, N, batch_size), desc="Transform batch", leave=False, dynamic_ncols=True):
+        for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
             batch_end = min(i + batch_size, N)
             batch_X = cp.asarray(X[i:batch_end], dtype=np.int32)
             bs = batch_end - i
