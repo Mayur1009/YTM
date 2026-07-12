@@ -60,6 +60,53 @@ def _():
     - This probability takes into account the probability of all the classes.
     - Use it to update clauses as well.
 
+    ### Refined Understanding
+
+    Per-sample pipeline (both schemes):
+
+    $$\text{votes}[c] \xrightarrow{a} \text{prob}[c] \xrightarrow{} \{\text{weight\_grad},\ \text{ta\_gate}\} \xrightarrow{} \text{update}$$
+
+    $a$ must map votes to $[0,1]$ per class — softmax or sigmoid. This ensures $|y - \text{prob}| \in [0,1]$, making it a valid gate probability.
+
+    **Decoupled update signals:**
+
+    | Signal | Formula | Used for |
+    |---|---|---|
+    | $\text{weight\_grad}[c]$ | $\partial \mathcal{L} / \partial \text{logit}_c$ | $w \mathrel{+}= \eta \cdot \text{weight\_grad}[c] \cdot a_j$ |
+    | $\text{ta\_gate}[c]$ | $1 - \exp(-|y[c] - \text{prob}[c]|)$ | TA feedback gate probability |
+
+    For CE+softmax and BCE+sigmoid: $\text{weight\_grad} = y - \text{prob}$ (simplified gradient) = output error — the two signals coincide. For other losses they diverge.
+
+    Using $1 - \exp(-|y - \text{prob}|)$ for the TA gate (rather than the true gradient) avoids Jacobian-induced vanishing — the true gradient can go to zero at saturation even when the model is confidently wrong. Output error stays informative.
+
+    **Generalization:** this decoupling removes the hard requirement that the loss gradient be in $[0,1]$, enabling other loss functions (MSE, MAE, etc.) for weight updates while keeping the TA gate valid. Normalizing $y \in [0,1]$ is still recommended for gate informativeness, not correctness.
+
+    **Role of $T$:** vestigial in guided — votes are normalized by $n_{\text{clauses}}$ before $a$, not clipped by $T$. Convergence governed by gradient $\to 0$ as $\text{prob} \to y$. $\eta$ is the primary learning rate control.
+
+    ### Motivation for $1 - e^{-x}$ as Gate Function
+
+    Each TA is a Markov chain on states $\{0,\ldots,N-1\}$. In a **continuous-time Markov chain (CTMC)**, a state is held for a random duration before transitioning. The holding time follows an exponential distribution with rate $\lambda$. The probability of at least one transition within time $t$ is:
+
+    $$P(\text{transition before } t) = 1 - e^{-\lambda t}$$
+
+    $\lambda$ is a **rate** (transitions per unit time), not a probability. Setting $\lambda = |y - \text{prob}|$ (output error as urgency rate) and $t = 1$ (one sample = one time unit):
+
+    $$P(\text{TA transitions this sample}) = 1 - e^{-|y - \text{prob}|}$$
+
+    | Error $\lambda$ | Gate probability |
+    |---|---|
+    | 0 (perfect) | 0 — TA frozen |
+    | 0.5 | 0.39 |
+    | 1.0 | 0.63 |
+    | 2.0 | 0.86 |
+    | $\infty$ | 1.0 — always transitions |
+
+    **Why this is the right framing:** $|y - \text{prob}|$ was previously used directly as a probability — this only worked for CE+softmax because $|y - \text{prob}| \leq 1$ by coincidence. The CTMC view clarifies it is actually a rate. Converting rate to probability via $1 - e^{-\lambda}$ is principled, extends naturally to any loss where $\lambda$ can exceed 1, and preserves relative information ($\lambda = 2$ gives higher probability than $\lambda = 1$ rather than both being clipped to 1).
+
+    **Convergence:** as $\text{prob} \to y$, rate $\to 0$, gate $\to 0$ — TAs stop moving. Analogous to the discrete T-mechanism, but governed by prediction error rate rather than vote-to-threshold distance.
+
+    **RL connection:** in policy gradient RL, the advantage $A(s,a) = R - V(s)$ scales policy updates. Here $|y - \text{prob}|$ plays the role of advantage. For discrete Bernoulli TA updates (flip or don't), converting advantage to a transition probability via a Poisson arrival model gives the same $1 - e^{-|A|}$ formula — update events arrive at rate $\lambda = |A|$, and the probability that at least one fires per step is $1 - e^{-\lambda}$.
+
     """)
     return
 

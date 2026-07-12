@@ -3,7 +3,8 @@ import warnings
 
 import numpy as np
 import cupy as cp
-from ..base import BaseDevice, PackedClauses, PROB_FN_MAP, LOSS_FN_MAP, tqdm_bar
+from cupyx.scipy.special import expit as cp_expit
+from ..base import BaseDevice, PackedClauses, tqdm_bar
 
 
 class PackedClausesCUDA(PackedClauses):
@@ -61,8 +62,6 @@ class CUDADevice(BaseDevice):
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
-#define PROB_FN {PROB_FN_MAP[self.args.prob_fn]}
-#define LOSS_FN {LOSS_FN_MAP[self.args.loss_fn]}
 """
         return header
 
@@ -88,8 +87,6 @@ class CUDADevice(BaseDevice):
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
             options=("--use_fast_math",),
         )
-        self.k_calc_prob = update_mod.get_function("calc_prob")
-        self.k_calc_loss = update_mod.get_function("calc_loss")
         self.k_update_clauses = update_mod.get_function("update_clauses")
         self.k_update_weights = update_mod.get_function("update_weights")
 
@@ -168,6 +165,55 @@ class CUDADevice(BaseDevice):
         self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
+        self.class_weights_gpu = cp.asarray(self.args.class_weights, dtype=cp.float64)
+
+        _act = self.args.crit.split("_")[0]
+        if _act == "softmax":
+            def _softmax(v):
+                v_stable = v - v.max(axis=-1, keepdims=True)
+                ev = cp.exp(v_stable)
+                return ev / ev.sum(axis=-1, keepdims=True)
+            self.act_fn = _softmax
+        elif _act == "sigmoid":
+            self.act_fn = cp_expit
+        else:
+            self.act_fn = lambda v: v
+
+        if self.args.crit == "softmax_ce":
+            def _loss_fn(v, y, w, grad):
+                v_stable = v - v.max()
+                ev = cp.exp(v_stable)
+                act = ev / ev.sum()
+                grad[:] = (w * (y - act)).astype(cp.float32)
+                return float(-cp.sum(w * y * (v_stable - cp.log(ev.sum()))))
+        elif self.args.crit == "sigmoid_bce":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * (y - act)).astype(cp.float32)
+                return float(-cp.sum(w * (y * cp.log(act + 1e-7) + (1 - y) * cp.log(1 - act + 1e-7))))
+        elif self.args.crit == "sigmoid_mse":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (2 * w * (y - act) * act * (1 - act)).astype(cp.float32)
+                return float(cp.sum(w * (y - act) ** 2))
+        elif self.args.crit == "sigmoid_mae":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * cp.sign(y - act) * act * (1 - act)).astype(cp.float32)
+                return float(cp.sum(w * cp.abs(y - act)))
+        elif self.args.crit == "identity_mse":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (2 * w * (y - act)).astype(cp.float32)
+                return float(cp.sum(w * (y - act) ** 2))
+        elif self.args.crit == "identity_mae":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * cp.sign(y - act)).astype(cp.float32)
+                return float(cp.sum(w * cp.abs(y - act)))
+        else:
+            raise NotImplementedError(f"crit '{self.args.crit}' not implemented")
+        self.loss_fn = _loss_fn
 
     def set_threads(self, n_threads: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
@@ -193,7 +239,7 @@ class CUDADevice(BaseDevice):
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.zeros(self.args.n_classes, dtype=np.float32)
-        prob = cp.empty(self.args.n_classes, dtype=np.float32)
+        grad = cp.empty(self.args.n_classes, dtype=np.float32)
         loss_per_sample = cp.zeros(N, dtype=np.float32)
         running_loss = 0.0
         sample_count = 0
@@ -242,16 +288,9 @@ class CUDADevice(BaseDevice):
                     *self.kconf_classes,
                     (selected_patch_ids, self.clause_weights, votes),
                 )
-                self.k_calc_prob(
-                    (1, 1, 1),
-                    (1, 1, 1),
-                    (votes, prob),
-                )
-                self.k_calc_loss(
-                    (1, 1, 1),
-                    (1, 1, 1),
-                    (prob, encoded_Y_batch, np.int32(e), prob, loss_per_sample[i + e:i + e + 1]),
-                )
+                v = (votes / self.args.n_clauses).astype(cp.float64)
+                y = (encoded_Y_batch[e] > 0).astype(cp.float64)
+                loss_per_sample[i + e] = self.loss_fn(v, y, self.class_weights_gpu, grad)
                 running_loss += float(loss_per_sample[i + e])
                 sample_count += 1
                 pbar.set_postfix(loss=f"{running_loss / sample_count:.4f}")
@@ -265,7 +304,7 @@ class CUDADevice(BaseDevice):
                         X_batch,
                         encoded_Y_batch,
                         np.int32(e),
-                        prob,
+                        grad,
                         label_probs_batch,
                         self.ta_states,
                         self.clause_weights,
@@ -279,7 +318,7 @@ class CUDADevice(BaseDevice):
                     (
                         selected_patch_ids,
                         clause_drop_mask_gpu,
-                        prob,
+                        grad,
                         np.float32(self.args.lr),
                         self.clause_weights,
                     ),
@@ -344,7 +383,8 @@ class CUDADevice(BaseDevice):
                 ),
             )
 
-        return class_sums.get()
+        v = class_sums / self.args.n_clauses
+        return self.act_fn(v).astype(cp.float32).get()
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

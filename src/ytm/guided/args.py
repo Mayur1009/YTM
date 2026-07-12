@@ -18,8 +18,8 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     lr: float = 0.1
-    loss_fn: str = "ce"
-    prob_fn: str = "softmax"
+    crit: str = "softmax_ce"
+    class_weights: np.ndarray | None = None
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
@@ -55,11 +55,16 @@ class TMArgs:
                 "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
             )
 
-        if self.prob_fn not in ("softmax", "sigmoid"):
-            raise ValueError(f"prob_fn must be 'softmax' or 'sigmoid', got '{self.prob_fn}'")
+        _valid_crits = {"softmax_ce", "sigmoid_bce", "sigmoid_mse", "sigmoid_mae", "identity_mse", "identity_mae"}
+        if self.crit not in _valid_crits:
+            raise ValueError(f"crit must be one of {_valid_crits}, got '{self.crit}'")
 
-        if self.loss_fn not in ("ce", "bce"):
-            raise ValueError(f"loss_fn must be 'ce' or 'bce', got '{self.loss_fn}'")
+        if self.class_weights is None:
+            self.class_weights = np.ones(self.n_classes, dtype=np.float64)
+        else:
+            self.class_weights = np.asarray(self.class_weights, dtype=np.float64)
+            if self.class_weights.shape != (self.n_classes,):
+                raise ValueError(f"class_weights must have shape ({self.n_classes},), got {self.class_weights.shape}")
 
         self.n_threads = max(1, self.n_threads)
 
@@ -115,8 +120,8 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     q: float
     lr: float
-    loss_fn: str
-    prob_fn: str
+    crit: str
+    class_weights: np.ndarray | None
     weighted: bool
     max_weight: float
     coalesced: bool

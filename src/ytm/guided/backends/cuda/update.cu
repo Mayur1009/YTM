@@ -136,15 +136,15 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
 __device__ inline void update_clause_class(const warp_t& warp, int lane, ull class_id, ull clause, ull rel_clause,
                                            int clause_output, int patch_idx_y, int patch_idx_x, int clause_density,
                                            uint* ta_states, const float* clause_weights, const int* Xe,
-                                           const float* encoded_Y_e, const float* prob, float label_prob_c,
+                                           const float* encoded_Y_e, const float* grad, float label_prob_c,
                                            const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced,
                                            ull rng_k, uint* rng_counter) {
-    float update_prob = fabsf(prob[class_id]);
-    int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
+    float update_prob = 1.0f - expf(-fabsf(grad[class_id]));
+    int target = (grad[class_id] > 0.0f) - (grad[class_id] < 0.0f);
     bool skip = false;
     if (lane == 0) {
         skip = (rand_uniform(rng_k, rng_counter) > label_prob_c || target == 0 ||
-                prob[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > update_prob);
+                grad[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > update_prob);
     }
 
     if (warp.any(skip))
@@ -177,7 +177,7 @@ __device__ inline void update_clause_class(const warp_t& warp, int lane, ull cla
 }
 
 extern "C" __global__ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask,
-                                          const float* prob, const float lr, float* clause_weights) {
+                                          const float* grad, const float lr, float* clause_weights) {
     ull tid = threadIdx.x + (ull)blockIdx.x * blockDim.x;
     ull stride = (ull)blockDim.x * gridDim.x;
 
@@ -189,59 +189,19 @@ extern "C" __global__ void update_weights(const int* selected_patch_ids, const i
 
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-        clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * prob[class_id];
+        clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * prob[class_id];
+            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
         }
 #endif
-    }
-}
-
-extern "C" __global__ void calc_prob(const float* votes, float* prob) {
-    if (threadIdx.x != 0 || blockIdx.x != 0)
-        return;
-#if PROB_FN == 0 /* softmax */
-    float vmax = -INFINITY;
-    for (int c = 0; c < CLASSES; c++) {
-        prob[c] = votes[c] / (float)CLAUSES_PER_CLASS;
-        if (prob[c] > vmax) vmax = prob[c];
-    }
-    float sum = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        prob[c] = expf(prob[c] - vmax);
-        sum += prob[c];
-    }
-    for (int c = 0; c < CLASSES; c++) {
-        prob[c] /= sum;
-    }
-#else /* sigmoid */
-    for (int c = 0; c < CLASSES; c++) {
-        float v = votes[c] / (float)CLAUSES_PER_CLASS;
-        prob[c] = 1.0f / (1.0f + expf(-v));
-    }
-#endif
-}
-
-extern "C" __global__ void calc_loss(const float* prob, const float* encoded_Y, const int e, float* grad, float* loss) {
-    if (threadIdx.x != 0 || blockIdx.x != 0)
-        return;
-    *loss = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        float y = (encoded_Y[(ull)e * CLASSES + c] > 0.0f) ? 1.0f : 0.0f;
-#if LOSS_FN == 0 /* ce */
-        *loss -= y * logf(prob[c] + 1e-7f);
-#else /* bce */
-        *loss -= y * logf(prob[c] + 1e-7f) + (1.0f - y) * logf(1.0f - prob[c] + 1e-7f);
-#endif
-        grad[c] = y - prob[c];
     }
 }
 
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
                                           const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,
-                                          const int e, const float* prob, const float* label_probs,
+                                          const int e, const float* grad, const float* label_probs,
                                           uint* global_ta_states, const float* clause_weights, const int* feat_mins,
                                           const int* literal_offsets, int8_t* is_clause_synced) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -278,12 +238,12 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                            ta_states, clause_weights, Xe, encoded_Y_e, prob, label_probs_e[class_id], feat_mins,
+                            ta_states, clause_weights, Xe, encoded_Y_e, grad, label_probs_e[class_id], feat_mins,
                             literal_offsets, is_clause_synced, rng_k, &rng_counter);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                                ta_states, clause_weights, Xe, encoded_Y_e, prob, label_probs_e[class_id], feat_mins,
+                                ta_states, clause_weights, Xe, encoded_Y_e, grad, label_probs_e[class_id], feat_mins,
                                 literal_offsets, is_clause_synced, rng_k, &rng_counter);
         }
 #endif

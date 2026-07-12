@@ -24,8 +24,7 @@ class Classifier(BaseTM):
 
 class MultiClassTM(Classifier):
     def __init__(self, n_clauses: int, T: float, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
-        opt_args["prob_fn"] = "softmax"
-        opt_args["loss_fn"] = "ce"
+        opt_args.setdefault("crit", "softmax_ce")
         super().__init__(n_clauses, T, s, dim, n_classes, **opt_args)
 
     def fit(
@@ -68,8 +67,7 @@ class MultiClassTM(Classifier):
 
 class MultiOutputTM(Classifier):
     def __init__(self, n_clauses: int, T: float, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
-        opt_args["prob_fn"] = "sigmoid"
-        opt_args["loss_fn"] = "bce"
+        opt_args.setdefault("crit", "sigmoid_bce")
         super().__init__(n_clauses, T, s, dim, n_classes, **opt_args)
 
     def fit(
@@ -117,8 +115,7 @@ class MultiOutputTM(Classifier):
 
 class BinaryTM(Classifier):
     def __init__(self, n_clauses: int, T: float, s: float, dim: tuple, **opt_args: Unpack[T_args]):
-        opt_args["prob_fn"] = "sigmoid"
-        opt_args["loss_fn"] = "bce"
+        opt_args.setdefault("crit", "sigmoid_bce")
         super().__init__(n_clauses, T, s, dim, 1, **opt_args)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:

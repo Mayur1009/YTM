@@ -9,7 +9,8 @@ from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_u
 
 import numpy as np
 
-from ..base import BaseDevice, PackedClauses, PROB_FN_MAP, LOSS_FN_MAP, tqdm_bar
+from scipy.special import softmax, expit, log_softmax
+from ..base import BaseDevice, PackedClauses, tqdm_bar
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -128,8 +129,6 @@ class CPUDevice(BaseDevice):
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
-#define PROB_FN {PROB_FN_MAP[self.args.prob_fn]}
-#define LOSS_FN {LOSS_FN_MAP[self.args.loss_fn]}
 """
         return header
 
@@ -206,6 +205,48 @@ class CPUDevice(BaseDevice):
 
         self.set_threads(self.args.n_threads)
 
+        _act = self.args.crit.split("_")[0]
+        if _act == "softmax":
+            self.act_fn = lambda v: softmax(v, axis=-1)
+        elif _act == "sigmoid":
+            self.act_fn = expit
+        else:
+            self.act_fn = lambda v: v
+
+        if self.args.crit == "softmax_ce":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * (y - act)).astype(np.float32)
+                return float(-np.sum(w * y * log_softmax(v)))
+        elif self.args.crit == "sigmoid_bce":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * (y - act)).astype(np.float32)
+                return float(-np.sum(w * (y * np.log(act + 1e-7) + (1 - y) * np.log(1 - act + 1e-7))))
+        elif self.args.crit == "sigmoid_mse":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (2 * w * (y - act) * act * (1 - act)).astype(np.float32)
+                return float(np.sum(w * (y - act) ** 2))
+        elif self.args.crit == "sigmoid_mae":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * np.sign(y - act) * act * (1 - act)).astype(np.float32)
+                return float(np.sum(w * np.abs(y - act)))
+        elif self.args.crit == "identity_mse":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (2 * w * (y - act)).astype(np.float32)
+                return float(np.sum(w * (y - act) ** 2))
+        elif self.args.crit == "identity_mae":
+            def _loss_fn(v, y, w, grad):
+                act = self.act_fn(v)
+                grad[:] = (w * np.sign(y - act)).astype(np.float32)
+                return float(np.sum(w * np.abs(y - act)))
+        else:
+            raise NotImplementedError(f"crit '{self.args.crit}' not implemented")
+        self.loss_fn = _loss_fn
+
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(n))
 
@@ -232,8 +273,7 @@ class CPUDevice(BaseDevice):
 
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
-        prob = np.empty(self.args.n_classes, dtype=np.float32)
-        loss_val = np.zeros(1, dtype=np.float32)
+        grad = np.empty(self.args.n_classes, dtype=np.float32)
         loss_per_sample = np.zeros(N, dtype=np.float32)
         running_loss = 0.0
 
@@ -243,8 +283,7 @@ class CPUDevice(BaseDevice):
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
-        p_prob = prob.ctypes.data_as(float_p)
-        p_loss = loss_val.ctypes.data_as(float_p)
+        p_grad = grad.ctypes.data_as(float_p)
 
         pbar = tqdm_bar(range(N), desc="Fit")
         for e in pbar:
@@ -278,19 +317,10 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            self.lib.calc_prob(
-                p_votes,
-                p_prob,
-            )
-            self.lib.calc_loss(
-                p_prob,
-                p_encoded_Y,
-                c_int(e),
-                p_prob,
-                p_loss,
-            )
-            loss_per_sample[e] = loss_val[0]
-            running_loss += loss_val[0]
+            v = (votes / self.args.n_clauses).astype(np.float64)
+            y = (encoded_Y[e] > 0).astype(np.float64)
+            loss_per_sample[e] = self.loss_fn(v, y, self.args.class_weights, grad)
+            running_loss += loss_per_sample[e]
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
             self.lib.update_clauses(
                 c_uint64(self.args.seed),
@@ -300,7 +330,7 @@ class CPUDevice(BaseDevice):
                 p_X,
                 p_encoded_Y,
                 c_int(e),
-                p_prob,
+                p_grad,
                 p_label_probs,
                 self.p_ta_states,
                 self.p_clause_weights,
@@ -311,7 +341,7 @@ class CPUDevice(BaseDevice):
             self.lib.update_weights(
                 p_selected_pids,
                 p_clause_drop_mask,
-                p_prob,
+                p_grad,
                 c_float(self.args.lr),
                 self.p_clause_weights,
             )
@@ -354,7 +384,8 @@ class CPUDevice(BaseDevice):
                 class_sums.ctypes.data_as(float_p),
             )
 
-        return class_sums
+        v = class_sums / self.args.n_clauses
+        return self.act_fn(v).astype(np.float32)
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

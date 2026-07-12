@@ -25,10 +25,6 @@ class PackedClauses:
         )
 
 
-PROB_FN_MAP = {"softmax": 0, "sigmoid": 1}
-LOSS_FN_MAP = {"ce": 0, "bce": 1}
-
-
 def tqdm_bar(iter, **kwargs):
     args = dict(
         leave=False,
