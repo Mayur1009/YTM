@@ -8,7 +8,6 @@ import importlib.util
 @dataclass()
 class TMArgs:
     n_clauses: int
-    T: float | tuple[float, float]
     s: float
     dim: tuple[int, int, int]
     n_classes: int
@@ -70,11 +69,6 @@ class TMArgs:
         self.n_threads = max(1, self.n_threads)
 
         self.n_clauses = max(1, int(self.n_clauses))
-
-        if isinstance(self.T, (tuple, list)):
-            self.T_min, self.T_max = map(float, self.T)
-        else:
-            self.T_min, self.T_max = map(float, (-self.T, self.T))
 
         self.s = max(1.0, float(self.s))
 

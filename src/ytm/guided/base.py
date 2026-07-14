@@ -16,13 +16,12 @@ class BaseTM:
     def __init__(
         self,
         n_clauses: int,
-        T: float | tuple[float, float],
         s: float,
         dim: tuple[int, int, int],
         n_classes: int,
         **opt_args: Unpack[T_args],
     ):
-        self.args = TMArgs(n_clauses, T, s, dim, n_classes, **opt_args)
+        self.args = TMArgs(n_clauses, s, dim, n_classes, **opt_args)
         self.np_rng = np.random.default_rng(self.args.seed)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
 
@@ -56,27 +55,24 @@ class BaseTM:
         Y = Y[iota]
 
         encoded_Y = self._encode_Y(Y)
-        label_probs = np.where(encoded_Y == self.args.T_max, 1.0,
-                               self.args.q / max(1, self.args.n_classes - 1)).astype(np.float32)
+        label_probs = self._calc_label_probs(encoded_Y)
 
         loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs, lr=lr)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
         return loss
 
-    def score(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
-        class_sums = self.dev.infer(X, batch_size)
-        if clip_class_sums:
-            class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
-        return class_sums
+    def score(self, X: np.ndarray, batch_size: int = -1):
+        return self.dev.infer(X, batch_size)
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         patch_outputs = self.dev.transform_patchwise(X, batch_size)
         return patch_outputs
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        encoded_Y = np.copy(Y).astype(np.float32) * self.args.T_max
-        encoded_Y[encoded_Y == 0] = self.args.T_min
-        return encoded_Y
+        raise NotImplementedError
+
+    def _calc_label_probs(self, encoded_Y: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         if self.args.coalesced:
