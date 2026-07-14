@@ -213,15 +213,19 @@ class CPUDevice(BaseDevice):
         else:
             self.act_fn = lambda v: v
 
+        _fg = self.args.focal_gamma
         if self.args.crit == "softmax_ce":
             def _loss_fn(v, y, w, grad):
                 act = self.act_fn(v)
-                grad[:] = (w * (y - act)).astype(np.float32)
-                return float(-np.sum(w * y * log_softmax(v)))
+                fw = (1.0 - float(np.dot(y, act))) ** _fg
+                grad[:] = (w * fw * (y - act)).astype(np.float32)
+                return float(-np.sum(w * y * log_softmax(v))) * fw
         elif self.args.crit == "sigmoid_bce":
             def _loss_fn(v, y, w, grad):
                 act = self.act_fn(v)
-                grad[:] = (w * (y - act)).astype(np.float32)
+                p_t = y * act + (1.0 - y) * (1.0 - act)
+                fw = (1.0 - p_t) ** _fg
+                grad[:] = (w * fw * (y - act)).astype(np.float32)
                 return float(-np.sum(w * (y * np.log(act + 1e-7) + (1 - y) * np.log(1 - act + 1e-7))))
         elif self.args.crit == "sigmoid_mse":
             def _loss_fn(v, y, w, grad):

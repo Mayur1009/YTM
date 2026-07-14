@@ -18,6 +18,7 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     lr: float = 0.1
+    focal_gamma: float = 0.0
     crit: str = "softmax_ce"
     class_weights: np.ndarray | None = None
     weighted: bool = True
@@ -120,6 +121,7 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     q: float
     lr: float
+    focal_gamma: float
     crit: str
     class_weights: np.ndarray | None
     weighted: bool

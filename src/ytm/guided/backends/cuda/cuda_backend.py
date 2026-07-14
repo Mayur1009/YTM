@@ -179,17 +179,21 @@ class CUDADevice(BaseDevice):
         else:
             self.act_fn = lambda v: v
 
+        _fg = self.args.focal_gamma
         if self.args.crit == "softmax_ce":
             def _loss_fn(v, y, w, grad):
                 v_stable = v - v.max()
                 ev = cp.exp(v_stable)
                 act = ev / ev.sum()
-                grad[:] = (w * (y - act)).astype(cp.float32)
-                return float(-cp.sum(w * y * (v_stable - cp.log(ev.sum()))))
+                fw = (1.0 - float(cp.dot(y, act))) ** _fg
+                grad[:] = (w * fw * (y - act)).astype(cp.float32)
+                return float(-cp.sum(w * y * (v_stable - cp.log(ev.sum())))) * fw
         elif self.args.crit == "sigmoid_bce":
             def _loss_fn(v, y, w, grad):
                 act = self.act_fn(v)
-                grad[:] = (w * (y - act)).astype(cp.float32)
+                p_t = y * act + (1.0 - y) * (1.0 - act)
+                fw = (1.0 - p_t) ** _fg
+                grad[:] = (w * fw * (y - act)).astype(cp.float32)
                 return float(-cp.sum(w * (y * cp.log(act + 1e-7) + (1 - y) * cp.log(1 - act + 1e-7))))
         elif self.args.crit == "sigmoid_mse":
             def _loss_fn(v, y, w, grad):
