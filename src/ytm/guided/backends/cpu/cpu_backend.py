@@ -261,7 +261,7 @@ class CPUDevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, lr: float | None = None):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -275,6 +275,7 @@ class CPUDevice(BaseDevice):
         encoded_Y = encoded_Y.astype(np.float32)
         label_probs = label_probs.astype(np.float32)
 
+        _lr = lr if lr is not None else self.args.lr
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         grad = np.empty(self.args.n_classes, dtype=np.float32)
@@ -346,7 +347,7 @@ class CPUDevice(BaseDevice):
                 p_selected_pids,
                 p_clause_drop_mask,
                 p_grad,
-                c_float(self.args.lr),
+                c_float(_lr),
                 self.p_clause_weights,
             )
         return loss_per_sample

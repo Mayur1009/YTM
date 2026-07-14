@@ -228,10 +228,12 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, lr: float | None = None):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
+
+        _lr = lr if lr is not None else self.args.lr
 
         # Clause dropout mask (same for entire epoch)
         if clause_drop_p > 0.0:
@@ -323,7 +325,7 @@ class CUDADevice(BaseDevice):
                         selected_patch_ids,
                         clause_drop_mask_gpu,
                         grad,
-                        np.float32(self.args.lr),
+                        np.float32(_lr),
                         self.clause_weights,
                     ),
                 )

@@ -35,6 +35,7 @@ class MultiClassTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         label_sampling: bool = False,
+        lr: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
@@ -43,7 +44,7 @@ class MultiClassTM(Classifier):
         for i in range(self.args.n_classes):
             one_hot_Y[:, i] = np.where(Y == i, 1, 0)
 
-        return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, label_sampling)
+        return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, label_sampling, lr=lr)
 
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.score(X, batch_size, clip_class_sums)
@@ -78,10 +79,11 @@ class MultiOutputTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         label_sampling: bool = False,
+        lr: float | None = None,
     ):
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, Y, shuffle, clause_drop_p, batch_size, label_sampling)
+        return self._fit(X, Y, shuffle, clause_drop_p, batch_size, label_sampling, lr=lr)
 
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.score(X, batch_size, clip_class_sums)
@@ -129,11 +131,12 @@ class BinaryTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         label_sampling: bool = False,
+        lr: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, label_sampling)
+        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, label_sampling, lr=lr)
 
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False):
         class_sums = self.score(X, batch_size, clip_class_sums)
