@@ -264,6 +264,45 @@ class CPUDevice(BaseDevice):
                     act = self.act_fn(v)
                     grad[:] = (lw * np.sign(y - act) * self.dact_fn(act)).astype(np.float32)
                     return float(np.sum(lw * np.abs(y - act)))
+            elif self.args.loss_fn == "huber":
+                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
+                def _loss_fn(v, y, grad, **kwargs):
+                    act = self.act_fn(v)
+                    r = y - act
+                    grad[:] = (lw * np.clip(r, -delta, delta) * self.dact_fn(act)).astype(np.float32)
+                    huber = np.where(np.abs(r) <= delta, 0.5 * r ** 2, delta * (np.abs(r) - 0.5 * delta))
+                    return float(np.sum(lw * huber))
+            elif self.args.loss_fn == "tversky":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
+                beta  = self.args.loss_fn_kwargs.get("beta",  0.5)
+                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
+                eps   = self.args.loss_fn_kwargs.get("eps",   1e-6)
+                if self.args.act_fn == "sigmoid":
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        tp = float(np.dot(lw * y, act))
+                        fp = float(np.dot(lw * (1.0 - y), act))
+                        fn = float(np.dot(lw * y, 1.0 - act))
+                        N = tp + eps
+                        D = tp + alpha * fp + beta * fn + eps
+                        T = N / D
+                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
+                        coeff = alpha + y * (1.0 - alpha - beta)
+                        grad[:] = (fw * lw * (y * D - N * coeff) / D ** 2 * act * (1.0 - act)).astype(np.float32)
+                        return float((1.0 - T) ** gamma)
+                else:
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        tp = float(np.dot(lw * y, act))
+                        fp = float(np.dot(lw * (1.0 - y), act))
+                        fn = float(np.dot(lw * y, 1.0 - act))
+                        N = tp + eps
+                        D = tp + alpha * fp + beta * fn + eps
+                        T = N / D
+                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
+                        coeff = alpha + y * (1.0 - alpha - beta)
+                        grad[:] = (fw * lw * (y * D - N * coeff) / D ** 2 * self.dact_fn(act)).astype(np.float32)
+                        return float((1.0 - T) ** gamma)
             else:
                 raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
         self.loss_fn = _loss_fn

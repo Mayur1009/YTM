@@ -61,7 +61,7 @@ class TMArgs:
                 raise ValueError(f"act_fn must be one of {_valid_act_fns} or a callable, got '{self.act_fn}'")
 
         if not callable(self.loss_fn):
-            _valid_loss_fns = {"ce", "sce", "mse", "mae"}
+            _valid_loss_fns = {"ce", "sce", "mse", "mae", "huber", "tversky"}
             if self.loss_fn not in _valid_loss_fns:
                 raise ValueError(f"loss_fn must be one of {_valid_loss_fns} or a callable, got '{self.loss_fn}'")
 
