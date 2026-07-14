@@ -10,16 +10,16 @@ class Classifier(BaseTM):
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"
         return Y.astype(np.float32)
 
     def _calc_label_probs(self, encoded_Y: np.ndarray) -> np.ndarray:
-        return np.where(encoded_Y > 0, 1.0,
+        return np.where(encoded_Y > 0.5, 1.0,
                         self.args.q / max(1, self.args.n_classes - 1)).astype(np.float32)
 
 class MultiClassTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
-        opt_args.setdefault("crit", "softmax_ce")
+        opt_args.setdefault("act_fn", "softmax")
+        opt_args.setdefault("loss_fn", "ce")
         super().__init__(n_clauses, s, dim, n_classes, **opt_args)
 
     def fit(
@@ -48,8 +48,9 @@ class MultiClassTM(Classifier):
 
 class MultiOutputTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
-        opt_args.setdefault("crit", "sigmoid_bce")
-        super().__init__(n_clauses, T, s, dim, n_classes, **opt_args)
+        opt_args.setdefault("act_fn", "sigmoid")
+        opt_args.setdefault("loss_fn", "ce")
+        super().__init__(n_clauses, s, dim, n_classes, **opt_args)
 
     def fit(
         self,
@@ -72,7 +73,8 @@ class MultiOutputTM(Classifier):
 
 class BinaryTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: tuple, **opt_args: Unpack[T_args]):
-        opt_args.setdefault("crit", "sigmoid_bce")
+        opt_args.setdefault("act_fn", "sigmoid")
+        opt_args.setdefault("loss_fn", "ce")
         super().__init__(n_clauses, s, dim, 1, **opt_args)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
@@ -88,7 +90,6 @@ class BinaryTM(Classifier):
         lr: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
-        assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
         return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr=lr)
 

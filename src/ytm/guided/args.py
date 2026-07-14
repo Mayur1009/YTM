@@ -1,7 +1,7 @@
 import shutil
 import numpy as np
-from typing import Literal, TypedDict
-from dataclasses import dataclass
+from typing import Callable, Literal, TypedDict
+from dataclasses import dataclass, field
 import importlib.util
 
 
@@ -17,9 +17,9 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     lr: float = 0.1
-    focal_gamma: float = 0.0
-    crit: str = "softmax_ce"
-    class_weights: np.ndarray | None = None
+    act_fn: str | Callable[..., np.ndarray] = "softmax"
+    loss_fn: str | Callable[..., float] = "ce"
+    loss_fn_kwargs: dict = field(default_factory=dict)
     weighted: bool = True
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
@@ -55,16 +55,15 @@ class TMArgs:
                 "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
             )
 
-        _valid_crits = {"softmax_ce", "sigmoid_bce", "sigmoid_mse", "sigmoid_mae", "identity_mse", "identity_mae"}
-        if self.crit not in _valid_crits:
-            raise ValueError(f"crit must be one of {_valid_crits}, got '{self.crit}'")
+        if not callable(self.act_fn):
+            _valid_act_fns = {"softmax", "sigmoid", "identity"}
+            if self.act_fn not in _valid_act_fns:
+                raise ValueError(f"act_fn must be one of {_valid_act_fns} or a callable, got '{self.act_fn}'")
 
-        if self.class_weights is None:
-            self.class_weights = np.ones(self.n_classes, dtype=np.float64)
-        else:
-            self.class_weights = np.asarray(self.class_weights, dtype=np.float64)
-            if self.class_weights.shape != (self.n_classes,):
-                raise ValueError(f"class_weights must have shape ({self.n_classes},), got {self.class_weights.shape}")
+        if not callable(self.loss_fn):
+            _valid_loss_fns = {"ce", "sce", "mse", "mae"}
+            if self.loss_fn not in _valid_loss_fns:
+                raise ValueError(f"loss_fn must be one of {_valid_loss_fns} or a callable, got '{self.loss_fn}'")
 
         self.n_threads = max(1, self.n_threads)
 
@@ -115,9 +114,9 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     q: float
     lr: float
-    focal_gamma: float
-    crit: str
-    class_weights: np.ndarray | None
+    act_fn: str | Callable
+    loss_fn: str | Callable
+    loss_fn_kwargs: dict
     weighted: bool
     max_weight: float
     coalesced: bool

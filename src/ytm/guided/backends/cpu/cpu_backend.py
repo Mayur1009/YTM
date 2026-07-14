@@ -191,6 +191,83 @@ class CPUDevice(BaseDevice):
         self.p_feat_maxs = np.asarray(self.args.feat_maxs).ctypes.data_as(int32_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
 
+    def _init_act_fn(self):
+        if callable(self.args.act_fn):
+            self.act_fn = self.args.act_fn
+            self.dact_fn = lambda act: np.ones_like(act)
+        elif self.args.act_fn == "softmax":
+            self.act_fn = lambda v: softmax(v, axis=-1)
+            self.dact_fn = lambda act: np.ones_like(act)
+        elif self.args.act_fn == "sigmoid":
+            self.act_fn = expit
+            self.dact_fn = lambda act: act * (1.0 - act)
+        elif self.args.act_fn == "identity":
+            self.act_fn = lambda v: v
+            self.dact_fn = lambda act: np.ones_like(act)
+        else:
+            raise NotImplementedError(f"act_fn '{self.args.act_fn}' not implemented")
+
+    def _init_loss_fn(self):
+        if callable(self.args.loss_fn):
+            _fn = self.args.loss_fn
+            def _loss_fn(v, y, grad, **kwargs):
+                return float(_fn(v, y, grad, **kwargs))
+        else:
+            lw = np.asarray(
+                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
+                dtype=np.float64,
+            )
+            if self.args.loss_fn == "ce":
+                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
+                if self.args.act_fn == "softmax":
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        fw = (1.0 - float(np.dot(y, act))) ** gamma
+                        grad[:] = (lw * fw * (y - act)).astype(np.float32)
+                        return float(-np.sum(lw * y * log_softmax(v))) * fw
+                else:
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        p_t = y * act + (1.0 - y) * (1.0 - act)
+                        fw = (1.0 - p_t) ** gamma
+                        grad[:] = (lw * fw * (y - act)).astype(np.float32)
+                        return float(-np.sum(lw * fw * (y * np.log(act + 1e-7) + (1 - y) * np.log(1 - act + 1e-7))))
+            elif self.args.loss_fn == "sce":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
+                beta  = self.args.loss_fn_kwargs.get("beta",  1.0)
+                eps   = self.args.loss_fn_kwargs.get("eps",   1e-4)
+                if self.args.act_fn == "softmax":
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        logy = np.log(y + eps)
+                        A = float(np.dot(act, logy))
+                        grad[:] = (lw * (alpha * (y - act) + beta * act * (logy - A))).astype(np.float32)
+                        ce  = float(-np.sum(lw * y * log_softmax(v)))
+                        rce = float(-np.sum(lw * act * logy))
+                        return alpha * ce + beta * rce
+                else:
+                    def _loss_fn(v, y, grad, **kwargs):
+                        act = self.act_fn(v)
+                        bce_grad = y - act
+                        rce_grad = np.log((y + eps) / (1.0 - y + eps)) * act * (1.0 - act)
+                        grad[:] = (lw * (alpha * bce_grad + beta * rce_grad)).astype(np.float32)
+                        bce = float(-np.sum(lw * (y * np.log(act + eps) + (1 - y) * np.log(1 - act + eps))))
+                        rce = float(-np.sum(lw * (act * np.log(y + eps) + (1 - act) * np.log(1 - y + eps))))
+                        return alpha * bce + beta * rce
+            elif self.args.loss_fn == "mse":
+                def _loss_fn(v, y, grad, **kwargs):
+                    act = self.act_fn(v)
+                    grad[:] = (2 * lw * (y - act) * self.dact_fn(act)).astype(np.float32)
+                    return float(np.sum(lw * (y - act) ** 2))
+            elif self.args.loss_fn == "mae":
+                def _loss_fn(v, y, grad, **kwargs):
+                    act = self.act_fn(v)
+                    grad[:] = (lw * np.sign(y - act) * self.dact_fn(act)).astype(np.float32)
+                    return float(np.sum(lw * np.abs(y - act)))
+            else:
+                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+        self.loss_fn = _loss_fn
+
     def dev_init(self):
         self._select_compiler()
         self._openmp_flags()
@@ -200,54 +277,9 @@ class CPUDevice(BaseDevice):
         self._init_frozen_clauses()
         self._init_lib()
         self._init_pointers()
-
         self.set_threads(self.args.n_threads)
-
-        _act = self.args.crit.split("_")[0]
-        if _act == "softmax":
-            self.act_fn = lambda v: softmax(v, axis=-1)
-        elif _act == "sigmoid":
-            self.act_fn = expit
-        else:
-            self.act_fn = lambda v: v
-
-        _fg = self.args.focal_gamma
-        if self.args.crit == "softmax_ce":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                fw = (1.0 - float(np.dot(y, act))) ** _fg
-                grad[:] = (w * fw * (y - act)).astype(np.float32)
-                return float(-np.sum(w * y * log_softmax(v))) * fw
-        elif self.args.crit == "sigmoid_bce":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                p_t = y * act + (1.0 - y) * (1.0 - act)
-                fw = (1.0 - p_t) ** _fg
-                grad[:] = (w * fw * (y - act)).astype(np.float32)
-                return float(-np.sum(w * (y * np.log(act + 1e-7) + (1 - y) * np.log(1 - act + 1e-7))))
-        elif self.args.crit == "sigmoid_mse":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                grad[:] = (2 * w * (y - act) * act * (1 - act)).astype(np.float32)
-                return float(np.sum(w * (y - act) ** 2))
-        elif self.args.crit == "sigmoid_mae":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                grad[:] = (w * np.sign(y - act) * act * (1 - act)).astype(np.float32)
-                return float(np.sum(w * np.abs(y - act)))
-        elif self.args.crit == "identity_mse":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                grad[:] = (2 * w * (y - act)).astype(np.float32)
-                return float(np.sum(w * (y - act) ** 2))
-        elif self.args.crit == "identity_mae":
-            def _loss_fn(v, y, w, grad):
-                act = self.act_fn(v)
-                grad[:] = (w * np.sign(y - act)).astype(np.float32)
-                return float(np.sum(w * np.abs(y - act)))
-        else:
-            raise NotImplementedError(f"crit '{self.args.crit}' not implemented")
-        self.loss_fn = _loss_fn
+        self._init_act_fn()
+        self._init_loss_fn()
 
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(n))
@@ -322,7 +354,7 @@ class CPUDevice(BaseDevice):
             )
             v = (votes / self.args.n_clauses).astype(np.float64)
             y = (encoded_Y[e] > 0).astype(np.float64)
-            loss_per_sample[e] = self.loss_fn(v, y, self.args.class_weights, grad)
+            loss_per_sample[e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
             running_loss += loss_per_sample[e]
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
             self.lib.update_clauses(
