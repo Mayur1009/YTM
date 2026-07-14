@@ -44,7 +44,6 @@ class BaseTM:
         shuffle: bool = True,
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
-        label_sampling: bool = False,
         lr: float | None = None,
     ) -> np.ndarray:
         assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
@@ -57,7 +56,8 @@ class BaseTM:
         Y = Y[iota]
 
         encoded_Y = self._encode_Y(Y)
-        label_probs = self._label_sampler(encoded_Y, label_sampling)
+        label_probs = np.where(encoded_Y == self.args.T_max, 1.0,
+                               self.args.q / max(1, self.args.n_classes - 1)).astype(np.float32)
 
         loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs, lr=lr)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
@@ -77,9 +77,6 @@ class BaseTM:
         encoded_Y = np.copy(Y).astype(np.float32) * self.args.T_max
         encoded_Y[encoded_Y == 0] = self.args.T_min
         return encoded_Y
-
-    def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
-        return np.ones_like(encoded_Y, dtype=np.float32)
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         if self.args.coalesced:
