@@ -5,8 +5,20 @@ from .args import T_args
 
 
 class Classifier(BaseTM):
+    _DECISION_THRESHOLDS = {"sigmoid": 0.5, "identity": 0.0, "softmax": 0.5}
+
     def __init__(self, n_clauses: int, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
         super().__init__(n_clauses, s, dim, n_classes, **opt_args)
+
+    @property
+    def decision_threshold(self) -> float | None:
+        key = self.args.act_fn if isinstance(self.args.act_fn, str) else "custom"
+        return self._DECISION_THRESHOLDS.get(key)
+
+    @decision_threshold.setter
+    def decision_threshold(self, value: float) -> None:
+        key = self.args.act_fn if isinstance(self.args.act_fn, str) else "custom"
+        self._DECISION_THRESHOLDS[key] = value
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
@@ -67,7 +79,8 @@ class MultiOutputTM(Classifier):
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)
-        preds = (class_sums >= 0).astype(np.uint32)
+        threshold = self.decision_threshold
+        preds = class_sums if threshold is None else (class_sums >= threshold).astype(np.uint32)
         return preds, class_sums
 
 
@@ -95,5 +108,6 @@ class BinaryTM(Classifier):
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)
-        preds = (class_sums[:, 0] >= 0).astype(np.uint32)
+        threshold = self.decision_threshold
+        preds = class_sums[:, 0] if threshold is None else (class_sums[:, 0] >= threshold).astype(np.uint32)
         return preds, class_sums
