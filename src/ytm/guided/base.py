@@ -55,9 +55,8 @@ class BaseTM:
         Y = Y[iota]
 
         encoded_Y = self._encode_Y(Y)
-        label_probs = self._calc_label_probs(encoded_Y)
 
-        loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs, lr=lr)
+        loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, lr=lr)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
         return loss
 
@@ -69,9 +68,6 @@ class BaseTM:
         return patch_outputs
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        raise NotImplementedError
-
-    def _calc_label_probs(self, encoded_Y: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):

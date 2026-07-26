@@ -24,10 +24,6 @@ class Classifier(BaseTM):
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         return Y.astype(np.float32)
 
-    def _calc_label_probs(self, encoded_Y: np.ndarray) -> np.ndarray:
-        return np.where(encoded_Y > 0.5, 1.0,
-                        self.args.q / max(1, self.args.n_classes - 1)).astype(np.float32)
-
 class MultiClassTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
         opt_args.setdefault("act_fn", "softmax")

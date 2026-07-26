@@ -97,7 +97,6 @@ class CPUDevice(BaseDevice):
 #define TOTAL_CLAUSES {self.total_clauses}
 #define S {float(self.args.s)}f
 #define CLASSES {self.args.n_classes}
-#define Q {float(self.args.q)}f
 #define HEIGHT {self.args.dim[0]}
 #define WIDTH {self.args.dim[1]}
 #define DEPTH {self.args.dim[2]}
@@ -330,7 +329,7 @@ class CPUDevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray, lr: float | None = None):
+    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -342,7 +341,6 @@ class CPUDevice(BaseDevice):
 
         X = X.astype(np.int32)
         encoded_Y = encoded_Y.astype(np.float32)
-        label_probs = label_probs.astype(np.float32)
 
         _lr = lr if lr is not None else self.args.lr
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
@@ -353,13 +351,13 @@ class CPUDevice(BaseDevice):
 
         p_X = X.ctypes.data_as(int32_p)
         p_encoded_Y = encoded_Y.ctypes.data_as(float_p)
-        p_label_probs = label_probs.ctypes.data_as(float_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
         p_grad = grad.ctypes.data_as(float_p)
 
         pbar = tqdm_bar(range(N), desc="Fit")
+        np.set_printoptions(linewidth=np.inf)
         for e in pbar:
             self.lib.pack_clauses(
                 self.p_ta_states,
@@ -394,6 +392,11 @@ class CPUDevice(BaseDevice):
             v = (votes / self.args.n_clauses).astype(np.float64)
             y = (encoded_Y[e] > 0).astype(np.float64)
             loss_per_sample[e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
+            if e % 200 == 0:
+                print(f"\n[e={e}] Raw votes: {votes}")
+                print(f"Norm votes: {v}")
+                print(f"Labels: {y}")
+                print(f"Loss: {loss_per_sample[e]}\nAct: {self.act_fn(v)}\nGrad: {grad}")
             running_loss += loss_per_sample[e]
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
             self.lib.update_clauses(
@@ -405,7 +408,6 @@ class CPUDevice(BaseDevice):
                 p_encoded_Y,
                 c_int(e),
                 p_grad,
-                p_label_probs,
                 c_float(self.args.lambda_),
                 self.p_ta_states,
                 self.p_clause_weights,

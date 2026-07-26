@@ -15,7 +15,6 @@ class TMArgs:
     feat_maxs: int | np.ndarray = 1
     patch_dim: tuple[int, int] = (0, 0)
     stride: tuple[int, int] = (1, 1)
-    q: float = 1.0
     lr: float = 0.1
     lambda_: float = 1.0
     act_fn: str | Callable[..., np.ndarray] = "softmax"
@@ -113,7 +112,6 @@ class T_args(TypedDict, total=False):
     feat_maxs: int | np.ndarray
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
-    q: float
     lr: float
     lambda_: float
     act_fn: str | Callable

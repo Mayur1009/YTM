@@ -4,7 +4,6 @@
 #define T_MAX 100.0f
 #define S 10.0f
 #define CLASSES 10
-#define Q 1.0f
 #define HEIGHT 28
 #define WIDTH 28
 #define DEPTH 1

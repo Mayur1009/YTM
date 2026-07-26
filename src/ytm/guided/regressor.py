@@ -5,17 +5,10 @@ from .base import BaseTM
 class RegressionTM(BaseTM):
     def __init__(self, n_clauses: int, s: float, dim: tuple, **opt_args):
         opt_args["negative_clauses"] = False
-        q = opt_args.get("q", 1.0)
-        if q > 1.0:
-            print(f"Warning: Got q = {q}, q > 1.0 not supported for regression, setting q=1.0")
-        opt_args["q"] = 1.0
         super().__init__(n_clauses=n_clauses, s=s, dim=dim, n_classes=1, **opt_args)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         return Y.reshape(-1, 1).astype(np.float32)
-
-    def _calc_label_probs(self, encoded_Y: np.ndarray) -> np.ndarray:
-        return np.ones_like(encoded_Y, dtype=np.float32)
 
     def fit(
         self,
