@@ -374,6 +374,7 @@ class CUDADevice(BaseDevice):
                         np.int32(e),
                         grad,
                         label_probs_batch,
+                        np.float32(self.args.lambda_),
                         self.ta_states,
                         self.clause_weights,
                         self.feat_mins_gpu,

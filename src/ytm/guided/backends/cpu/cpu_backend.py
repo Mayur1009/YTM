@@ -406,6 +406,7 @@ class CPUDevice(BaseDevice):
                 c_int(e),
                 p_grad,
                 p_label_probs,
+                c_float(self.args.lambda_),
                 self.p_ta_states,
                 self.p_clause_weights,
                 self.p_feat_mins,

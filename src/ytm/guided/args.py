@@ -17,6 +17,7 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     q: float = 1.0
     lr: float = 0.1
+    lambda_: float = 1.0
     act_fn: str | Callable[..., np.ndarray] = "softmax"
     loss_fn: str | Callable[..., float] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
@@ -114,6 +115,7 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     q: float
     lr: float
+    lambda_: float
     act_fn: str | Callable
     loss_fn: str | Callable
     loss_fn_kwargs: dict
