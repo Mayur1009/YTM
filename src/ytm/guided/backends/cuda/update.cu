@@ -136,7 +136,7 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
 __device__ inline void update_clause_class(const warp_t& warp, int lane, ull class_id, ull clause, ull rel_clause,
                                            int clause_output, int patch_idx_y, int patch_idx_x, int clause_density,
                                            uint* ta_states, const float* clause_weights, const int* Xe,
-                                           const float* encoded_Y_e, const float* grad,
+                                           const float* grad,
                                            float lambda_, const int* feat_mins, const int* literal_offsets,
                                            int8_t* is_clause_synced, ull rng_k, uint* rng_counter) {
     float update_prob = 1.0f - expf(-lambda_ * fabsf(grad[class_id]));
@@ -199,7 +199,7 @@ extern "C" __global__ void update_weights(const int* selected_patch_ids, const i
 
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
-                                          const int8_t* clause_drop_mask, const int* X, const float* encoded_Y,
+                                          const int8_t* clause_drop_mask, const int* X,
                                           const int e, const float* grad,
                                           const float lambda_, uint* global_ta_states, const float* clause_weights,
                                           const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced) {
@@ -211,7 +211,6 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
     ull total_warps = grid.size() / warp.size();
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
 
     ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
     uint rng_counter = 0;
@@ -236,12 +235,12 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                            ta_states, clause_weights, Xe, encoded_Y_e, grad, lambda_,
+                            ta_states, clause_weights, Xe, grad, lambda_,
                             feat_mins, literal_offsets, is_clause_synced, rng_k, &rng_counter);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                                ta_states, clause_weights, Xe, encoded_Y_e, grad, lambda_,
+                                ta_states, clause_weights, Xe, grad, lambda_,
                                 feat_mins, literal_offsets, is_clause_synced, rng_k, &rng_counter);
         }
 #endif

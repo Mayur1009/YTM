@@ -20,10 +20,6 @@ class Classifier(BaseTM):
         key = self.args.act_fn if isinstance(self.args.act_fn, str) else "custom"
         self._DECISION_THRESHOLDS[key] = value
 
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        return Y.astype(np.float32)
-
 class MultiClassTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: tuple, n_classes: int, **opt_args: Unpack[T_args]):
         opt_args.setdefault("act_fn", "softmax")
@@ -85,9 +81,6 @@ class BinaryTM(Classifier):
         opt_args.setdefault("act_fn", "sigmoid")
         opt_args.setdefault("loss_fn", "ce")
         super().__init__(n_clauses, s, dim, 1, **opt_args)
-
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        return Y.astype(np.float32)
 
     def fit(
         self,

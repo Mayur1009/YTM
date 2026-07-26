@@ -214,7 +214,7 @@ class CPUDevice(BaseDevice):
         else:
             lw = np.asarray(
                 self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=np.float64,
+                dtype=np.float32,
             )
             if self.args.loss_fn == "ce":
                 gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
@@ -329,7 +329,7 @@ class CPUDevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -340,7 +340,7 @@ class CPUDevice(BaseDevice):
         clause_drop_mask = np.logical_or(clause_drop_mask, self.frozen_clauses.flatten()).astype(np.int8)
 
         X = X.astype(np.int32)
-        encoded_Y = encoded_Y.astype(np.float32)
+        Y = Y.astype(np.float32)
 
         _lr = lr if lr is not None else self.args.lr
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
@@ -350,7 +350,6 @@ class CPUDevice(BaseDevice):
         running_loss = 0.0
 
         p_X = X.ctypes.data_as(int32_p)
-        p_encoded_Y = encoded_Y.ctypes.data_as(float_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
@@ -389,8 +388,8 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            v = (votes / self.args.n_clauses).astype(np.float64)
-            y = (encoded_Y[e] > 0).astype(np.float64)
+            v = (votes / self.args.n_clauses).astype(np.float32)
+            y = Y[e].astype(np.float32)
             loss_per_sample[e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
             if e % 200 == 0:
                 print(f"\n[e={e}] Raw votes: {votes}")
@@ -405,7 +404,6 @@ class CPUDevice(BaseDevice):
                 self.p_clause_density,
                 p_clause_drop_mask,
                 p_X,
-                p_encoded_Y,
                 c_int(e),
                 p_grad,
                 c_float(self.args.lambda_),

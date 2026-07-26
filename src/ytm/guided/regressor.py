@@ -7,9 +7,6 @@ class RegressionTM(BaseTM):
         opt_args["negative_clauses"] = False
         super().__init__(n_clauses=n_clauses, s=s, dim=dim, n_classes=1, **opt_args)
 
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        return Y.reshape(-1, 1).astype(np.float32)
-
     def fit(
         self,
         X: np.ndarray,

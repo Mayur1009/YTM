@@ -46,6 +46,7 @@ class BaseTM:
         lr: float | None = None,
     ) -> np.ndarray:
         assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
+        assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
 
         N = X.shape[0]
         iota = np.arange(N)
@@ -54,9 +55,9 @@ class BaseTM:
         X = X[iota]
         Y = Y[iota]
 
-        encoded_Y = self._encode_Y(Y)
+        Y = Y.astype(np.float32)
 
-        loss = self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, lr=lr)
+        loss = self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr=lr)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
         return loss
 
@@ -66,9 +67,6 @@ class BaseTM:
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         patch_outputs = self.dev.transform_patchwise(X, batch_size)
         return patch_outputs
-
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        raise NotImplementedError
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         if self.args.coalesced:

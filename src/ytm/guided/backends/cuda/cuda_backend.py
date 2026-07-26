@@ -168,7 +168,7 @@ class CUDADevice(BaseDevice):
         else:
             lw = cp.asarray(
                 self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=cp.float64,
+                dtype=cp.float32,
             )
             if self.args.loss_fn == "ce":
                 gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
@@ -289,7 +289,7 @@ class CUDADevice(BaseDevice):
     def unfreeze_clauses(self):
         self.frozen_clauses.fill(0)
 
-    def fit_epoch(self, X: np.ndarray, encoded_Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -314,7 +314,7 @@ class CUDADevice(BaseDevice):
         for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
-            encoded_Y_batch = cp.asarray(encoded_Y[i:batch_end], dtype=np.float32)
+            Y_batch = cp.asarray(Y[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
             pbar = tqdm_bar(range(bs), desc="Sample")
@@ -354,8 +354,8 @@ class CUDADevice(BaseDevice):
                     *self.kconf_classes,
                     (selected_patch_ids, self.clause_weights, votes),
                 )
-                v = (votes / self.args.n_clauses).astype(cp.float64)
-                y = (encoded_Y_batch[e] > 0).astype(cp.float64)
+                v = (votes / self.args.n_clauses).astype(cp.float32)
+                y = Y_batch[e].astype(cp.float32)
                 loss_per_sample[i + e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
                 running_loss += float(loss_per_sample[i + e])
                 sample_count += 1
@@ -368,7 +368,6 @@ class CUDADevice(BaseDevice):
                         self.packed_clauses.clause_density,
                         clause_drop_mask_gpu,
                         X_batch,
-                        encoded_Y_batch,
                         np.int32(e),
                         grad,
                         np.float32(self.args.lambda_),
