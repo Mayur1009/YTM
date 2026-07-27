@@ -46,12 +46,10 @@ class TMArgs:
 
     def __post_init__(self):
         if self.device == "cuda" and importlib.util.find_spec("cupy") is None:
-            raise ImportError(
-                "`device='cuda'` requires `cupy` to be installed. But `cupy` is not available in the current environment."
-            )
+            raise ImportError("`device='cuda'` requires `cupy` to be installed. But `cupy` is not available in the current environment.")
 
         if self.device == "cpu" and not (shutil.which("gcc") or shutil.which("clang")):
-            raise EnvironmentError(
+            raise OSError(
                 "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
             )
 
@@ -61,7 +59,7 @@ class TMArgs:
                 raise ValueError(f"act_fn must be one of {_valid_act_fns} or a callable, got '{self.act_fn}'")
 
         if not callable(self.loss_fn):
-            _valid_loss_fns = {"ce", "sce", "mse", "mae", "huber", "tversky"}
+            _valid_loss_fns = {"ce", "sce", "mse", "mae", "huber", "tversky", "asl", "db"}
             if self.loss_fn not in _valid_loss_fns:
                 raise ValueError(f"loss_fn must be one of {_valid_loss_fns} or a callable, got '{self.loss_fn}'")
 
@@ -94,22 +92,16 @@ class TMArgs:
             self.feat_mins = np.full(n_feat, self.feat_mins, dtype=np.int32)
         else:
             self.feat_mins = np.asarray(self.feat_mins, dtype=np.int32)
-            assert self.feat_mins.shape == (n_feat,), (
-                f"feat_mins must have shape ({n_feat},), got {self.feat_mins.shape}"
-            )
+            assert self.feat_mins.shape == (n_feat,), f"feat_mins must have shape ({n_feat},), got {self.feat_mins.shape}"
 
         if np.isscalar(self.feat_maxs):
             self.feat_maxs = np.full(n_feat, self.feat_maxs, dtype=np.int32)
         else:
             self.feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32)
-            assert self.feat_maxs.shape == (n_feat,), (
-                f"feat_maxs must have shape ({n_feat},), got {self.feat_maxs.shape}"
-            )
+            assert self.feat_maxs.shape == (n_feat,), f"feat_maxs must have shape ({n_feat},), got {self.feat_maxs.shape}"
 
         if isinstance(self.lambda_, tuple):
-            assert len(self.lambda_) == 2, (
-                f"lambda_ tuple must be (lambda_plus, lambda_minus), got {len(self.lambda_)} elements"
-            )
+            assert len(self.lambda_) == 2, f"lambda_ tuple must be (lambda_plus, lambda_minus), got {len(self.lambda_)} elements"
             self.lambda_plus = float(self.lambda_[0])
             self.lambda_minus = float(self.lambda_[1])
         else:

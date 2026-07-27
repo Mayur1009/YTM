@@ -163,6 +163,7 @@ class CUDADevice(BaseDevice):
     def _init_loss_fn(self):
         if callable(self.args.loss_fn):
             _fn = self.args.loss_fn
+
             def _loss_fn(v, y, grad, **kwargs):
                 return float(_fn(v, y, grad, **kwargs))
         else:
@@ -173,12 +174,14 @@ class CUDADevice(BaseDevice):
             if self.args.loss_fn == "ce":
                 gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
                 if self.args.act_fn == "softmax":
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         fw = (1.0 - float(cp.dot(y, act))) ** gamma
                         grad[:] = (lw * fw * (y - act)).astype(cp.float32)
                         return float(-cp.sum(lw * y * cp_log_softmax(v))) * fw
                 else:
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         p_t = y * act + (1.0 - y) * (1.0 - act)
@@ -187,18 +190,20 @@ class CUDADevice(BaseDevice):
                         return float(-cp.sum(lw * fw * (y * cp.log(act + 1e-7) + (1 - y) * cp.log(1 - act + 1e-7))))
             elif self.args.loss_fn == "sce":
                 alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
-                beta  = self.args.loss_fn_kwargs.get("beta",  1.0)
-                eps   = self.args.loss_fn_kwargs.get("eps",   1e-4)
+                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
                 if self.args.act_fn == "softmax":
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         logy = cp.log(y + eps)
                         A = float(cp.dot(act, logy))
                         grad[:] = (lw * (alpha * (y - act) + beta * act * (logy - A))).astype(cp.float32)
-                        ce  = float(-cp.sum(lw * y * cp_log_softmax(v)))
+                        ce = float(-cp.sum(lw * y * cp_log_softmax(v)))
                         rce = float(-cp.sum(lw * act * logy))
                         return alpha * ce + beta * rce
                 else:
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         bce_grad = y - act
@@ -208,29 +213,33 @@ class CUDADevice(BaseDevice):
                         rce = float(-cp.sum(lw * (act * cp.log(y + eps) + (1 - act) * cp.log(1 - y + eps))))
                         return alpha * bce + beta * rce
             elif self.args.loss_fn == "mse":
+
                 def _loss_fn(v, y, grad, **kwargs):
                     act = self.act_fn(v)
                     grad[:] = (2 * lw * (y - act) * self.dact_fn(act)).astype(cp.float32)
                     return float(cp.sum(lw * (y - act) ** 2))
             elif self.args.loss_fn == "mae":
+
                 def _loss_fn(v, y, grad, **kwargs):
                     act = self.act_fn(v)
                     grad[:] = (lw * cp.sign(y - act) * self.dact_fn(act)).astype(cp.float32)
                     return float(cp.sum(lw * cp.abs(y - act)))
             elif self.args.loss_fn == "huber":
                 delta = self.args.loss_fn_kwargs.get("delta", 1.0)
+
                 def _loss_fn(v, y, grad, **kwargs):
                     act = self.act_fn(v)
                     r = y - act
                     grad[:] = (lw * cp.clip(r, -delta, delta) * self.dact_fn(act)).astype(cp.float32)
-                    huber = cp.where(cp.abs(r) <= delta, 0.5 * r ** 2, delta * (cp.abs(r) - 0.5 * delta))
+                    huber = cp.where(cp.abs(r) <= delta, 0.5 * r**2, delta * (cp.abs(r) - 0.5 * delta))
                     return float(cp.sum(lw * huber))
             elif self.args.loss_fn == "tversky":
                 alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
-                beta  = self.args.loss_fn_kwargs.get("beta",  0.5)
+                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
                 gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
-                eps   = self.args.loss_fn_kwargs.get("eps",   1e-6)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
                 if self.args.act_fn == "sigmoid":
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         tp = float(cp.dot(lw * y, act))
@@ -241,9 +250,10 @@ class CUDADevice(BaseDevice):
                         T = N / D
                         fw = gamma * (1.0 - T) ** (gamma - 1.0)
                         coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D ** 2 * act * (1.0 - act)).astype(cp.float32)
+                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * act * (1.0 - act)).astype(cp.float32)
                         return float((1.0 - T) ** gamma)
                 else:
+
                     def _loss_fn(v, y, grad, **kwargs):
                         act = self.act_fn(v)
                         tp = float(cp.dot(lw * y, act))
@@ -254,8 +264,60 @@ class CUDADevice(BaseDevice):
                         T = N / D
                         fw = gamma * (1.0 - T) ** (gamma - 1.0)
                         coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D ** 2 * self.dact_fn(act)).astype(cp.float32)
+                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * self.dact_fn(act)).astype(cp.float32)
                         return float((1.0 - T) ** gamma)
+            elif self.args.loss_fn == "asl":
+                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
+                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
+                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
+
+                def _loss_fn(v, y, grad, **kwargs):
+                    p = cp.clip(self.act_fn(v), eps, 1.0 - eps)
+                    pm = cp.clip(p - clip, 0.0, 1.0) if clip > 0 else p
+                    active_neg = (p - clip) > 0 if clip > 0 else cp.ones_like(p, dtype=bool)
+                    pm = cp.clip(pm, eps, 1.0 - eps)
+
+                    loss_pos = (1.0 - p) ** gamma_pos * cp.log(p)
+                    loss_neg = (pm**gamma_neg) * cp.log(1.0 - pm)
+                    loss = -float(cp.sum(y * loss_pos + (1.0 - y) * loss_neg))
+
+                    grad_pos = (1.0 - p) ** (gamma_pos + 1.0) - gamma_pos * (1.0 - p) ** gamma_pos * p * cp.log(p)
+                    grad_neg = (gamma_neg * pm ** (gamma_neg - 1.0) * cp.log(1.0 - pm) - pm**gamma_neg / (1.0 - pm)) * p * (1.0 - p)
+                    grad_neg = cp.where(active_neg, grad_neg, 0.0)
+
+                    grad[:] = (y * grad_pos + (1.0 - y) * grad_neg).astype(cp.float32)
+                    return loss
+            elif self.args.loss_fn == "db":
+                class_counts = cp.asarray(self.args.loss_fn_kwargs["class_counts"], dtype=cp.float64)
+                n_total = float(self.args.loss_fn_kwargs["n_total"])
+                alpha_db = self.args.loss_fn_kwargs.get("alpha", 0.1)
+                beta_db = self.args.loss_fn_kwargs.get("beta", 10.0)
+                mu_db = self.args.loss_fn_kwargs.get("mu", 0.9)
+                neg_scale = self.args.loss_fn_kwargs.get("neg_scale", 5.0)
+                kappa = self.args.loss_fn_kwargs.get("kappa", 0.05)
+                db_eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
+
+                inv_n = 1.0 / cp.clip(class_counts, 1.0, None)
+                p_prior = cp.clip(class_counts / n_total, db_eps, 1.0 - db_eps)
+                b_hat = -cp.log(1.0 / p_prior - 1.0)
+                nu = (-kappa * b_hat).astype(cp.float32)
+                C = self.args.n_classes
+
+                def _loss_fn(v, y, grad, **kwargs):
+                    denom = float(cp.dot(y, inv_n)) + db_eps
+                    r_hat = alpha_db + 1.0 / (1.0 + cp.exp(-beta_db * (inv_n / denom - mu_db)))
+
+                    u = v - nu
+                    softplus_pos = cp.log1p(cp.exp(-u))
+                    softplus_neg = cp.log1p(cp.exp(neg_scale * u)) / neg_scale
+                    loss = float(cp.sum(r_hat * (y * softplus_pos + (1.0 - y) * softplus_neg))) / C
+
+                    act_shift = cp_expit(u)
+                    grad_pos = 1.0 - act_shift
+                    grad_neg = -cp_expit(neg_scale * u)
+                    grad[:] = (r_hat * (y * grad_pos + (1.0 - y) * grad_neg) / C).astype(cp.float32)
+                    return loss
             else:
                 raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
         self.loss_fn = _loss_fn
@@ -282,6 +344,7 @@ class CUDADevice(BaseDevice):
 
     def set_threads(self, n_threads: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
+
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         clause_ids = np.asarray(clause_ids, dtype=np.int32)
         self.frozen_clauses[class_id, clause_ids] = 1
@@ -523,9 +586,7 @@ class CUDADevice(BaseDevice):
     def get_patch_weights(self):
         if not self.args.track_patch_weights:
             warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
-        return self.patch_weights.get().reshape(
-            self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x
-        )
+        return self.patch_weights.get().reshape(self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x)
 
     def get_state_dict(self):
         return {
