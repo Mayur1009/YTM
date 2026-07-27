@@ -356,7 +356,6 @@ class CPUDevice(BaseDevice):
         p_grad = grad.ctypes.data_as(float_p)
 
         pbar = tqdm_bar(range(N), desc="Fit")
-        np.set_printoptions(linewidth=np.inf)
         for e in pbar:
             self.lib.pack_clauses(
                 self.p_ta_states,
@@ -391,11 +390,6 @@ class CPUDevice(BaseDevice):
             v = (votes / self.args.n_clauses).astype(np.float32)
             y = Y[e].astype(np.float32)
             loss_per_sample[e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
-            if e % 200 == 0:
-                print(f"\n[e={e}] Raw votes: {votes}")
-                print(f"Norm votes: {v}")
-                print(f"Labels: {y}")
-                print(f"Loss: {loss_per_sample[e]}\nAct: {self.act_fn(v)}\nGrad: {grad}")
             running_loss += loss_per_sample[e]
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
             self.lib.update_clauses(
@@ -406,7 +400,8 @@ class CPUDevice(BaseDevice):
                 p_X,
                 c_int(e),
                 p_grad,
-                c_float(self.args.lambda_),
+                c_float(self.args.lambda_plus),
+                c_float(self.args.lambda_minus),
                 self.p_ta_states,
                 self.p_clause_weights,
                 self.p_feat_mins,

@@ -16,7 +16,7 @@ class TMArgs:
     patch_dim: tuple[int, int] = (0, 0)
     stride: tuple[int, int] = (1, 1)
     lr: float = 0.1
-    lambda_: float = 1.0
+    lambda_: float | tuple[float, float] = 1.0
     act_fn: str | Callable[..., np.ndarray] = "softmax"
     loss_fn: str | Callable[..., float] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
@@ -106,6 +106,16 @@ class TMArgs:
                 f"feat_maxs must have shape ({n_feat},), got {self.feat_maxs.shape}"
             )
 
+        if isinstance(self.lambda_, tuple):
+            assert len(self.lambda_) == 2, (
+                f"lambda_ tuple must be (lambda_plus, lambda_minus), got {len(self.lambda_)} elements"
+            )
+            self.lambda_plus = float(self.lambda_[0])
+            self.lambda_minus = float(self.lambda_[1])
+        else:
+            self.lambda_plus = float(self.lambda_)
+            self.lambda_minus = float(self.lambda_)
+
 
 class T_args(TypedDict, total=False):
     feat_mins: int | np.ndarray
@@ -113,7 +123,7 @@ class T_args(TypedDict, total=False):
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
     lr: float
-    lambda_: float
+    lambda_: float | tuple[float, float]
     act_fn: str | Callable
     loss_fn: str | Callable
     loss_fn_kwargs: dict
