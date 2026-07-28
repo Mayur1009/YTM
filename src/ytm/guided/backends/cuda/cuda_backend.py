@@ -288,36 +288,6 @@ class CUDADevice(BaseDevice):
 
                     grad[:] = (y * grad_pos + (1.0 - y) * grad_neg).astype(cp.float32)
                     return loss
-            elif self.args.loss_fn == "db":
-                class_counts = cp.asarray(self.args.loss_fn_kwargs["class_counts"], dtype=cp.float64)
-                n_total = float(self.args.loss_fn_kwargs["n_total"])
-                alpha_db = self.args.loss_fn_kwargs.get("alpha", 0.1)
-                beta_db = self.args.loss_fn_kwargs.get("beta", 10.0)
-                mu_db = self.args.loss_fn_kwargs.get("mu", 0.9)
-                neg_scale = self.args.loss_fn_kwargs.get("neg_scale", 5.0)
-                kappa = self.args.loss_fn_kwargs.get("kappa", 0.05)
-                db_eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
-
-                inv_n = 1.0 / cp.clip(class_counts, 1.0, None)
-                p_prior = cp.clip(class_counts / n_total, db_eps, 1.0 - db_eps)
-                b_hat = -cp.log(1.0 / p_prior - 1.0)
-                nu = (-kappa * b_hat).astype(cp.float32)
-                C = self.args.n_classes
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    denom = float(cp.dot(y, inv_n)) + db_eps
-                    r_hat = alpha_db + 1.0 / (1.0 + cp.exp(-beta_db * (inv_n / denom - mu_db)))
-
-                    u = v - nu
-                    softplus_pos = cp.log1p(cp.exp(-u))
-                    softplus_neg = cp.log1p(cp.exp(neg_scale * u)) / neg_scale
-                    loss = float(cp.sum(r_hat * (y * softplus_pos + (1.0 - y) * softplus_neg))) / C
-
-                    act_shift = cp_expit(u)
-                    grad_pos = 1.0 - act_shift
-                    grad_neg = -cp_expit(neg_scale * u)
-                    grad[:] = (r_hat * (y * grad_pos + (1.0 - y) * grad_neg) / C).astype(cp.float32)
-                    return loss
             else:
                 raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
         self.loss_fn = _loss_fn
