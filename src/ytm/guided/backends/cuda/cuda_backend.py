@@ -35,6 +35,7 @@ class CUDADevice(BaseDevice):
         )
         self.k_update_clauses = update_mod.get_function("update_clauses")
         self.k_update_weights = update_mod.get_function("update_weights")
+        self.k_decide_feedback = update_mod.get_function("decide_feedback")
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
@@ -44,8 +45,11 @@ class CUDADevice(BaseDevice):
         self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
-        self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
+        self.kconf_clauses = self._kernel_config(
+            self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"]
+        )
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
+        self.kconf_decide = self._kernel_config(self.total_clauses)
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -76,6 +80,7 @@ class CUDADevice(BaseDevice):
         self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
+        self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.int8)
         self._init_act_fn()
         self._init_loss_fn()
 
@@ -156,23 +161,33 @@ class CUDADevice(BaseDevice):
                 running_loss += float(loss_per_sample[i + e])
                 sample_count += 1
                 pbar.set_postfix(loss=f"{running_loss / sample_count:.4f}")
+                self.k_decide_feedback(
+                    *self.kconf_decide,
+                    (
+                        self.seed,
+                        np.int32(e),
+                        grad,
+                        self.clause_weights,
+                        self.packed_clauses.clause_density,
+                        selected_patch_ids,
+                        clause_drop_mask_gpu,
+                        np.float32(self.args.lambda_plus),
+                        np.float32(self.args.lambda_minus),
+                        self.feedback_type,
+                        self.packed_clauses.is_clause_synced,
+                    ),
+                )
                 self.k_update_clauses(
                     *self.kconf_clauses,
                     (
                         self.seed,
                         selected_patch_ids,
-                        self.packed_clauses.clause_density,
-                        clause_drop_mask_gpu,
                         X_batch,
                         np.int32(e),
-                        grad,
-                        np.float32(self.args.lambda_plus),
-                        np.float32(self.args.lambda_minus),
                         self.ta_states,
-                        self.clause_weights,
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
-                        self.packed_clauses.is_clause_synced,
+                        self.feedback_type,
                     ),
                 )
                 self.k_update_weights(

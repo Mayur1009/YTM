@@ -2,6 +2,11 @@
 #include "common.cu"
 #endif
 
+#define FB_NONE 0
+#define FB_T1A 1
+#define FB_T1B 2
+#define FB_T2 3
+
 __device__ inline int geom_sample(ull rng_key, uint* rng_counter, float p) {
     float u = rand_uniform(rng_key, rng_counter);
     double u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
@@ -52,11 +57,16 @@ __device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta
 #endif
 }
 
+// tile_id in [0, WARPS_PER_CLAUSE): each tile handles a disjoint, interleaved
+// slice of features/literals, so multiple independent warps can cooperate on
+// one clause with zero cross-warp synchronization (no shared feedback
+// decision needed here - that's precomputed by decide_feedback below).
 __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
-                                 int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane) {
+                                 int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane,
+                                 int tile_id) {
 
 #if POSITION_LITERALS
-    if (lane == 0) {
+    if (tile_id == 0 && lane == 0) {
         t1a_inc_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0);
         t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0);
 
@@ -75,7 +85,7 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
     }
 #endif
 
-    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
+    for (int fid = tile_id * 32 + lane; fid < N_RAW_PATCH_FEATS; fid += WARPS_PER_CLAUSE * 32) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -90,26 +100,29 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
     }
 }
 
-__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane) {
+__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane, int tile_id) {
+    int global_lane = tile_id * 32 + lane;
+    int total_lanes = WARPS_PER_CLAUSE * 32;
+
     if (S > 1.0f) {
         int suc = geom_sample(rng_key, rng_counter, S_INV) - 1;
-        while (suc * 32 + lane < N_LITERALS) {
-            int li = suc * 32 + lane;
+        while (suc * total_lanes + global_lane < N_LITERALS) {
+            int li = suc * total_lanes + global_lane;
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
             suc += geom_sample(rng_key, rng_counter, S_INV);
         }
     } else {
-        for (int li = lane; li < N_LITERALS; li += 32)
+        for (int li = global_lane; li < N_LITERALS; li += total_lanes)
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
     }
 }
 
 __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                                const int* literal_offsets, int lane) {
+                                const int* literal_offsets, int lane, int tile_id) {
 #if POSITION_LITERALS
-    if (lane == 0) {
+    if (tile_id == 0 && lane == 0) {
         t2_inc_literals(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0);
         t2_inc_literals(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0);
 
@@ -120,7 +133,7 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
     }
 #endif
 
-    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
+    for (int fid = tile_id * 32 + lane; fid < N_RAW_PATCH_FEATS; fid += WARPS_PER_CLAUSE * 32) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -133,22 +146,45 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
     }
 }
 
-__device__ inline void update_clause_class(const warp_t& warp, int lane, ull class_id, ull clause, ull rel_clause,
-                                           int clause_output, int patch_idx_y, int patch_idx_x, int clause_density,
-                                           uint* ta_states, const float* clause_weights, const int* Xe,
-                                           const float* grad,
-                                           float lambda_plus, float lambda_minus, const int* feat_mins, const int* literal_offsets,
-                                           int8_t* is_clause_synced, ull rng_k, uint* rng_counter) {
+__device__ inline void apply_feedback(int8_t fb_type, ull rng_key, uint* rng_counter, uint* ta_states,
+                                      const int* Xe, int patch_idx_y, int patch_idx_x, const int* feat_mins,
+                                      const int* literal_offsets, int lane, int tile_id) {
+    if (fb_type == FB_T1A) {
+#if TYPE1A_FB
+        type1a_fb(rng_key, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane,
+                  tile_id);
+#endif
+    } else if (fb_type == FB_T1B) {
+#if TYPE1B_FB
+        type1b_fb(rng_key, rng_counter, ta_states, lane, tile_id);
+#endif
+    } else if (fb_type == FB_T2) {
+#if TYPE2_FB
+        type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane, tile_id);
+#endif
+    }
+}
+
+// Phase A: decide (once per clause-class pair, cheap, no literal access at
+// all). Split out so multiple independent warps can cooperate on the literal
+// work in update_clauses below without needing to agree on a shared random
+// decision mid-kernel.
+__device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull class_id, ull rel_clause,
+                                  int clause_output, int clause_density, const float* grad,
+                                  const float* clause_weights, float lambda_plus, float lambda_minus,
+                                  int8_t* feedback_type, int8_t* is_clause_synced) {
+    ull rng_k = rng_hash(seed, idx, (ull)e, 0xD00D1E00ULL);
+    uint rng_counter = 0;
+
     int target = (grad[class_id] > 0.0f) - (grad[class_id] < 0.0f);
     float lam = (target > 0) ? lambda_plus : lambda_minus;
     float update_prob = 1.0f - expf(-lam * fabsf(grad[class_id]));
-    bool skip = false;
-    if (lane == 0) {
-        skip = (target == 0 || grad[class_id] == 0.0f || rand_uniform(rng_k, rng_counter) > update_prob);
-    }
 
-    if (warp.any(skip))
+    bool skip = (target == 0 || grad[class_id] == 0.0f || rand_uniform(rng_k, &rng_counter) > update_prob);
+    if (skip) {
+        feedback_type[idx] = FB_NONE;
         return;
+    }
 
     is_clause_synced[clause] = 0;
 
@@ -158,22 +194,47 @@ __device__ inline void update_clause_class(const warp_t& warp, int lane, ull cla
     bool t1 = (target * sign) > 0;
 
     if (t1 && clause_output && has_space) {
-#if TYPE1A_FB
-        type1a_fb(rng_k, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane);
-#endif
+        feedback_type[idx] = FB_T1A;
+    } else if (t1 && !(clause_output && has_space)) {
+        feedback_type[idx] = FB_T1B;
+    } else if ((target * sign) < 0 && clause_output) {
+        feedback_type[idx] = FB_T2;
+    } else {
+        feedback_type[idx] = FB_NONE;
+    }
+}
+
+extern "C" __global__ void decide_feedback(const ull seed, const int e, const float* grad,
+                                           const float* clause_weights, const int* clause_density,
+                                           const int* selected_patch_ids, const int8_t* clause_drop_mask,
+                                           const float lambda_plus, const float lambda_minus, int8_t* feedback_type,
+                                           int8_t* is_clause_synced) {
+    ull clause = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    if (clause >= (ull)TOTAL_CLAUSES)
+        return;
+
+    if (clause_drop_mask[clause] == 1) {
+        for (ull c = 0; c < (ull)CLASSES; ++c)
+            feedback_type[clause * (ull)CLASSES + c] = FB_NONE;
+        return;
     }
 
-    else if (t1 && !(clause_output && has_space)) {
-#if TYPE1B_FB
-        type1b_fb(rng_k, rng_counter, ta_states, lane);
-#endif
-    }
+    int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
+    int cd = clause_density[clause];
+    ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
 
-    else if ((target * sign) < 0 && clause_output) {
-#if TYPE2_FB
-        type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane);
-#endif
+#if COALESCED == 0
+    ull class_id = clause / (ull)CLAUSES_PER_CLASS;
+    ull idx = clause * (ull)CLASSES + class_id;
+    decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
+              lambda_minus, feedback_type, is_clause_synced);
+#else
+    for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
+        ull idx = clause * (ull)CLASSES + class_id;
+        decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
+                  lambda_minus, feedback_type, is_clause_synced);
     }
+#endif
 }
 
 extern "C" __global__ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask,
@@ -198,51 +259,47 @@ extern "C" __global__ void update_weights(const int* selected_patch_ids, const i
     }
 }
 
-
-extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
-                                          const int8_t* clause_drop_mask, const int* X,
-                                          const int e, const float* grad,
-                                          const float lambda_plus, const float lambda_minus, uint* global_ta_states, const float* clause_weights,
-                                          const int* feat_mins, const int* literal_offsets, int8_t* is_clause_synced) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    ull tid = grid.thread_rank();
-    int lane = warp.thread_rank();
-    ull warp_id = tid / warp.size();
-    ull total_warps = grid.size() / warp.size();
+// Phase B: apply. WARPS_PER_CLAUSE independent warps per clause, each reading
+// the already-decided feedback_type (no per-warp decision, no synchronization
+// needed - every warp just reads the same precomputed value).
+extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
+                                          uint* global_ta_states, const int* feat_mins, const int* literal_offsets,
+                                          const int8_t* feedback_type) {
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = (int)(tid % 32);
+    ull warp_id = tid / 32;
+    ull total_warps = ((ull)gridDim.x * (ull)blockDim.x) / 32;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
     ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
     uint rng_counter = 0;
 
-    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
-        if (clause_drop_mask[clause] == 1)
-            continue;
+    ull total_tiles = (ull)TOTAL_CLAUSES * (ull)WARPS_PER_CLAUSE;
+    for (ull gtile = warp_id; gtile < total_tiles; gtile += total_warps) {
+        ull clause = gtile / (ull)WARPS_PER_CLAUSE;
+        int tile_id = (int)(gtile % (ull)WARPS_PER_CLAUSE);
 
-        uint* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
         int patch_id = selected_patch_ids[clause];
         int clause_output = (patch_id >= 0) ? 1 : 0;
-
         int patch_idx_y = -1, patch_idx_x = -1;
         if (clause_output) {
             patch_idx_y = patch_id / N_PATCHES_X;
             patch_idx_x = patch_id % N_PATCHES_X;
         }
 
-        int cd = clause_density[clause];
+        uint* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-        update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                            ta_states, clause_weights, Xe, grad, lambda_plus, lambda_minus,
-                            feat_mins, literal_offsets, is_clause_synced, rng_k, &rng_counter);
+        int8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
+        apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
+                       lane, tile_id);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-            update_clause_class(warp, lane, class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd,
-                                ta_states, clause_weights, Xe, grad, lambda_plus, lambda_minus,
-                                feat_mins, literal_offsets, is_clause_synced, rng_k, &rng_counter);
+            int8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
+            apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins,
+                           literal_offsets, lane, tile_id);
         }
 #endif
     }
