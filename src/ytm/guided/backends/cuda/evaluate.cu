@@ -143,31 +143,3 @@ extern "C" __global__ void evaluate(const int* X, const int e, const int8_t* cla
                     selected_patch_ids);
 #endif
 }
-
-extern "C" __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
-
-    for (ull class_id = warp_id; class_id < (ull)CLASSES; class_id += total_warps) {
-        const float* cw = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS];
-        float partial = 0.0f;
-
-        for (int c = lane; c < CLAUSES_PER_CLASS; c += (int)warp.size()) {
-#if COALESCED == 0
-            ull clause = class_id * (ull)CLAUSES_PER_CLASS + c;
-#else
-            ull clause = c;
-#endif
-            if (selected_patch_ids[clause] >= 0)
-                partial += cw[c];
-        }
-
-        partial = cg::reduce(warp, partial, cg::plus<float>());
-
-        if (lane == 0)
-            votes[class_id] = partial;
-    }
-}

@@ -5,6 +5,7 @@ import cupy as cp
 from cupyx.scipy.special import expit as cp_expit, log_softmax as cp_log_softmax, softmax as cp_softmax
 from ..base import BaseDevice, PackedClauses, tqdm_bar
 
+
 def read_file(path):
     with open(path, "r") as f:
         return f.read()
@@ -30,7 +31,6 @@ class CUDADevice(BaseDevice):
             options=("--use_fast_math",),
         )
         self.k_evaluate = eval_mod.get_function("evaluate")
-        self.k_count_votes = eval_mod.get_function("count_votes")
 
         update_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
@@ -45,13 +45,9 @@ class CUDADevice(BaseDevice):
             options=("--use_fast_math",),
         )
         self.k_eval_clauses = infer_mod.get_function("infer_clauses")
-        self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
-        self.kconf_clauses = self._kernel_config(
-            self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"]
-        )
-        self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
+        self.kconf_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
         self.kconf_decide = self._kernel_config(self.total_clauses)
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -90,7 +86,7 @@ class CUDADevice(BaseDevice):
     def _to_host(self, arr):
         return arr.get()
 
-    def set_threads(self, n_threads: int):
+    def set_threads(self, n: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
@@ -109,7 +105,6 @@ class CUDADevice(BaseDevice):
         clause_drop_mask_gpu = cp.logical_or(clause_drop_mask_gpu, self.frozen_clauses.flatten()).astype(cp.int8)
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
-        votes = cp.zeros(self.args.n_classes, dtype=np.float32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
         loss_per_sample = cp.zeros(N, dtype=np.float32)
         running_loss = 0.0
@@ -154,16 +149,19 @@ class CUDADevice(BaseDevice):
                         self.patch_weights,
                     ),
                 )
-                self.k_count_votes(
-                    *self.kconf_classes,
-                    (selected_patch_ids, self.clause_weights, votes),
-                )
-                v = (votes / self.args.n_clauses).astype(cp.float32)
-                y = Y_batch[e].astype(cp.float32)
-                loss_per_sample[i + e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
+
+                mask = (selected_patch_ids >= 0).astype(cp.float32)
+                if self.args.coalesced:
+                    votes = self.clause_weights @ mask
+                else:
+                    votes = (self.clause_weights * mask.reshape(self.args.n_classes, -1)).sum(axis=-1)
+                v = votes / self.args.n_clauses
+                loss_per_sample[i + e] = self.loss_fn(v, Y_batch[e].astype(cp.float32), grad, **self.args.loss_fn_kwargs)
+
                 running_loss += float(loss_per_sample[i + e])
                 sample_count += 1
                 pbar.set_postfix(loss=f"{running_loss / sample_count:.4f}")
+
                 self.k_decide_feedback(
                     *self.kconf_decide,
                     (
@@ -253,15 +251,13 @@ class CUDADevice(BaseDevice):
                 ),
             )
 
-            self.k_sum_votes(
-                *self._kernel_config(bs * self.args.n_classes * self.cuda_props["warp_size"]),
-                (
-                    co_batch,
-                    self.clause_weights,
-                    class_sums[i:batch_end],
-                    np.int32(bs),
-                ),
-            )
+            co_f = co_batch.astype(cp.float32)
+            if self.args.coalesced:
+                class_sums[i:batch_end] = co_f @ self.clause_weights.T
+            else:
+                class_sums[i:batch_end] = (
+                    co_f.reshape(bs, self.args.n_classes, -1) * self.clause_weights[None, :, :]
+                ).sum(axis=-1)
 
         v = class_sums / self.args.n_clauses
         return self.act_fn(v).astype(cp.float32).get()
