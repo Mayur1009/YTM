@@ -140,6 +140,19 @@ class BaseDevice(abc.ABC):
                 self.np_rng.integers(0, self.args.n_states, size=(self.total_clauses, self.n_literals)),
                 dtype=np.uint32,
             )
+        elif self.args.ta_init == "random_include":
+            choice = self.np_rng.integers(0, 2, size=(self.total_clauses, self.n_literals))
+            states = np.where(choice == 1, self.args.include_state, self.args.include_state - 1)
+            self.ta_states = self.xp.asarray(states, dtype=np.uint32)
+        elif isinstance(self.args.ta_init, str) and self.args.ta_init.startswith("random_"):
+            n = int(self.args.ta_init[len("random_") :])
+            mid = self.args.include_state - 1
+            low = max(0, mid - n)
+            high = min(self.args.n_states - 1, mid + n)
+            self.ta_states = self.xp.asarray(
+                self.np_rng.integers(low, high + 1, size=(self.total_clauses, self.n_literals)),
+                dtype=np.uint32,
+            )
         else:
             self.ta_states = self.xp.full(
                 (self.total_clauses, self.n_literals),

@@ -30,7 +30,7 @@ class TMArgs:
     max_includes: int = -1
     n_states: int = 256
     include_state: int = -1
-    ta_init: Literal["random", "middle"] | int = "random"
+    ta_init: Literal["random", "middle", "random_include"] | str | int = "random_include"
     weight_init: Literal["random"] | float = "random"
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
