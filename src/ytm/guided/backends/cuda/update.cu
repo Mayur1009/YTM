@@ -146,7 +146,7 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
     }
 }
 
-__device__ inline void apply_feedback(int8_t fb_type, ull rng_key, uint* rng_counter, uint* ta_states,
+__device__ inline void apply_feedback(uint8_t fb_type, ull rng_key, uint* rng_counter, uint* ta_states,
                                       const int* Xe, int patch_idx_y, int patch_idx_x, const int* feat_mins,
                                       const int* literal_offsets, int lane, int tile_id) {
     if (fb_type == FB_T1A) {
@@ -172,7 +172,7 @@ __device__ inline void apply_feedback(int8_t fb_type, ull rng_key, uint* rng_cou
 __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull class_id, ull rel_clause,
                                   int clause_output, int clause_density, const float* grad,
                                   const float* clause_weights, float lambda_plus, float lambda_minus,
-                                  int8_t* feedback_type, int8_t* is_clause_synced) {
+                                  uint8_t* feedback_type, int8_t* is_clause_synced) {
     ull rng_k = rng_hash(seed, idx, (ull)e, 0xD00D1E00ULL);
     uint rng_counter = 0;
 
@@ -207,34 +207,35 @@ __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull clas
 extern "C" __global__ void decide_feedback(const ull seed, const int e, const float* grad,
                                            const float* clause_weights, const int* clause_density,
                                            const int* selected_patch_ids, const int8_t* clause_drop_mask,
-                                           const float lambda_plus, const float lambda_minus, int8_t* feedback_type,
+                                           const float lambda_plus, const float lambda_minus, uint8_t* feedback_type,
                                            int8_t* is_clause_synced) {
-    ull clause = (ull)blockIdx.x * blockDim.x + threadIdx.x;
-    if (clause >= (ull)TOTAL_CLAUSES)
-        return;
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    ull stride = (ull)blockDim.x * gridDim.x;
 
-    if (clause_drop_mask[clause] == 1) {
-        for (ull c = 0; c < (ull)CLASSES; ++c)
-            feedback_type[clause * (ull)CLASSES + c] = FB_NONE;
-        return;
-    }
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+        if (clause_drop_mask[clause] == 1) {
+            for (ull c = 0; c < (ull)CLASSES; ++c)
+                feedback_type[clause * (ull)CLASSES + c] = FB_NONE;
+            continue;
+        }
 
-    int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
-    int cd = clause_density[clause];
-    ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+        int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
+        int cd = clause_density[clause];
+        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
 
 #if COALESCED == 0
-    ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-    ull idx = clause * (ull)CLASSES + class_id;
-    decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
-              lambda_minus, feedback_type, is_clause_synced);
-#else
-    for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
+        ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         ull idx = clause * (ull)CLASSES + class_id;
         decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
                   lambda_minus, feedback_type, is_clause_synced);
-    }
+#else
+        for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
+            ull idx = clause * (ull)CLASSES + class_id;
+            decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights,
+                      lambda_plus, lambda_minus, feedback_type, is_clause_synced);
+        }
 #endif
+    }
 }
 
 extern "C" __global__ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask,
@@ -264,10 +265,10 @@ extern "C" __global__ void update_weights(const int* selected_patch_ids, const i
 // needed - every warp just reads the same precomputed value).
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
                                           uint* global_ta_states, const int* feat_mins, const int* literal_offsets,
-                                          const int8_t* feedback_type) {
+                                          const uint8_t* feedback_type) {
     ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
-    int lane = (int)(tid % 32);
     ull warp_id = tid / 32;
+    ull lane = tid % 32;
     ull total_warps = ((ull)gridDim.x * (ull)blockDim.x) / 32;
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -292,12 +293,12 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-        int8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
+        uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
         apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
                        lane, tile_id);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-            int8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
             apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins,
                            literal_offsets, lane, tile_id);
         }

@@ -33,6 +33,7 @@
 #define TYPE2_FB 1
 #define TRACK_PATCH_WEIGHTS 1
 #define BOOST_TP_FB 1
+#define WARPS_PER_CLAUSE 1
 #endif
 
 #define S_INV (1.0f / (float)(S))
@@ -55,6 +56,7 @@ namespace cg = cooperative_groups;
 using warp_t = cg::thread_block_tile<32>;
 typedef unsigned int uint;
 typedef signed char int8_t;
+typedef unsigned char uint8_t;
 typedef unsigned long long ull;
 
 __device__ inline ull mix64(ull x) {

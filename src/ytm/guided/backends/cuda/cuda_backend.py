@@ -13,7 +13,10 @@ def read_file(path):
 class CUDADevice(BaseDevice):
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
-        header = self._build_header()
+        header = f"""
+{self._build_header()}
+#define WARPS_PER_CLAUSE {self.args.warps_per_clause}
+"""
         common = header + "\n" + read_file(os.path.join(cur_dir, "common.cu")) + "\n"
 
         pack_mod = cp.RawModule(
@@ -80,7 +83,7 @@ class CUDADevice(BaseDevice):
         self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
-        self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.int8)
+        self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
         self._init_act_fn()
         self._init_loss_fn()
 
