@@ -1,23 +1,9 @@
 import os
-import warnings
 
 import numpy as np
 import cupy as cp
 from cupyx.scipy.special import expit as cp_expit, log_softmax as cp_log_softmax, softmax as cp_softmax
 from ..base import BaseDevice, PackedClauses, tqdm_bar
-
-
-class PackedClausesCUDA(PackedClauses):
-    def get(self):
-        return PackedClauses(
-            clause_position_bounds=self.clause_position_bounds.get(),
-            clause_feat_bounds=self.clause_feat_bounds.get(),
-            bounded_feat_ids=self.bounded_feat_ids.get(),
-            n_bounded_feats=self.n_bounded_feats.get(),
-            clause_density=self.clause_density.get(),
-            is_clause_synced=self.is_clause_synced.get(),
-        )
-
 
 def read_file(path):
     with open(path, "r") as f:
@@ -25,43 +11,6 @@ def read_file(path):
 
 
 class CUDADevice(BaseDevice):
-    def _build_header(self):
-        header = f"""
-#define TOTAL_CLAUSES {self.total_clauses}
-#define S {float(self.args.s)}f
-#define CLASSES {self.args.n_classes}
-#define HEIGHT {self.args.dim[0]}
-#define WIDTH {self.args.dim[1]}
-#define DEPTH {self.args.dim[2]}
-#define PATCH_HEIGHT {self.args.patch_dim[0]}
-#define PATCH_WIDTH {self.args.patch_dim[1]}
-#define STRIDE_Y {self.args.stride[0]}
-#define STRIDE_X {self.args.stride[1]}
-#define MAX_WEIGHT {float(self.args.max_weight)}f
-#define MAX_INCLUDED_LITERALS {self.args.max_includes}
-#define INCLUDE_STATE {self.args.include_state}
-#define MAX_TA_STATE {self.args.n_states - 1}
-#define N_RAW_PATCH_FEATS {self.n_raw_patch_feats}
-#define N_PATCH_FEATS {self.n_patch_feats}
-#define N_POSITION_FEATS {self.n_position_feats}
-#define N_PATCHES_Y {self.n_patches_y}
-#define N_PATCHES_X {self.n_patches_x}
-#define N_PATCHES {self.n_patches}
-#define N_LITERALS {self.n_literals}
-#define NEGATED_LITERALS {1 if self.args.negated_literals else 0}
-#define POSITION_LITERALS {1 if self.args.position_literals else 0}
-#define COALESCED {1 if self.args.coalesced else 0}
-#define WEIGHTED {1 if self.args.weighted else 0}
-#define NEGATIVE_CLAUSES {1 if self.args.negative_clauses else 0}
-#define ALLOW_POLARITY_CHANGE {1 if self.args.allow_polarity_change else 0}
-#define TYPE1A_FB {0 if self.args.skip_t1a_fb else 1}
-#define TYPE1B_FB {0 if self.args.skip_t1b_fb else 1}
-#define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
-#define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
-#define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
-"""
-        return header
-
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         header = self._build_header()
@@ -98,26 +47,6 @@ class CUDADevice(BaseDevice):
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 
-    def _init_packed_clauses(self):
-        clause_position_bounds = cp.empty((self.total_clauses, 4), dtype=np.int32)
-        clause_feat_bounds = cp.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
-        bounded_feat_ids = cp.empty((self.total_clauses, self.n_raw_patch_feats), dtype=np.int32)
-        n_bounded_feats = cp.empty(self.total_clauses, dtype=np.int32)
-        clause_density = cp.empty(self.total_clauses, dtype=np.int32)
-        is_clause_synced = cp.zeros(self.total_clauses, dtype=np.int8)
-
-        self.packed_clauses = PackedClausesCUDA(
-            clause_position_bounds=clause_position_bounds,
-            clause_feat_bounds=clause_feat_bounds,
-            bounded_feat_ids=bounded_feat_ids,
-            n_bounded_feats=n_bounded_feats,
-            clause_density=clause_density,
-            is_clause_synced=is_clause_synced,
-        )
-
-    def _init_frozen_clauses(self):
-        self.frozen_clauses = cp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=cp.int8)
-
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
         if self.args.grid_size is None:
@@ -126,156 +55,11 @@ class CUDADevice(BaseDevice):
             gs = self.args.grid_size
         return (gs, 1, 1), (bs, 1, 1)
 
-    def _init_act_fn(self):
-        if callable(self.args.act_fn):
-            self.act_fn = self.args.act_fn
-            self.dact_fn = lambda act: cp.ones_like(act)
-        elif self.args.act_fn == "softmax":
-            self.act_fn = lambda v: cp_softmax(v, axis=-1)
-            self.dact_fn = lambda act: cp.ones_like(act)
-        elif self.args.act_fn == "sigmoid":
-            self.act_fn = cp_expit
-            self.dact_fn = lambda act: act * (1.0 - act)
-        elif self.args.act_fn == "identity":
-            self.act_fn = lambda v: v
-            self.dact_fn = lambda act: cp.ones_like(act)
-        else:
-            raise NotImplementedError(f"act_fn '{self.args.act_fn}' not implemented")
-
-    def _init_loss_fn(self):
-        if callable(self.args.loss_fn):
-            _fn = self.args.loss_fn
-
-            def _loss_fn(v, y, grad, **kwargs):
-                return float(_fn(v, y, grad, **kwargs))
-        else:
-            lw = cp.asarray(
-                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=cp.float32,
-            )
-            if self.args.loss_fn == "ce":
-                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
-                if self.args.act_fn == "softmax":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        fw = (1.0 - float(cp.dot(y, act))) ** gamma
-                        grad[:] = (lw * fw * (y - act)).astype(cp.float32)
-                        return float(-cp.sum(lw * y * cp_log_softmax(v))) * fw
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        p_t = y * act + (1.0 - y) * (1.0 - act)
-                        fw = (1.0 - p_t) ** gamma
-                        grad[:] = (lw * fw * (y - act)).astype(cp.float32)
-                        return float(-cp.sum(lw * fw * (y * cp.log(act + 1e-7) + (1 - y) * cp.log(1 - act + 1e-7))))
-            elif self.args.loss_fn == "sce":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
-                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
-                if self.args.act_fn == "softmax":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        logy = cp.log(y + eps)
-                        A = float(cp.dot(act, logy))
-                        grad[:] = (lw * (alpha * (y - act) + beta * act * (logy - A))).astype(cp.float32)
-                        ce = float(-cp.sum(lw * y * cp_log_softmax(v)))
-                        rce = float(-cp.sum(lw * act * logy))
-                        return alpha * ce + beta * rce
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        bce_grad = y - act
-                        rce_grad = cp.log((y + eps) / (1.0 - y + eps)) * act * (1.0 - act)
-                        grad[:] = (lw * (alpha * bce_grad + beta * rce_grad)).astype(cp.float32)
-                        bce = float(-cp.sum(lw * (y * cp.log(act + eps) + (1 - y) * cp.log(1 - act + eps))))
-                        rce = float(-cp.sum(lw * (act * cp.log(y + eps) + (1 - act) * cp.log(1 - y + eps))))
-                        return alpha * bce + beta * rce
-            elif self.args.loss_fn == "mse":
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    grad[:] = (2 * lw * (y - act) * self.dact_fn(act)).astype(cp.float32)
-                    return float(cp.sum(lw * (y - act) ** 2))
-            elif self.args.loss_fn == "mae":
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    grad[:] = (lw * cp.sign(y - act) * self.dact_fn(act)).astype(cp.float32)
-                    return float(cp.sum(lw * cp.abs(y - act)))
-            elif self.args.loss_fn == "huber":
-                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    r = y - act
-                    grad[:] = (lw * cp.clip(r, -delta, delta) * self.dact_fn(act)).astype(cp.float32)
-                    huber = cp.where(cp.abs(r) <= delta, 0.5 * r**2, delta * (cp.abs(r) - 0.5 * delta))
-                    return float(cp.sum(lw * huber))
-            elif self.args.loss_fn == "tversky":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
-                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
-                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                if self.args.act_fn == "sigmoid":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        tp = float(cp.dot(lw * y, act))
-                        fp = float(cp.dot(lw * (1.0 - y), act))
-                        fn = float(cp.dot(lw * y, 1.0 - act))
-                        N = tp + eps
-                        D = tp + alpha * fp + beta * fn + eps
-                        T = N / D
-                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
-                        coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * act * (1.0 - act)).astype(cp.float32)
-                        return float((1.0 - T) ** gamma)
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        tp = float(cp.dot(lw * y, act))
-                        fp = float(cp.dot(lw * (1.0 - y), act))
-                        fn = float(cp.dot(lw * y, 1.0 - act))
-                        N = tp + eps
-                        D = tp + alpha * fp + beta * fn + eps
-                        T = N / D
-                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
-                        coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * self.dact_fn(act)).astype(cp.float32)
-                        return float((1.0 - T) ** gamma)
-            elif self.args.loss_fn == "asl":
-                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
-                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
-                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    p = cp.clip(self.act_fn(v), eps, 1.0 - eps)
-                    pm = cp.clip(p - clip, 0.0, 1.0) if clip > 0 else p
-                    active_neg = (p - clip) > 0 if clip > 0 else cp.ones_like(p, dtype=bool)
-                    pm = cp.clip(pm, eps, 1.0 - eps)
-
-                    loss_pos = (1.0 - p) ** gamma_pos * cp.log(p)
-                    loss_neg = (pm**gamma_neg) * cp.log(1.0 - pm)
-                    loss = -float(cp.sum(y * loss_pos + (1.0 - y) * loss_neg))
-
-                    grad_pos = (1.0 - p) ** (gamma_pos + 1.0) - gamma_pos * (1.0 - p) ** gamma_pos * p * cp.log(p)
-                    grad_neg = (gamma_neg * pm ** (gamma_neg - 1.0) * cp.log(1.0 - pm) - pm**gamma_neg / (1.0 - pm)) * p * (1.0 - p)
-                    grad_neg = cp.where(active_neg, grad_neg, 0.0)
-
-                    grad[:] = (y * grad_pos + (1.0 - y) * grad_neg).astype(cp.float32)
-                    return loss
-            else:
-                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
-        self.loss_fn = _loss_fn
-
     def dev_init(self):
         self.xp = cp
+        self._softmax = cp_softmax
+        self._expit = cp_expit
+        self._log_softmax = cp_log_softmax
         self.cuda_dev = cp.cuda.Device()
         props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
         self.cuda_props = {
@@ -295,15 +79,11 @@ class CUDADevice(BaseDevice):
         self._init_act_fn()
         self._init_loss_fn()
 
+    def _to_host(self, arr):
+        return arr.get()
+
     def set_threads(self, n_threads: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
-
-    def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
-        clause_ids = np.asarray(clause_ids, dtype=np.int32)
-        self.frozen_clauses[class_id, clause_ids] = 1
-
-    def unfreeze_clauses(self):
-        self.frozen_clauses.fill(0)
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
         N = X.shape[0]
@@ -529,24 +309,6 @@ class CUDADevice(BaseDevice):
             patch_output[i:batch_end] = po_batch.get()
 
         return patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
-
-    def get_weights(self):
-        return self.clause_weights.get()
-
-    def get_ta_states(self):
-        return self.ta_states.get().reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
-
-    def get_patch_weights(self):
-        if not self.args.track_patch_weights:
-            warnings.warn("track_patch_weights is False, so no patch_weights were saved.")
-        return self.patch_weights.get().reshape(self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x)
-
-    def get_state_dict(self):
-        return {
-            "ta_states": self.ta_states.get(),
-            "clause_weights": self.clause_weights.get(),
-            "patch_weights": self.patch_weights.get(),
-        }
 
     def load_state_dict(self, state_dict: dict):
         self.ta_states = cp.asarray(state_dict["ta_states"])
