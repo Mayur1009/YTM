@@ -98,24 +98,6 @@ class CUDADevice(BaseDevice):
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 
-    def _init_clauses(self):
-        self.ta_states = cp.full(
-            (self.total_clauses, self.n_literals),
-            self.args.include_state - 1,
-            dtype=np.uint32,
-        )
-
-    def _init_weights(self):
-        self.clause_weights = cp.asarray(
-            self.np_rng.uniform(-1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)),
-            dtype=np.float32,
-        )
-
-        if self.args.track_patch_weights:
-            self.patch_weights = cp.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
-        else:
-            self.patch_weights = cp.zeros((1, 1), dtype=np.int32)
-
     def _init_packed_clauses(self):
         clause_position_bounds = cp.empty((self.total_clauses, 4), dtype=np.int32)
         clause_feat_bounds = cp.empty((self.total_clauses, self.n_raw_patch_feats, 2), dtype=np.int32)
@@ -293,6 +275,7 @@ class CUDADevice(BaseDevice):
         self.loss_fn = _loss_fn
 
     def dev_init(self):
+        self.xp = cp
         self.cuda_dev = cp.cuda.Device()
         props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
         self.cuda_props = {

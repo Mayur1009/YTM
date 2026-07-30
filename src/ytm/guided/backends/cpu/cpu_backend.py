@@ -145,21 +145,6 @@ class CPUDevice(BaseDevice):
         """
         self.lib = self._compile_code(code)
 
-    def _init_clauses(self):
-        self.ta_states = np.full(
-            (self.total_clauses, self.n_literals),
-            self.args.include_state - 1,
-            dtype=np.uint32,
-        )
-
-    def _init_weights(self):
-        self.clause_weights = self.np_rng.uniform(-1.0, 1.0, size=(self.args.n_classes, self.args.n_clauses)).astype(np.float32)
-
-        if self.args.track_patch_weights:
-            self.patch_weights = np.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
-        else:
-            self.patch_weights = np.zeros((1, 1), dtype=np.int32)
-
     def _init_packed_clauses(self):
         self.packed_clauses = PackedClauses(
             clause_position_bounds=np.empty((self.total_clauses, 4), dtype=np.int32),
@@ -337,6 +322,7 @@ class CPUDevice(BaseDevice):
         self.loss_fn = _loss_fn
 
     def dev_init(self):
+        self.xp = np
         self._select_compiler()
         self._openmp_flags()
         self._init_clauses()

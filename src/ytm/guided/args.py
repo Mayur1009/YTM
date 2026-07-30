@@ -30,6 +30,8 @@ class TMArgs:
     max_includes: int = -1
     n_states: int = 256
     include_state: int = -1
+    ta_init: Literal["random", "middle"] | int = "random"
+    weight_init: Literal["random"] | float = "random"
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
     skip_t2_fb: bool = False
@@ -107,6 +109,12 @@ class TMArgs:
         else:
             self.lambda_plus = float(self.lambda_)
             self.lambda_minus = float(self.lambda_)
+
+        if isinstance(self.ta_init, int):
+            assert 0 <= self.ta_init <= self.n_states - 1, f"ta_init must be within 0 and n_states, 'middle' or 'random', got {self.ta_init}."
+
+        if isinstance(self.weight_init, float):
+            assert self.weight_init > 0, f"weight_init must be positive float, or 'random', got {self.weight_init}"
 
 
 class T_args(TypedDict, total=False):

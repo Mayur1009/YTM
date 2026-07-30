@@ -37,6 +37,7 @@ def tqdm_bar(iter, **kwargs):
 
 
 class BaseDevice(abc.ABC):
+    xp: types.ModuleType
     def __init__(self, args: TMArgs):
         self.args = args
 
@@ -91,3 +92,48 @@ class BaseDevice(abc.ABC):
         pass
 
 
+    def _init_clauses(self):
+        if self.args.ta_init == "middle":
+            self.ta_states = self.xp.full(
+                (self.total_clauses, self.n_literals),
+                self.args.include_state - 1,
+                dtype=np.uint32,
+            )
+        elif self.args.ta_init == "random":
+            self.ta_states = self.xp.asarray(
+                self.np_rng.integers(0, self.args.n_states, size=(self.total_clauses, self.n_literals)),
+                dtype=np.uint32,
+            )
+        else:
+            self.ta_states = self.xp.full(
+                (self.total_clauses, self.n_literals),
+                int(self.args.ta_init),
+                dtype=np.uint32,
+            )
+
+    def _init_weights(self):
+        shape = (self.args.n_classes, self.args.n_clauses)
+
+        if self.args.weight_init == "random":
+            mag = self.np_rng.uniform(0.0, 1.0, size=shape).astype(np.float32)
+        else:
+            mag = np.full(shape, float(self.args.weight_init), dtype=np.float32)
+
+        if self.args.negative_clauses:
+            n_neg_polarity = self.args.n_clauses // 2
+            sign = np.ones(shape, dtype=np.float32)
+            if self.args.coalesced:
+                for i in range(self.args.n_classes):
+                    pol = np.ones(self.args.n_clauses, dtype=np.float32)
+                    pol[n_neg_polarity:] = -1.0
+                    sign[i, :] = self.np_rng.permutation(pol)
+            else:
+                sign[:, n_neg_polarity:] = -1.0
+            mag = mag * sign
+
+        self.clause_weights = self.xp.asarray(mag, dtype=np.float32)
+
+        if self.args.track_patch_weights:
+            self.patch_weights = self.xp.zeros((self.total_clauses, self.n_patches), dtype=np.int32)
+        else:
+            self.patch_weights = self.xp.zeros((1, 1), dtype=np.int32)
