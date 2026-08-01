@@ -1,9 +1,13 @@
 import os
 
-import numpy as np
 import cupy as cp
-from cupyx.scipy.special import expit as cp_expit, log_softmax as cp_log_softmax, softmax as cp_softmax
-from ..base import BaseDevice, PackedClauses, tqdm_bar
+import numpy as np
+from cupyx.scipy.special import expit as cp_expit
+from cupyx.scipy.special import log_softmax as cp_log_softmax
+from cupyx.scipy.special import softmax as cp_softmax
+
+from ..base import BaseDevice, tqdm_bar
+from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
 
 
 def read_file(path):
@@ -88,10 +92,64 @@ class CUDADevice(BaseDevice):
     def _to_host(self, arr):
         return arr.get()
 
+    def _init_loss_fn(self):
+        if isinstance(self.args.loss_fn, str):
+            lw = cp.asarray(
+                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
+                dtype=np.float32,
+            )
+
+            if self.args.loss_fn == "ce":
+                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-7)
+                _loss_fn, _grad_fn = build_ce(lw, gamma, eps, self.args.act_fn)
+            elif self.args.loss_fn == "mse":
+                _loss_fn, _grad_fn = build_mse(lw, self.dact_fn)
+            elif self.args.loss_fn == "mae":
+                _loss_fn, _grad_fn = build_mae(lw, self.dact_fn)
+            elif self.args.loss_fn == "sce":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
+                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
+                _loss_fn, _grad_fn = build_sce(lw, alpha, beta, eps, self.args.act_fn)
+            elif self.args.loss_fn == "asl":
+                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
+                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
+                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
+                _loss_fn, _grad_fn = build_asl(gamma_pos, gamma_neg, clip, eps)
+            elif self.args.loss_fn == "tversky":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
+                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
+                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
+                _loss_fn, _grad_fn = build_tversky(lw, alpha, beta, gamma, eps, self.dact_fn)
+            elif self.args.loss_fn == "huber":
+                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
+                _loss_fn, _grad_fn = build_huber(lw, delta, self.dact_fn)
+            else:
+                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+
+            self.loss_fn = _loss_fn
+            self.grad_fn = _grad_fn
+
+        elif callable(self.args.loss_fn):
+            self.loss_fn = self.args.loss_fn
+        else:
+            raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+
     def set_threads(self, n: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
+    def fit_epoch(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        clause_drop_p: float,
+        batch_size: int,
+        lr: float | None = None,
+        poll_interval: int = 50,
+    ):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -108,9 +166,8 @@ class CUDADevice(BaseDevice):
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
-        loss_per_sample = cp.zeros(N, dtype=np.float32)
+        loss_per_sample = np.zeros(N, dtype=np.float32)
         running_loss = 0.0
-        sample_count = 0
 
         for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
             batch_end = min(i + batch_size, N)
@@ -158,11 +215,9 @@ class CUDADevice(BaseDevice):
                 else:
                     votes = (self.clause_weights * mask.reshape(self.args.n_classes, -1)).sum(axis=-1)
                 v = votes / self.args.n_clauses
-                loss_per_sample[i + e] = self.loss_fn(v, Y_batch[e].astype(cp.float32), grad, **self.args.loss_fn_kwargs)
 
-                running_loss += float(loss_per_sample[i + e])
-                sample_count += 1
-                pbar.set_postfix(loss=f"{running_loss / sample_count:.4f}")
+                y_hat = self.act_fn(v)
+                self.grad_fn(Y_batch[e], y_hat, grad)
 
                 self.k_decide_feedback(
                     *self.kconf_decide,
@@ -203,7 +258,12 @@ class CUDADevice(BaseDevice):
                         self.clause_weights,
                     ),
                 )
-        return loss_per_sample.get()
+
+                if (i + e) % poll_interval == 0 or (i + e) == N - 1:
+                    loss_per_sample[i + e] = self.loss_fn(Y_batch[e], y_hat)
+                    running_loss += loss_per_sample[i + e]
+                    pbar.set_postfix(loss=f"{running_loss / (i + e + 1):.4f}")
+        return loss_per_sample
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:

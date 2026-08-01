@@ -35,7 +35,9 @@ class BaseDevice(abc.ABC):
     xp: types.ModuleType
     _softmax: Callable
     _expit: Callable
-    _log_softmax: Callable
+    act_fn: Callable
+    loss_fn: Callable
+    grad_fn: Callable
 
     def __init__(self, args: TMArgs):
         self.args = args
@@ -128,6 +130,10 @@ class BaseDevice(abc.ABC):
     def load_state_dict(self, state_dict: dict):
         pass
 
+    @abc.abstractmethod
+    def _init_loss_fn(self):
+        """Build self.loss_fn(v, y, grad, **kwargs) -> float, writing the gradient into `grad` in place."""
+
     def _init_clauses(self):
         if self.args.ta_init == "middle":
             self.ta_states = self.xp.full(
@@ -205,140 +211,6 @@ class BaseDevice(abc.ABC):
             self.dact_fn = lambda act: self.xp.ones_like(act)
         else:
             raise NotImplementedError(f"act_fn '{self.args.act_fn}' not implemented")
-
-    def _init_loss_fn(self):
-        if callable(self.args.loss_fn):
-            _fn = self.args.loss_fn
-
-            def _loss_fn(v, y, grad, **kwargs):
-                return float(_fn(v, y, grad, **kwargs))
-        else:
-            lw = self.xp.asarray(
-                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=np.float32,
-            )
-            if self.args.loss_fn == "ce":
-                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
-                if self.args.act_fn == "softmax":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        fw = (1.0 - float(self.xp.dot(y, act))) ** gamma
-                        grad[:] = (lw * fw * (y - act)).astype(np.float32)
-                        return float(-self.xp.sum(lw * y * self._log_softmax(v))) * fw
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        p_t = y * act + (1.0 - y) * (1.0 - act)
-                        fw = (1.0 - p_t) ** gamma
-                        grad[:] = (lw * fw * (y - act)).astype(np.float32)
-                        return float(-self.xp.sum(lw * fw * (y * self.xp.log(act + 1e-7) + (1 - y) * self.xp.log(1 - act + 1e-7))))
-            elif self.args.loss_fn == "sce":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
-                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
-                if self.args.act_fn == "softmax":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        logy = self.xp.log(y + eps)
-                        A = float(self.xp.dot(act, logy))
-                        grad[:] = (lw * (alpha * (y - act) + beta * act * (logy - A))).astype(np.float32)
-                        ce = float(-self.xp.sum(lw * y * self._log_softmax(v)))
-                        rce = float(-self.xp.sum(lw * act * logy))
-                        return alpha * ce + beta * rce
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        bce_grad = y - act
-                        rce_grad = self.xp.log((y + eps) / (1.0 - y + eps)) * act * (1.0 - act)
-                        grad[:] = (lw * (alpha * bce_grad + beta * rce_grad)).astype(np.float32)
-                        bce = float(-self.xp.sum(lw * (y * self.xp.log(act + eps) + (1 - y) * self.xp.log(1 - act + eps))))
-                        rce = float(-self.xp.sum(lw * (act * self.xp.log(y + eps) + (1 - act) * self.xp.log(1 - y + eps))))
-                        return alpha * bce + beta * rce
-            elif self.args.loss_fn == "mse":
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    grad[:] = (2 * lw * (y - act) * self.dact_fn(act)).astype(np.float32)
-                    return float(self.xp.sum(lw * (y - act) ** 2))
-            elif self.args.loss_fn == "mae":
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    grad[:] = (lw * self.xp.sign(y - act) * self.dact_fn(act)).astype(np.float32)
-                    return float(self.xp.sum(lw * self.xp.abs(y - act)))
-            elif self.args.loss_fn == "huber":
-                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    act = self.act_fn(v)
-                    r = y - act
-                    grad[:] = (lw * self.xp.clip(r, -delta, delta) * self.dact_fn(act)).astype(np.float32)
-                    huber = self.xp.where(self.xp.abs(r) <= delta, 0.5 * r**2, delta * (self.xp.abs(r) - 0.5 * delta))
-                    return float(self.xp.sum(lw * huber))
-            elif self.args.loss_fn == "tversky":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
-                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
-                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                if self.args.act_fn == "sigmoid":
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        tp = float(self.xp.dot(lw * y, act))
-                        fp = float(self.xp.dot(lw * (1.0 - y), act))
-                        fn = float(self.xp.dot(lw * y, 1.0 - act))
-                        N = tp + eps
-                        D = tp + alpha * fp + beta * fn + eps
-                        T = N / D
-                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
-                        coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * act * (1.0 - act)).astype(np.float32)
-                        return float((1.0 - T) ** gamma)
-                else:
-
-                    def _loss_fn(v, y, grad, **kwargs):
-                        act = self.act_fn(v)
-                        tp = float(self.xp.dot(lw * y, act))
-                        fp = float(self.xp.dot(lw * (1.0 - y), act))
-                        fn = float(self.xp.dot(lw * y, 1.0 - act))
-                        N = tp + eps
-                        D = tp + alpha * fp + beta * fn + eps
-                        T = N / D
-                        fw = gamma * (1.0 - T) ** (gamma - 1.0)
-                        coeff = alpha + y * (1.0 - alpha - beta)
-                        grad[:] = (fw * lw * (y * D - N * coeff) / D**2 * self.dact_fn(act)).astype(np.float32)
-                        return float((1.0 - T) ** gamma)
-            elif self.args.loss_fn == "asl":
-                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
-                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
-                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
-
-                def _loss_fn(v, y, grad, **kwargs):
-                    p = self.xp.clip(self.act_fn(v), eps, 1.0 - eps)
-                    pm = self.xp.clip(p - clip, 0.0, 1.0) if clip > 0 else p
-                    active_neg = (p - clip) > 0 if clip > 0 else self.xp.ones_like(p, dtype=bool)
-                    pm = self.xp.clip(pm, eps, 1.0 - eps)
-
-                    loss_pos = (1.0 - p) ** gamma_pos * self.xp.log(p)
-                    loss_neg = (pm**gamma_neg) * self.xp.log(1.0 - pm)
-                    loss = -float(self.xp.sum(y * loss_pos + (1.0 - y) * loss_neg))
-
-                    grad_pos = (1.0 - p) ** (gamma_pos + 1.0) - gamma_pos * (1.0 - p) ** gamma_pos * p * self.xp.log(p)
-                    grad_neg = (
-                        gamma_neg * pm ** (gamma_neg - 1.0) * self.xp.log(1.0 - pm) - pm**gamma_neg / (1.0 - pm)
-                    ) * p * (1.0 - p)
-                    grad_neg = self.xp.where(active_neg, grad_neg, 0.0)
-
-                    grad[:] = (y * grad_pos + (1.0 - y) * grad_neg).astype(np.float32)
-                    return loss
-            else:
-                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
-        self.loss_fn = _loss_fn
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         clause_ids = np.asarray(clause_ids, dtype=np.int32)

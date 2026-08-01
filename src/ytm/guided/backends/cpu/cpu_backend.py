@@ -11,6 +11,7 @@ import numpy as np
 from scipy.special import expit, log_softmax, softmax
 
 from ..base import BaseDevice, tqdm_bar
+from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -137,10 +138,64 @@ class CPUDevice(BaseDevice):
     def _to_host(self, arr):
         return arr.copy()
 
+    def _init_loss_fn(self):
+        if isinstance(self.args.loss_fn, str):
+            lw = np.asarray(
+                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
+                dtype=np.float32,
+            )
+
+            if self.args.loss_fn == "ce":
+                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-7)
+                _loss_fn, _grad_fn = build_ce(lw, gamma, eps, self.args.act_fn)
+            elif self.args.loss_fn == "mse":
+                _loss_fn, _grad_fn = build_mse(lw, self.dact_fn)
+            elif self.args.loss_fn == "mae":
+                _loss_fn, _grad_fn = build_mae(lw, self.dact_fn)
+            elif self.args.loss_fn == "sce":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
+                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
+                _loss_fn, _grad_fn = build_sce(lw, alpha, beta, eps, self.args.act_fn)
+            elif self.args.loss_fn == "asl":
+                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
+                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
+                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
+                _loss_fn, _grad_fn = build_asl(gamma_pos, gamma_neg, clip, eps)
+            elif self.args.loss_fn == "tversky":
+                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
+                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
+                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
+                _loss_fn, _grad_fn = build_tversky(lw, alpha, beta, gamma, eps, self.dact_fn)
+            elif self.args.loss_fn == "huber":
+                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
+                _loss_fn, _grad_fn = build_huber(lw, delta, self.dact_fn)
+            else:
+                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+
+            self.loss_fn = _loss_fn
+            self.grad_fn = _grad_fn
+
+        elif callable(self.args.loss_fn):
+            self.loss_fn = self.args.loss_fn
+        else:
+            raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(n))
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
+    def fit_epoch(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        clause_drop_p: float,
+        batch_size: int,
+        lr: float | None = None,
+        poll_interval: int = 50,
+    ):
         N = X.shape[0]
 
         if clause_drop_p > 0.0:
@@ -199,10 +254,8 @@ class CPUDevice(BaseDevice):
                 p_votes,
             )
             v = (votes / self.args.n_clauses).astype(np.float32)
-            y = Y[e].astype(np.float32)
-            loss_per_sample[e] = self.loss_fn(v, y, grad, **self.args.loss_fn_kwargs)
-            running_loss += loss_per_sample[e]
-            pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
+            y_hat = self.act_fn(v)
+            self.grad_fn(Y[e], y_hat, grad)
             self.lib.update_clauses(
                 c_uint64(self.args.seed),
                 p_selected_pids,
@@ -226,6 +279,12 @@ class CPUDevice(BaseDevice):
                 c_float(_lr),
                 self.p_clause_weights,
             )
+
+            if e % poll_interval == 0 or e == N - 1:
+                loss_per_sample[e] = self.loss_fn(Y[e], y_hat)
+                running_loss += loss_per_sample[e]
+                pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
+
         return loss_per_sample
 
     def pack_clauses(self, force_repack: bool = False):
