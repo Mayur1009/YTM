@@ -42,8 +42,7 @@ class CUDADevice(BaseDevice):
             options=("--use_fast_math",),
         )
         self.k_update_clauses = update_mod.get_function("update_clauses")
-        self.k_update_weights = update_mod.get_function("update_weights")
-        self.k_decide_feedback = update_mod.get_function("decide_feedback")
+        self.k_decide_feedback = update_mod.get_function("decide_feedback_and_update_weights")
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
@@ -227,6 +226,7 @@ class CUDADevice(BaseDevice):
                         self.seed,
                         np.int32(e),
                         grad,
+                        np.float32(_lr),
                         self.clause_weights,
                         self.packed_clauses.clause_density,
                         selected_patch_ids,
@@ -248,16 +248,6 @@ class CUDADevice(BaseDevice):
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
                         self.feedback_type,
-                    ),
-                )
-                self.k_update_weights(
-                    *self._kernel_config(self.total_clauses),
-                    (
-                        selected_patch_ids,
-                        clause_drop_mask_gpu,
-                        grad,
-                        np.float32(_lr),
-                        self.clause_weights,
                     ),
                 )
 

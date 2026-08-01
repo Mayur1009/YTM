@@ -57,10 +57,6 @@ __device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta
 #endif
 }
 
-// tile_id in [0, WARPS_PER_CLAUSE): each tile handles a disjoint, interleaved
-// slice of features/literals, so multiple independent warps can cooperate on
-// one clause with zero cross-warp synchronization (no shared feedback
-// decision needed here - that's precomputed by decide_feedback below).
 __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
                                  int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane,
                                  int tile_id) {
@@ -165,10 +161,6 @@ __device__ inline void apply_feedback(uint8_t fb_type, ull rng_key, uint* rng_co
     }
 }
 
-// Phase A: decide (once per clause-class pair, cheap, no literal access at
-// all). Split out so multiple independent warps can cooperate on the literal
-// work in update_clauses below without needing to agree on a shared random
-// decision mid-kernel.
 __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull class_id, ull rel_clause,
                                   int clause_output, int clause_density, const float* grad,
                                   const float* clause_weights, float lambda_plus, float lambda_minus,
@@ -204,8 +196,8 @@ __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull clas
     }
 }
 
-extern "C" __global__ void decide_feedback(const ull seed, const int e, const float* grad,
-                                           const float* clause_weights, const int* clause_density,
+extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, const int e, const float* grad, const float lr,
+                                           float* clause_weights, const int* clause_density,
                                            const int* selected_patch_ids, const int8_t* clause_drop_mask,
                                            const float lambda_plus, const float lambda_minus, uint8_t* feedback_type,
                                            int8_t* is_clause_synced) {
@@ -228,41 +220,21 @@ extern "C" __global__ void decide_feedback(const ull seed, const int e, const fl
         ull idx = clause * (ull)CLASSES + class_id;
         decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
                   lambda_minus, feedback_type, is_clause_synced);
+        if (clause_output)
+            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             ull idx = clause * (ull)CLASSES + class_id;
             decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights,
                       lambda_plus, lambda_minus, feedback_type, is_clause_synced);
         }
+        if (clause_output)
+            for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id)
+                clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
 #endif
     }
 }
 
-extern "C" __global__ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask,
-                                          const float* grad, const float lr, float* clause_weights) {
-    ull tid = threadIdx.x + (ull)blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
-        if (clause_drop_mask[clause] == 1 || selected_patch_ids[clause] < 0)
-            continue;
-
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-
-#if COALESCED == 0
-        ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-        clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
-#else
-        for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
-        }
-#endif
-    }
-}
-
-// Phase B: apply. WARPS_PER_CLAUSE independent warps per clause, each reading
-// the already-decided feedback_type (no per-warp decision, no synchronization
-// needed - every warp just reads the same precomputed value).
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
                                           uint* global_ta_states, const int* feat_mins, const int* literal_offsets,
                                           const uint8_t* feedback_type) {
