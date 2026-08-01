@@ -194,9 +194,10 @@ class CPUDevice(BaseDevice):
         clause_drop_p: float,
         batch_size: int,
         lr: float | None = None,
-        poll_interval: int = 50,
+        loss_poll_rate: float = 0.1,
     ):
         N = X.shape[0]
+        loss_poll_interval = max(1, int(N * loss_poll_rate))
 
         if clause_drop_p > 0.0:
             clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
@@ -212,7 +213,6 @@ class CPUDevice(BaseDevice):
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         grad = np.empty(self.args.n_classes, dtype=np.float32)
-        loss_per_sample = np.zeros(N, dtype=np.float32)
         running_loss = 0.0
 
         p_X = X.ctypes.data_as(int32_p)
@@ -280,12 +280,9 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
             )
 
-            if e % poll_interval == 0 or e == N - 1:
-                loss_per_sample[e] = self.loss_fn(Y[e], y_hat)
-                running_loss += loss_per_sample[e]
+            if e % loss_poll_interval == 0 or e == N - 1:
+                running_loss += self.loss_fn(Y[e], y_hat)
                 pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
-
-        return loss_per_sample
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:

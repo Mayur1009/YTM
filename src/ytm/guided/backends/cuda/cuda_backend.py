@@ -150,9 +150,10 @@ class CUDADevice(BaseDevice):
         clause_drop_p: float,
         batch_size: int,
         lr: float | None = None,
-        poll_interval: int = 50,
+        loss_poll_rate: float = 0.1,
     ):
         N = X.shape[0]
+        loss_poll_interval = max(1, int(N * loss_poll_rate))
         if batch_size == -1:
             batch_size = N
 
@@ -169,7 +170,6 @@ class CUDADevice(BaseDevice):
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.empty(self.args.n_classes, dtype=np.float32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
-        loss_per_sample = np.zeros(N, dtype=np.float32)
         running_loss = 0.0
 
         for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
@@ -260,11 +260,9 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                if (i + e) % poll_interval == 0 or (i + e) == N - 1:
-                    loss_per_sample[i + e] = self.loss_fn(Y_batch[e], y_hat)
-                    running_loss += loss_per_sample[i + e]
+                if (i + e) % loss_poll_interval == 0 or (i + e) == N - 1:
+                    running_loss += self.loss_fn(Y_batch[e], y_hat)
                     pbar.set_postfix(loss=f"{running_loss / (i + e + 1):.4f}")
-        return loss_per_sample
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
