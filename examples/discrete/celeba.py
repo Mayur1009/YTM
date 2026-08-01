@@ -26,9 +26,8 @@ def preprocessing(images, transforms):
 
 def process_dataset():
     ds = load_dataset("tpremoli/CelebA-attrs")
-    Y_train, Y_test = map(
-        lambda x: np.asarray((np.stack([x[label] for label in label_names], axis=1) + 1) // 2, dtype=np.int32),
-        (ds["train"], ds["test"]),
+    Y_train, Y_test = (
+        np.asarray((np.stack([x[label] for label in label_names], axis=1) + 1) // 2, dtype=np.int32) for x in (ds["train"], ds["test"])
     )
 
     train_transforms = A.Compose([A.Resize(64, 64)])
@@ -70,8 +69,12 @@ def train(tm: MultiOutputTM, X_train, Y_train, X_test, Y_test, epochs=1):
         print_table(
             f"Epoch {epoch + 1}/{epochs}",
             {
-                "Train": {**{k: f"{v:.4f}" for k, v in train_mets.items()}, "Fit Time": f"{train_fit_timer.elapsed:.2f}s", "Infer Time": f"{train_timer.elapsed:.2f}s"},
-                "Test":  {**{k: f"{v:.4f}" for k, v in test_mets.items()}, "Infer Time": f"{test_timer.elapsed:.2f}s"},
+                "Train": {
+                    **{k: f"{v:.4f}" for k, v in train_mets.items()},
+                    "Fit Time": f"{train_fit_timer.elapsed:.2f}s",
+                    "Infer Time": f"{train_timer.elapsed:.2f}s",
+                },
+                "Test": {**{k: f"{v:.4f}" for k, v in test_mets.items()}, "Infer Time": f"{test_timer.elapsed:.2f}s"},
             },
         )
 

@@ -110,6 +110,41 @@ extern "C" __global__ void infer_clauses(const int* X, int8_t* clause_outputs, c
 #endif
 }
 
+extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums,
+                                     const int N) {
+    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto grid = cg::this_grid();
+    int lane = warp.thread_rank();
+    ull warp_id = grid.thread_rank() / warp.size();
+    ull total_warps = grid.size() / warp.size();
+    ull total_work = (ull)N * CLASSES;
+
+    for (ull idx = warp_id; idx < total_work; idx += total_warps) {
+        ull e = idx / (ull)CLASSES;
+        ull class_id = idx % (ull)CLASSES;
+
+        const int8_t* co = &clause_outputs[e * (ull)TOTAL_CLAUSES];
+        const float* cw = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS];
+        ull clause_base = class_id * (ull)CLAUSES_PER_CLASS;
+
+        float partial = 0.0f;
+        for (int c = lane; c < CLAUSES_PER_CLASS; c += (int)warp.size()) {
+#if COALESCED == 0
+            if (co[clause_base + c])
+                partial += cw[c];
+#else
+            if (co[c])
+                partial += cw[c];
+#endif
+        }
+
+        partial = cg::reduce(warp, partial, cg::plus<float>());
+
+        if (lane == 0)
+            class_sums[e * (ull)CLASSES + class_id] = partial;
+    }
+}
+
 extern "C" __global__ void infer_clauses_patchwise(const int* X, int8_t* patch_output, const int N,
                                                    const int* clause_position_bounds, const int* clause_feat_bounds,
                                                    const int* bounded_feat_ids, const int* n_bounded_feats,

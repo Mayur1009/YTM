@@ -45,6 +45,7 @@ class CUDADevice(BaseDevice):
             options=("--use_fast_math",),
         )
         self.k_eval_clauses = infer_mod.get_function("infer_clauses")
+        self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
@@ -252,13 +253,15 @@ class CUDADevice(BaseDevice):
                 ),
             )
 
-            co_f = co_batch.astype(cp.float32)
-            if self.args.coalesced:
-                class_sums[i:batch_end] = co_f @ self.clause_weights.T
-            else:
-                class_sums[i:batch_end] = (
-                    co_f.reshape(bs, self.args.n_classes, -1) * self.clause_weights[None, :, :]
-                ).sum(axis=-1)
+            self.k_sum_votes(
+                *self._kernel_config(bs * self.args.n_classes * self.cuda_props["warp_size"]),
+                (
+                    co_batch,
+                    self.clause_weights,
+                    class_sums[i:batch_end],
+                    np.int32(bs),
+                ),
+            )
 
         v = class_sums / self.args.n_clauses
         return self.act_fn(v).astype(cp.float32).get()
