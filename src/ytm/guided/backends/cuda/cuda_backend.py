@@ -35,6 +35,7 @@ class CUDADevice(BaseDevice):
             options=("--use_fast_math",),
         )
         self.k_evaluate = eval_mod.get_function("evaluate")
+        self.k_count_votes = eval_mod.get_function("count_votes")
 
         update_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
@@ -54,6 +55,7 @@ class CUDADevice(BaseDevice):
 
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
         self.kconf_decide = self._kernel_config(self.total_clauses)
+        self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -165,6 +167,7 @@ class CUDADevice(BaseDevice):
         clause_drop_mask_gpu = cp.logical_or(clause_drop_mask_gpu, self.frozen_clauses.flatten()).astype(cp.int8)
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
+        votes = cp.empty(self.args.n_classes, dtype=np.float32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
         loss_per_sample = np.zeros(N, dtype=np.float32)
         running_loss = 0.0
@@ -209,14 +212,12 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                mask = (selected_patch_ids >= 0).astype(cp.float32)
-                if self.args.coalesced:
-                    votes = self.clause_weights @ mask
-                else:
-                    votes = (self.clause_weights * mask.reshape(self.args.n_classes, -1)).sum(axis=-1)
-                v = votes / self.args.n_clauses
+                self.k_count_votes(
+                    *self.kconf_classes,
+                    (selected_patch_ids, self.clause_weights, votes),
+                )
 
-                y_hat = self.act_fn(v)
+                y_hat = self.act_fn(votes)
                 self.grad_fn(Y_batch[e], y_hat, grad)
 
                 self.k_decide_feedback(
@@ -323,8 +324,7 @@ class CUDADevice(BaseDevice):
                 ),
             )
 
-        v = class_sums / self.args.n_clauses
-        return self.act_fn(v).astype(cp.float32).get()
+        return self.act_fn(class_sums).astype(cp.float32).get()
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

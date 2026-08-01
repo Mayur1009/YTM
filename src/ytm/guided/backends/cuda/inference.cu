@@ -141,7 +141,7 @@ extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* 
         partial = cg::reduce(warp, partial, cg::plus<float>());
 
         if (lane == 0)
-            class_sums[e * (ull)CLASSES + class_id] = partial;
+            class_sums[e * (ull)CLASSES + class_id] = partial / (float)CLAUSES_PER_CLASS;
     }
 }
 
