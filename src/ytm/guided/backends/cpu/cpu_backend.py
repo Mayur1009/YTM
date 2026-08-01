@@ -214,6 +214,7 @@ class CPUDevice(BaseDevice):
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         grad = np.empty(self.args.n_classes, dtype=np.float32)
         running_loss = 0.0
+        n_polls = 0
 
         p_X = X.ctypes.data_as(int32_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
@@ -282,7 +283,8 @@ class CPUDevice(BaseDevice):
 
             if e % loss_poll_interval == 0 or e == N - 1:
                 running_loss += self.loss_fn(Y[e], y_hat)
-                pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
+                n_polls += 1
+                pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:

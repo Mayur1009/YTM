@@ -171,6 +171,7 @@ class CUDADevice(BaseDevice):
         votes = cp.empty(self.args.n_classes, dtype=np.float32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
         running_loss = 0.0
+        n_polls = 0
 
         for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
             batch_end = min(i + batch_size, N)
@@ -262,7 +263,8 @@ class CUDADevice(BaseDevice):
 
                 if (i + e) % loss_poll_interval == 0 or (i + e) == N - 1:
                     running_loss += self.loss_fn(Y_batch[e], y_hat)
-                    pbar.set_postfix(loss=f"{running_loss / (i + e + 1):.4f}")
+                    n_polls += 1
+                    pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
