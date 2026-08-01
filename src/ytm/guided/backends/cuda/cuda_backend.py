@@ -53,7 +53,8 @@ class CUDADevice(BaseDevice):
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
         if self.args.grid_size is None:
-            gs = (n + bs - 1) // bs
+            max_gs = self.cuda_props["multiprocessor_count"] * 32
+            gs = min((n + bs - 1) // bs, max_gs)
         else:
             gs = self.args.grid_size
         return (gs, 1, 1), (bs, 1, 1)
