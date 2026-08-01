@@ -8,7 +8,7 @@ import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 
 import numpy as np
-from scipy.special import expit, log_softmax, softmax
+from scipy.special import expit, softmax
 
 from ..base import BaseDevice, tqdm_bar
 from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
@@ -122,7 +122,6 @@ class CPUDevice(BaseDevice):
         self.xp = np
         self._softmax = softmax
         self._expit = expit
-        self._log_softmax = log_softmax
         self._select_compiler()
         self._openmp_flags()
         self._init_clauses()

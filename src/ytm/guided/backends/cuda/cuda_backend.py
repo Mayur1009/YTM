@@ -2,11 +2,9 @@ import os
 
 import cupy as cp
 import numpy as np
-from cupyx.scipy.special import expit as cp_expit
-from cupyx.scipy.special import log_softmax as cp_log_softmax
-from cupyx.scipy.special import softmax as cp_softmax
 
 from ..base import BaseDevice, tqdm_bar
+from .activations import sigmoid, softmax
 from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
 
 
@@ -67,9 +65,9 @@ class CUDADevice(BaseDevice):
 
     def dev_init(self):
         self.xp = cp
-        self._softmax = cp_softmax
-        self._expit = cp_expit
-        self._log_softmax = cp_log_softmax
+        self._softmax = softmax
+        self._expit = sigmoid
+
         self.cuda_dev = cp.cuda.Device()
         props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
         self.cuda_props = {
@@ -77,6 +75,7 @@ class CUDADevice(BaseDevice):
             "multiprocessor_count": props["multiProcessorCount"],
             "warp_size": props["warpSize"],
         }
+
         self.seed = np.uint64(self.args.seed)
         self._init_clauses()
         self._init_weights()
