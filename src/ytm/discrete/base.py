@@ -146,6 +146,7 @@ class BaseTM:
         assert np.prod(X.shape[1:]) == np.prod(self.args.dim), (
             f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
         )
+        X = np.ascontiguousarray(X)
 
         N = X.shape[0]
         iota = np.arange(N)
@@ -178,7 +179,7 @@ class BaseTM:
         ndarray of shape (N, n_classes)
             Vote sums per class.
         """
-        class_sums = self.dev.infer(X, batch_size)
+        class_sums = self.dev.infer(np.ascontiguousarray(X), batch_size)
         if clip_class_sums:
             class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
         return class_sums
@@ -199,7 +200,7 @@ class BaseTM:
         ndarray of shape (N, n_patches, n_clause_banks, n_clauses)
             Clause activation (0 or 1) per patch per sample.
         """
-        patch_outputs = self.dev.transform_patchwise(X, batch_size)
+        patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size)
         return patch_outputs
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
