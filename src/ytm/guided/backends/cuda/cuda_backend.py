@@ -255,6 +255,8 @@ class CUDADevice(BaseDevice):
                     n_polls += 1
                     pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
 
+        return running_loss / n_polls
+
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
             self.packed_clauses.is_clause_synced.fill(0)
