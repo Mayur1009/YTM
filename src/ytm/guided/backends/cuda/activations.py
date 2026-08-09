@@ -27,8 +27,8 @@ _softmax_normalize = cp.ElementwiseKernel(
 
 
 def softmax(v, axis=-1):
-    max_v = _softmax_max(v)
-    sum_exp = _softmax_sum_exp(v, max_v)
+    max_v = _softmax_max(v, axis=axis, keepdims=True)
+    sum_exp = _softmax_sum_exp(v, max_v, axis=axis, keepdims=True)
     return _softmax_normalize(v, max_v, sum_exp)
 
 
