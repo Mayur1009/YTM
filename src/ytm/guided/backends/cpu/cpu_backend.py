@@ -161,7 +161,7 @@ class CPUDevice(BaseDevice):
                 gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
                 gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
                 clip = self.args.loss_fn_kwargs.get("clip", 0.05)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-8)
+                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
                 _loss_fn, _grad_fn = build_asl(gamma_pos, gamma_neg, clip, eps)
             elif self.args.loss_fn == "tversky":
                 alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)

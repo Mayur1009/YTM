@@ -139,6 +139,8 @@ class T_args(TypedDict, total=False):
     max_includes: int
     n_states: int
     include_state: int
+    ta_init: Literal["random", "middle", "random_include"] | str | int
+    weight_init: Literal["random"] | float
     skip_t1a_fb: bool
     skip_t1b_fb: bool
     skip_t2_fb: bool
@@ -150,3 +152,4 @@ class T_args(TypedDict, total=False):
     compile_flags: list[str]
     grid_size: int | None
     block_size: int
+    warps_per_clause: int
