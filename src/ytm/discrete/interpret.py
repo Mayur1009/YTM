@@ -41,7 +41,7 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
     N = X.shape[0]
 
     weights = tm.get_weights()  # (n_classes, n_clauses) or (n_clause_banks, n_clauses)
-    feature_bounds, position_bounds, is_valid = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
+    feature_bounds, _, _ = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
     feature_bounds = feature_bounds.reshape(feature_bounds.shape[0], feature_bounds.shape[1], tm.dev.n_raw_patch_feats, 2)
 
     # Convert bounds to single value: lower + upper - feat_min - feat_max
@@ -131,10 +131,15 @@ def wic(tm: BaseTM, force_repack: bool = False, normalize: bool = True):
 
     # Get weights, clauses, and patch_weights
     weights = tm.get_weights()  # (n_classes, n_clauses) or (n_clause_banks, n_clauses)
-    patch_weights = tm.get_patch_weights().astype(np.float32)  # (n_clause_banks, n_clauses, n_patches_y, n_patches_x)
-    patch_weights = patch_weights / (patch_weights.max(axis=(-2, -1), keepdims=True) + 1e-7)
-    feature_bounds, position_bounds, is_valid = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
+    if tm.dev.n_patches_y == 1 and tm.dev.n_patches_x == 1:
+        patch_weights = np.ones((tm.dev.n_clause_banks, tm.args.n_clauses, 1, 1), dtype=np.float32)
+    else:
+        patch_weights = tm.get_patch_weights().astype(np.float32)  # (n_clause_banks, n_clauses, n_patches_y, n_patches_x)
+        patch_weights = patch_weights / (patch_weights.max(axis=(-2, -1), keepdims=True) + 1e-7)
+    feature_bounds, position_bounds, clause_density = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
     feature_bounds = feature_bounds.reshape(feature_bounds.shape[0], feature_bounds.shape[1], tm.dev.n_raw_patch_feats, 2)
+
+    is_valid = clause_density != -1
 
     # Convert bounds to single value: lower + upper - feat_min - feat_max
     # Positive = high, negative = low, zero = don't care

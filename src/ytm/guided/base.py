@@ -9,7 +9,7 @@ from .args import T_args, TMArgs
 class ClauseInfo(NamedTuple):
     feature_bounds: np.ndarray  # (total_clauses, n_raw_patch_feats, 2) closed [lower, upper]
     position_bounds: np.ndarray | None  # (total_clauses, 4) closed [min_y, max_y, min_x, max_x] or None
-    is_valid: np.ndarray  # (total_clauses,) bool
+    clause_density: np.ndarray  # (total_clauses,) int, -1 marks an invalid clause (contains a contradiction)
 
 
 class BaseTM:
@@ -105,12 +105,12 @@ class BaseTM:
         if self.args.position_literals or self.dev.n_patches > 1:
             position_bounds = buf.clause_position_bounds.reshape((self.dev.n_clause_banks, self.args.n_clauses, 4))
 
-        is_valid = buf.is_clause_synced.reshape((self.dev.n_clause_banks, self.args.n_clauses)).astype(bool)
+        clause_density = buf.clause_density.reshape((self.dev.n_clause_banks, self.args.n_clauses))
 
         return ClauseInfo(
             feature_bounds=clause_feat_bounds,
             position_bounds=position_bounds,
-            is_valid=is_valid,
+            clause_density=clause_density,
         )
 
     def to(self, device: Literal["cpu", "cuda"]):

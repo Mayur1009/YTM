@@ -16,13 +16,14 @@ class ClauseInfo(NamedTuple):
     position_bounds : ndarray of shape (n_clause_banks, n_clauses, 4) or None
         Closed ``[min_y, max_y, min_x, max_x]`` position bounds per clause.
         ``None`` when position literals are disabled and input has a single patch.
-    is_valid : ndarray of shape (n_clause_banks, n_clauses), dtype bool
-        Mask indicating which clauses have been synced and are valid.
+    clause_density : ndarray of shape (n_clause_banks, n_clauses), dtype int
+        Number of included literals per clause. ``-1`` marks an invalid
+        clause (contains a contradiction).
     """
 
     feature_bounds: np.ndarray
     position_bounds: np.ndarray | None
-    is_valid: np.ndarray
+    clause_density: np.ndarray
 
 
 class BaseTM:
@@ -288,7 +289,7 @@ class BaseTM:
         -------
         ClauseInfo
             Named tuple with ``feature_bounds``, ``position_bounds``, and
-            ``is_valid``. See :class:`ClauseInfo` for field shapes.
+            ``clause_density``. See :class:`ClauseInfo` for field shapes.
         """
         self.dev.pack_clauses(force_repack)
         buf = self.dev.packed_clauses.get()
@@ -299,12 +300,12 @@ class BaseTM:
         if self.args.position_literals or self.dev.n_patches > 1:
             position_bounds = buf.clause_position_bounds.reshape((self.dev.n_clause_banks, self.args.n_clauses, 4))
 
-        is_valid = buf.is_clause_synced.reshape((self.dev.n_clause_banks, self.args.n_clauses)).astype(bool)
+        clause_density = buf.clause_density.reshape((self.dev.n_clause_banks, self.args.n_clauses))
 
         return ClauseInfo(
             feature_bounds=clause_feat_bounds,
             position_bounds=position_bounds,
-            is_valid=is_valid,
+            clause_density=clause_density,
         )
 
     def to(self, device: Literal["cpu", "cuda"]):

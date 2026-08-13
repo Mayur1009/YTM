@@ -12,7 +12,7 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
     N = X.shape[0]
 
     weights = tm.get_weights()  # (n_classes, n_clauses) or (n_clause_banks, n_clauses)
-    feature_bounds, position_bounds, is_valid = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
+    feature_bounds, _, _ = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
     feature_bounds = feature_bounds.reshape(feature_bounds.shape[0], feature_bounds.shape[1], tm.dev.n_raw_patch_feats, 2)
 
     # Convert bounds to single value: lower + upper - feat_min - feat_max
@@ -67,7 +67,7 @@ def wac(tm: BaseTM, X, target_classes=None, batch_size: int = -1, force_repack: 
     return wac_output
 
 
-def wic(tm: BaseTM, force_repack: bool = False):
+def wic(tm: BaseTM, force_repack: bool = False, normalize: bool = True):
     """
     A template to compute the global interpretation, also called the WIC for a set of input samples. This should work for image data, but can be adpated to other domains as well.
     """
@@ -76,10 +76,15 @@ def wic(tm: BaseTM, force_repack: bool = False):
 
     # Get weights, clauses, and patch_weights
     weights = tm.get_weights()  # (n_classes, n_clauses) or (n_clause_banks, n_clauses)
-    patch_weights = tm.get_patch_weights().astype(np.float32)  # (n_clause_banks, n_clauses, n_patches_y, n_patches_x)
-    patch_weights = patch_weights / (patch_weights.max(axis=(-2, -1), keepdims=True) + 1e-7)
-    feature_bounds, position_bounds, is_valid = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
+    if tm.dev.n_patches_y == 1 and tm.dev.n_patches_x == 1:
+        patch_weights = np.ones((tm.dev.n_clause_banks, tm.args.n_clauses, 1, 1), dtype=np.float32)
+    else:
+        patch_weights = tm.get_patch_weights().astype(np.float32)  # (n_clause_banks, n_clauses, n_patches_y, n_patches_x)
+        patch_weights = patch_weights / (patch_weights.max(axis=(-2, -1), keepdims=True) + 1e-7)
+    feature_bounds, position_bounds, clause_density = tm.get_clauses(force_repack)  # fb: (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
     feature_bounds = feature_bounds.reshape(feature_bounds.shape[0], feature_bounds.shape[1], tm.dev.n_raw_patch_feats, 2)
+
+    is_valid = clause_density != -1
 
     # Convert bounds to single value: lower + upper - feat_min - feat_max
     # Positive = high, negative = low, zero = don't care
@@ -125,5 +130,13 @@ def wic(tm: BaseTM, force_repack: bool = False):
                         clause_pw[y0 : y0 + ph, x0 : x0 + pw, :] += cp * pw_val
 
             wic_output[class_id] += w * clause_pw
+
+    if normalize:
+        for c in range(n_classes):
+            img = wic_output[c]
+            if img.min() < 0:
+                img[img < 0] = img[img < 0] / (-1 * img[img < 0].min() + 1e-7)
+            if img.max() > 0:
+                img[img > 0] = img[img > 0] / (img[img > 0].max() + 1e-7)
 
     return wic_output
