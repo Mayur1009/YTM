@@ -170,14 +170,14 @@ class CUDADevice(BaseDevice):
         running_loss = 0.0
         n_polls = 0
 
-        for i in tqdm_bar(range(0, N, batch_size), desc="Fit batch"):
+        pbar = tqdm_bar(None, desc="Fit", total=N)
+        for i in range(0, N, batch_size):
             batch_end = min(i + batch_size, N)
             X_batch = cp.asarray(X[i:batch_end], dtype=np.int32)
             Y_batch = cp.asarray(Y[i:batch_end], dtype=np.float32)
             bs = batch_end - i
 
-            pbar = tqdm_bar(range(bs), desc="Sample")
-            for e in pbar:
+            for e in range(bs):
                 self.k_pack_clauses(
                     *self.kconf_clauses,
                     (
@@ -255,6 +255,9 @@ class CUDADevice(BaseDevice):
                     running_loss += self.loss_fn(Y_batch[e], y_hat)
                     n_polls += 1
                     pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
+
+                pbar.update(1)
+        pbar.close()
 
         return running_loss / n_polls
 
