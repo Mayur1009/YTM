@@ -18,7 +18,6 @@ class CUDADevice(BaseDevice):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         header = f"""
 {self._build_header()}
-#define WARPS_PER_CLAUSE {self.args.warps_per_clause}
 """
         common = header + "\n" + read_file(os.path.join(cur_dir, "common.cu")) + "\n"
 
@@ -50,7 +49,7 @@ class CUDADevice(BaseDevice):
         self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
-        self.kconf_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
+        self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_decide = self._kernel_config(self.total_clauses)
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 

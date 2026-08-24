@@ -33,7 +33,6 @@
 #define TYPE2_FB 1
 #define TRACK_PATCH_WEIGHTS 1
 #define BOOST_TP_FB 1
-#define WARPS_PER_CLAUSE 1
 #endif
 
 #define S_INV (1.0f / (float)(S))

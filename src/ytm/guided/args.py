@@ -45,7 +45,6 @@ class TMArgs:
     compile_flags: None | list[str] = None
     grid_size: int | None = None
     block_size: int = 256
-    warps_per_clause: int = 1  # CUDA-only, ignored on CPU
 
     def __post_init__(self):
         if self.device == "cuda" and importlib.util.find_spec("cupy") is None:
@@ -67,7 +66,6 @@ class TMArgs:
                 raise ValueError(f"loss_fn must be one of {_valid_loss_fns} or a callable, got '{self.loss_fn}'")
 
         self.n_threads = max(1, self.n_threads)
-        self.warps_per_clause = max(1, self.warps_per_clause)
 
         self.n_clauses = max(1, int(self.n_clauses))
 
@@ -152,4 +150,3 @@ class T_args(TypedDict, total=False):
     compile_flags: list[str]
     grid_size: int | None
     block_size: int
-    warps_per_clause: int

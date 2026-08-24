@@ -58,11 +58,10 @@ __device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta
 }
 
 __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
-                                 int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane,
-                                 int tile_id) {
+                                 int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane) {
 
 #if POSITION_LITERALS
-    if (tile_id == 0 && lane == 0) {
+    if (lane == 0) {
         t1a_inc_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0);
         t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0);
 
@@ -81,7 +80,7 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
     }
 #endif
 
-    for (int fid = tile_id * 32 + lane; fid < N_RAW_PATCH_FEATS; fid += WARPS_PER_CLAUSE * 32) {
+    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -96,29 +95,26 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
     }
 }
 
-__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane, int tile_id) {
-    int global_lane = tile_id * 32 + lane;
-    int total_lanes = WARPS_PER_CLAUSE * 32;
-
+__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane) {
     if (S > 1.0f) {
         int suc = geom_sample(rng_key, rng_counter, S_INV) - 1;
-        while (suc * total_lanes + global_lane < N_LITERALS) {
-            int li = suc * total_lanes + global_lane;
+        while (suc * 32 + lane < N_LITERALS) {
+            int li = suc * 32 + lane;
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
             suc += geom_sample(rng_key, rng_counter, S_INV);
         }
     } else {
-        for (int li = global_lane; li < N_LITERALS; li += total_lanes)
+        for (int li = lane; li < N_LITERALS; li += 32)
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
     }
 }
 
 __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                                const int* literal_offsets, int lane, int tile_id) {
+                                const int* literal_offsets, int lane) {
 #if POSITION_LITERALS
-    if (tile_id == 0 && lane == 0) {
+    if (lane == 0) {
         t2_inc_literals(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0);
         t2_inc_literals(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0);
 
@@ -129,7 +125,7 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
     }
 #endif
 
-    for (int fid = tile_id * 32 + lane; fid < N_RAW_PATCH_FEATS; fid += WARPS_PER_CLAUSE * 32) {
+    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -144,19 +140,18 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
 
 __device__ inline void apply_feedback(uint8_t fb_type, ull rng_key, uint* rng_counter, uint* ta_states,
                                       const int* Xe, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                                      const int* literal_offsets, int lane, int tile_id) {
+                                      const int* literal_offsets, int lane) {
     if (fb_type == FB_T1A) {
 #if TYPE1A_FB
-        type1a_fb(rng_key, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane,
-                  tile_id);
+        type1a_fb(rng_key, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane);
 #endif
     } else if (fb_type == FB_T1B) {
 #if TYPE1B_FB
-        type1b_fb(rng_key, rng_counter, ta_states, lane, tile_id);
+        type1b_fb(rng_key, rng_counter, ta_states, lane);
 #endif
     } else if (fb_type == FB_T2) {
 #if TYPE2_FB
-        type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane, tile_id);
+        type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane);
 #endif
     }
 }
@@ -248,11 +243,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
     ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
     uint rng_counter = 0;
 
-    ull total_tiles = (ull)TOTAL_CLAUSES * (ull)WARPS_PER_CLAUSE;
-    for (ull gtile = warp_id; gtile < total_tiles; gtile += total_warps) {
-        ull clause = gtile / (ull)WARPS_PER_CLAUSE;
-        int tile_id = (int)(gtile % (ull)WARPS_PER_CLAUSE);
-
+    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         int patch_id = selected_patch_ids[clause];
         int clause_output = (patch_id >= 0) ? 1 : 0;
         int patch_idx_y = -1, patch_idx_x = -1;
@@ -267,12 +258,12 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
         apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
-                       lane, tile_id);
+                       lane);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
             apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins,
-                           literal_offsets, lane, tile_id);
+                           literal_offsets, lane);
         }
 #endif
     }
