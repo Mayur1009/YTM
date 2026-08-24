@@ -70,3 +70,7 @@ platforms = ["linux-cuda", "win-cuda"]
 [tool.pixi.environments]
 default = { features = ["dev"] }
 cuda = { features = ["dev", "cuda"] }
+
+
+[tool.marimo.runtime]
+watcher_on_save = "autorun"
