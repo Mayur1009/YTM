@@ -231,8 +231,8 @@ extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, co
 }
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
-                                          uint* global_ta_states, const int* feat_mins, const int* literal_offsets,
-                                          const uint8_t* feedback_type) {
+                                          const int e_global, uint* global_ta_states, const int* feat_mins,
+                                          const int* literal_offsets, const uint8_t* feedback_type) {
     ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
     ull warp_id = tid / 32;
     ull lane = tid % 32;
@@ -240,10 +240,11 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
-    ull rng_k = rng_hash(seed, tid, (ull)e, 0xCAFEBABEULL);
-    uint rng_counter = 0;
-
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+        ull rng_id = clause * 32 + lane;
+        ull rng_k = rng_hash(seed, rng_id, (ull)e_global, 0xCAFEBABEULL);
+        uint rng_counter = 0;
+
         int patch_id = selected_patch_ids[clause];
         int clause_output = (patch_id >= 0) ? 1 : 0;
         int patch_idx_y = -1, patch_idx_x = -1;

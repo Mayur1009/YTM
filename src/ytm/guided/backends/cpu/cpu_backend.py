@@ -192,6 +192,7 @@ class CPUDevice(BaseDevice):
         Y: np.ndarray,
         clause_drop_p: float,
         batch_size: int,
+        rng_state: int,
         lr: float | None = None,
         loss_poll_rate: float = 0.1,
     ):
@@ -244,7 +245,7 @@ class CPUDevice(BaseDevice):
                 self.p_bounded_feat_ids,
                 self.p_n_bounded_feats,
                 self.p_clause_density,
-                c_uint64(self.args.seed),
+                c_uint64(rng_state),
                 p_selected_pids,
                 self.p_patch_weights,
             )
@@ -257,7 +258,7 @@ class CPUDevice(BaseDevice):
             y_hat = self.act_fn(v)
             self.grad_fn(Y[e], y_hat, grad)
             self.lib.update_clauses(
-                c_uint64(self.args.seed),
+                c_uint64(rng_state),
                 p_selected_pids,
                 self.p_clause_density,
                 p_clause_drop_mask,

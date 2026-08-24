@@ -75,7 +75,6 @@ class CUDADevice(BaseDevice):
             "warp_size": props["warpSize"],
         }
 
-        self.seed = np.uint64(self.args.seed)
         self._init_clauses()
         self._init_weights()
         self._init_packed_clauses()
@@ -146,6 +145,7 @@ class CUDADevice(BaseDevice):
         Y: np.ndarray,
         clause_drop_p: float,
         batch_size: int,
+        rng_state: int,
         lr: float | None = None,
         loss_poll_rate: float = 0.1,
     ):
@@ -198,13 +198,14 @@ class CUDADevice(BaseDevice):
                     (
                         X_batch,
                         np.int32(e),
+                        np.int32(i + e),
                         clause_drop_mask_gpu,
                         self.packed_clauses.clause_position_bounds,
                         self.packed_clauses.clause_feat_bounds,
                         self.packed_clauses.bounded_feat_ids,
                         self.packed_clauses.n_bounded_feats,
                         self.packed_clauses.clause_density,
-                        self.seed,
+                        np.uint64(rng_state),
                         selected_patch_ids,
                         self.patch_weights,
                     ),
@@ -221,8 +222,8 @@ class CUDADevice(BaseDevice):
                 self.k_decide_feedback(
                     *self.kconf_decide,
                     (
-                        self.seed,
-                        np.int32(e),
+                        np.uint64(rng_state),
+                        np.int32(i + e),
                         grad,
                         np.float32(_lr),
                         self.clause_weights,
@@ -238,10 +239,11 @@ class CUDADevice(BaseDevice):
                 self.k_update_clauses(
                     *self.kconf_clauses,
                     (
-                        self.seed,
+                        np.uint64(rng_state),
                         selected_patch_ids,
                         X_batch,
                         np.int32(e),
+                        np.int32(i + e),
                         self.ta_states,
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,

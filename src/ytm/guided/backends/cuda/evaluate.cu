@@ -49,22 +49,23 @@ __device__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
     }
 }
 
-__device__ void evaluate_conv(const int* X, const int e, const int8_t* clause_drop_mask,
+__device__ void evaluate_conv(const int* X, const int e, const int e_global, const int8_t* clause_drop_mask,
                               const int* clause_position_bounds, const int* clause_feat_bounds,
                               const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
                               const ull seed, int* selected_patch_ids, int* patch_weights) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
-    ull tid = grid.thread_rank();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
     ull total_warps = grid.size() / warp.size();
 
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    ull rng_k = rng_hash(seed, tid, (ull)e, 0xDEADBEEFULL);
-    uint rng_counter = 0;
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+        ull rng_id = clause * warp.size() + (ull)lane;
+        ull rng_k = rng_hash(seed, rng_id, (ull)e_global, 0xDEADBEEFULL);
+        uint rng_counter = 0;
+
         int cd = clause_density[clause];
         if (clause_drop_mask[clause] == 1 || cd < 0) {
             if (lane == 0)
@@ -159,12 +160,12 @@ extern "C" __global__ void count_votes(const int* selected_patch_ids, const floa
     }
 }
 
-extern "C" __global__ void evaluate(const int* X, const int e, const int8_t* clause_drop_mask,
+extern "C" __global__ void evaluate(const int* X, const int e, const int e_global, const int8_t* clause_drop_mask,
                                     const int* clause_position_bounds, const int* clause_feat_bounds,
                                     const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
                                     const ull seed, int* selected_patch_ids, int* patch_weights) {
 #if (N_PATCHES > 1)
-    evaluate_conv(X, e, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids, n_bounded_feats,
+    evaluate_conv(X, e, e_global, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids, n_bounded_feats,
                   clause_density, seed, selected_patch_ids, patch_weights);
 #else
     evaluate_noconv(X, e, clause_drop_mask, clause_feat_bounds, bounded_feat_ids, n_bounded_feats, clause_density,

@@ -58,7 +58,7 @@ class BaseTM:
 
         Y = Y.astype(np.float32)
 
-        epoch_loss = self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr=lr, loss_poll_rate=loss_poll_rate)
+        epoch_loss = self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, self.rng_state, lr=lr, loss_poll_rate=loss_poll_rate)
         self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
         return epoch_loss
 

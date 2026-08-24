@@ -111,7 +111,7 @@ class BaseDevice(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, lr: float | None = None):
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, rng_state: int, lr: float | None = None):
         pass
 
     @abc.abstractmethod
