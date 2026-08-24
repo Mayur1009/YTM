@@ -3,9 +3,8 @@ from .base import BaseTM
 
 
 class RegressionTM(BaseTM):
-    def __init__(self, n_clauses: int, s: float, dim: tuple, **opt_args):
-        opt_args["negative_clauses"] = False
-        super().__init__(n_clauses=n_clauses, s=s, dim=dim, n_classes=1, **opt_args)
+    def __init__(self, n_clauses: int, s: float, dim: tuple, act_fn: str = "identity", loss_fn: str = "mse", **opt_args):
+        super().__init__(n_clauses=n_clauses, s=s, dim=dim, n_classes=1, act_fn=act_fn, loss_fn=loss_fn, **opt_args)
 
     def fit(
         self,
