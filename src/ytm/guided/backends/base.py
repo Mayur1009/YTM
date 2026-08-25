@@ -201,10 +201,10 @@ class BaseDevice(abc.ABC):
             self.act_fn = self.args.act_fn
             self.dact_fn = lambda act: self.xp.ones_like(act)
         elif self.args.act_fn == "softmax":
-            self.act_fn = lambda v: self._softmax(v, axis=-1)
+            self.act_fn = lambda v: self._softmax(v / self.args.n_clauses, axis=-1)
             self.dact_fn = lambda act: self.xp.ones_like(act)
         elif self.args.act_fn == "sigmoid":
-            self.act_fn = self._expit
+            self.act_fn = lambda v: self._expit(v / self.args.n_clauses)
             self.dact_fn = lambda act: act * (1.0 - act)
         elif self.args.act_fn == "identity":
             self.act_fn = lambda v: v

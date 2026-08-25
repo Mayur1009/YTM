@@ -254,8 +254,7 @@ class CPUDevice(BaseDevice):
                 self.p_clause_weights,
                 p_votes,
             )
-            v = (votes / self.args.n_clauses).astype(np.float32)
-            y_hat = self.act_fn(v)
+            y_hat = self.act_fn(votes)
             self.grad_fn(Y[e], y_hat, grad)
             self.lib.update_clauses(
                 c_uint64(rng_state),
@@ -309,7 +308,7 @@ class CPUDevice(BaseDevice):
         N = X.shape[0]
         X = X.astype(np.int32)
         p_X = X.ctypes.data_as(int32_p)
-        class_sums = np.zeros((N, self.args.n_classes), dtype=np.float32)
+        votes = np.zeros((N, self.args.n_classes), dtype=np.float32)
         self.pack_clauses()
 
         for e in tqdm_bar(range(N), desc="Infer"):
@@ -322,11 +321,10 @@ class CPUDevice(BaseDevice):
                 self.p_clause_density,
                 p_X,
                 c_int(e),
-                class_sums.ctypes.data_as(float_p),
+                votes.ctypes.data_as(float_p),
             )
 
-        v = class_sums / self.args.n_clauses
-        return self.act_fn(v).astype(np.float32)
+        return self.act_fn(votes).astype(np.float32)
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

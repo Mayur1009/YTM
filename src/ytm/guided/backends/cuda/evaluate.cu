@@ -156,7 +156,7 @@ extern "C" __global__ void count_votes(const int* selected_patch_ids, const floa
         partial = cg::reduce(warp, partial, cg::plus<float>());
 
         if (lane == 0)
-            votes[class_id] = partial / (float)CLAUSES_PER_CLASS;
+            votes[class_id] = partial;
     }
 }
 

@@ -1,8 +1,10 @@
-import shutil
-import numpy as np
-from typing import Callable, Literal, TypedDict
-from dataclasses import dataclass, field
 import importlib.util
+import shutil
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Literal, TypedDict
+
+import numpy as np
 
 
 @dataclass()
