@@ -170,7 +170,8 @@ __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull clas
 
     int target = (grad[class_id] > 0.0f) - (grad[class_id] < 0.0f);
     float lam = (target > 0) ? lambda_plus : lambda_minus;
-    float update_prob = 1.0f - expf(-lam * fabsf(grad[class_id]));
+    float weight_val = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+    float update_prob = 1.0f - expf(-lam * fabsf(grad[class_id] * weight_val));
 
     bool skip = (target == 0 || grad[class_id] == 0.0f || rand_uniform(rng_k, &rng_counter) > update_prob);
     if (skip) {
@@ -180,7 +181,6 @@ __device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull clas
 
     is_clause_synced[clause] = 0;
 
-    float weight_val = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
     int sign = (weight_val >= 0) - (weight_val < 0);
     bool has_space = (clause_density <= (int)MAX_INCLUDED_LITERALS);
     bool t1 = (target * sign) > 0;
