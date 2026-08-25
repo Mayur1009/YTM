@@ -136,6 +136,7 @@ class T_args(TypedDict, total=False):
     loss_fn: str | Callable
     loss_fn_kwargs: dict
     weighted: bool
+    bias: bool
     max_weight: float
     coalesced: bool
     negated_literals: bool
@@ -147,6 +148,7 @@ class T_args(TypedDict, total=False):
     include_state: int
     ta_init: Literal["random", "middle", "random_include"] | str | int
     weight_init: Literal["random"] | float
+    bias_init: Literal["random"] | float
     skip_t1a_fb: bool
     skip_t1b_fb: bool
     skip_t2_fb: bool
