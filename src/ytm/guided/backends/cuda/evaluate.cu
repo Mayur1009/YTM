@@ -132,7 +132,8 @@ __device__ void evaluate_conv(const int* X, const int e, const int e_global, con
     }
 }
 
-extern "C" __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
+extern "C" __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, const float* bias,
+                                       float* votes) {
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -156,7 +157,11 @@ extern "C" __global__ void count_votes(const int* selected_patch_ids, const floa
         partial = cg::reduce(warp, partial, cg::plus<float>());
 
         if (lane == 0)
+#if BIAS
+            votes[class_id] = partial + bias[class_id];
+#else
             votes[class_id] = partial;
+#endif
     }
 }
 
@@ -165,8 +170,8 @@ extern "C" __global__ void evaluate(const int* X, const int e, const int e_globa
                                     const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
                                     const ull seed, int* selected_patch_ids, int* patch_weights) {
 #if (N_PATCHES > 1)
-    evaluate_conv(X, e, e_global, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids, n_bounded_feats,
-                  clause_density, seed, selected_patch_ids, patch_weights);
+    evaluate_conv(X, e, e_global, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                  n_bounded_feats, clause_density, seed, selected_patch_ids, patch_weights);
 #else
     evaluate_noconv(X, e, clause_drop_mask, clause_feat_bounds, bounded_feat_ids, n_bounded_feats, clause_density,
                     selected_patch_ids);

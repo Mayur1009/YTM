@@ -230,6 +230,15 @@ extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, co
     }
 }
 
+extern "C" __global__ void update_bias(const float* grad, const float lr, float* bias) {
+#if BIAS
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    ull stride = (ull)blockDim.x * gridDim.x;
+    for (ull c = tid; c < (ull)CLASSES; c += stride)
+        bias[c] += lr * grad[c];
+#endif
+}
+
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
                                           const int e_global, uint* global_ta_states, const int* feat_mins,
                                           const int* literal_offsets, const uint8_t* feedback_type) {

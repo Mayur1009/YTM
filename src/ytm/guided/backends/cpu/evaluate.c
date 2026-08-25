@@ -95,9 +95,13 @@ void evaluate(const int* X, const int e, const int8_t* clause_drop_mask, const i
 #endif
 }
 
-void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
+void count_votes(const int* selected_patch_ids, const float* clause_weights, const float* bias, float* votes) {
     for (int c = 0; c < CLASSES; c++)
+#if BIAS
+        votes[c] = bias[c];
+#else
         votes[c] = 0.0f;
+#endif
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES])
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {

@@ -113,6 +113,7 @@ class CPUDevice(BaseDevice):
 
         self.p_ta_states = self.ta_states.ctypes.data_as(uint32_p)
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
+        self.p_bias = self.bias.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
         self.p_feat_mins = np.asarray(self.args.feat_mins).ctypes.data_as(int32_p)
         self.p_feat_maxs = np.asarray(self.args.feat_maxs).ctypes.data_as(int32_p)
@@ -126,6 +127,7 @@ class CPUDevice(BaseDevice):
         self._openmp_flags()
         self._init_clauses()
         self._init_weights()
+        self._init_bias()
         self._init_packed_clauses()
         self._init_frozen_clauses()
         self._init_lib()
@@ -252,6 +254,7 @@ class CPUDevice(BaseDevice):
             self.lib.count_votes(
                 p_selected_pids,
                 self.p_clause_weights,
+                self.p_bias,
                 p_votes,
             )
             y_hat = self.act_fn(votes)
@@ -278,6 +281,11 @@ class CPUDevice(BaseDevice):
                 p_grad,
                 c_float(_lr),
                 self.p_clause_weights,
+            )
+            self.lib.update_bias(
+                p_grad,
+                c_float(_lr),
+                self.p_bias,
             )
 
             if e % loss_poll_interval == 0 or e == N - 1:
@@ -314,6 +322,7 @@ class CPUDevice(BaseDevice):
         for e in tqdm_bar(range(N), desc="Infer"):
             self.lib.infer_sample(
                 self.p_clause_weights,
+                self.p_bias,
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
                 self.p_bounded_feat_ids,

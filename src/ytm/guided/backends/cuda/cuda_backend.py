@@ -40,6 +40,7 @@ class CUDADevice(BaseDevice):
         )
         self.k_update_clauses = update_mod.get_function("update_clauses")
         self.k_decide_feedback = update_mod.get_function("decide_feedback_and_update_weights")
+        self.k_update_bias = update_mod.get_function("update_bias")
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
@@ -52,6 +53,7 @@ class CUDADevice(BaseDevice):
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_decide = self._kernel_config(self.total_clauses)
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
+        self.kconf_bias = self._kernel_config(self.args.n_classes if self.args.bias else 1)
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -77,6 +79,7 @@ class CUDADevice(BaseDevice):
 
         self._init_clauses()
         self._init_weights()
+        self._init_bias()
         self._init_packed_clauses()
         self._init_frozen_clauses()
         self._init_kernels()
@@ -213,7 +216,7 @@ class CUDADevice(BaseDevice):
 
                 self.k_count_votes(
                     *self.kconf_classes,
-                    (selected_patch_ids, self.clause_weights, votes),
+                    (selected_patch_ids, self.clause_weights, self.bias, votes),
                 )
 
                 y_hat = self.act_fn(votes)
@@ -235,6 +238,10 @@ class CUDADevice(BaseDevice):
                         self.feedback_type,
                         self.packed_clauses.is_clause_synced,
                     ),
+                )
+                self.k_update_bias(
+                    *self.kconf_bias,
+                    (grad, np.float32(_lr), self.bias),
                 )
                 self.k_update_clauses(
                     *self.kconf_clauses,
@@ -314,6 +321,7 @@ class CUDADevice(BaseDevice):
                 (
                     co_batch,
                     self.clause_weights,
+                    self.bias,
                     class_sums[i:batch_end],
                     np.int32(bs),
                 ),

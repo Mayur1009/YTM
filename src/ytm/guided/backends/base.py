@@ -193,6 +193,18 @@ class BaseDevice(abc.ABC):
         else:
             self.patch_weights = self.xp.zeros((1, 1), dtype=np.int32)
 
+    def _init_bias(self):
+        if not self.args.bias:
+            self.bias = self.xp.zeros((1,), dtype=np.float32)
+        else:
+            if isinstance(self.args.bias_init, float):
+                self.bias = self.xp.full((self.args.n_classes,), self.args.bias_init, dtype=np.float32)
+            elif self.args.bias_init == "random":
+                bias_rand = self.np_rng.uniform(0.0, 1.0, size=(self.args.n_classes,))
+                self.bias = self.xp.asarray(bias_rand, dtype=np.float32)
+            else:
+                raise ValueError
+
     def _init_frozen_clauses(self):
         self.frozen_clauses = self.xp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=np.int8)
 
@@ -221,6 +233,11 @@ class BaseDevice(abc.ABC):
 
     def get_weights(self):
         return self._to_host(self.clause_weights)
+
+    def get_bias(self):
+        if not self.args.bias:
+            raise RuntimeError("`bias` should be set to `True` to get bias.")
+        return self._to_host(self.bias)
 
     def get_ta_states(self):
         return self._to_host(self.ta_states).reshape((self.n_clause_banks, self.args.n_clauses, self.n_literals))
@@ -282,5 +299,6 @@ class BaseDevice(abc.ABC):
 #define TYPE2_FB {0 if self.args.skip_t2_fb else 1}
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
+#define BIAS {1 if self.args.bias else 0}
 """
         return header

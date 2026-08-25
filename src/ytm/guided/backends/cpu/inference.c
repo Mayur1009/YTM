@@ -2,11 +2,16 @@
 #include "common.c"
 #endif
 
-void infer_sample(const float* clause_weights, const int* clause_position_bounds, const int* clause_feat_bounds,
-                  const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density, const int* X,
-                  const int e, float* class_sums) {
+void infer_sample(const float* clause_weights, const float* bias, const int* clause_position_bounds,
+                  const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
+                  const int* clause_density, const int* X, const int e, float* class_sums) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     float* sums_e = &class_sums[(ull)e * CLASSES];
+
+#if BIAS
+    for (int c = 0; c < CLASSES; c++)
+        sums_e[c] = bias[c];
+#endif
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {

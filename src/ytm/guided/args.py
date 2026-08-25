@@ -23,6 +23,7 @@ class TMArgs:
     loss_fn: str | Callable[..., float] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
     weighted: bool = True
+    bias: bool = False
     max_weight: float = float(np.finfo(np.float32).max)
     coalesced: bool = True
     negated_literals: bool = True
@@ -34,6 +35,7 @@ class TMArgs:
     include_state: int = -1
     ta_init: Literal["random", "middle", "random_include"] | str | int = "random_include"
     weight_init: Literal["random"] | float = "random"
+    bias_init: Literal["random"] | float = "random"
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
     skip_t2_fb: bool = False
@@ -53,9 +55,7 @@ class TMArgs:
             raise ImportError("`device='cuda'` requires `cupy` to be installed. But `cupy` is not available in the current environment.")
 
         if self.device == "cpu" and not (shutil.which("gcc") or shutil.which("clang")):
-            raise OSError(
-                "`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found."
-            )
+            raise OSError("`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found.")
 
         if not callable(self.act_fn):
             _valid_act_fns = {"softmax", "sigmoid", "identity"}
@@ -113,10 +113,16 @@ class TMArgs:
             self.lambda_minus = float(self.lambda_)
 
         if isinstance(self.ta_init, int):
-            assert 0 <= self.ta_init <= self.n_states - 1, f"ta_init must be within 0 and n_states, 'middle' or 'random', got {self.ta_init}."
+            assert 0 <= self.ta_init <= self.n_states - 1, (
+                f"ta_init must be within 0 and n_states, 'middle' or 'random', got {self.ta_init}."
+            )
 
-        if isinstance(self.weight_init, float):
+        if self.weighted and isinstance(self.weight_init, float):
             assert self.weight_init > 0, f"weight_init must be positive float, or 'random', got {self.weight_init}"
+
+        assert isinstance(self.bias_init, float) or self.bias_init == "random", (
+            f"bias_init must be 'random' or float, got {self.bias_init}"
+        )
 
 
 class T_args(TypedDict, total=False):

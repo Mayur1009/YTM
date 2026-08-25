@@ -113,9 +113,9 @@ static inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int p
 }
 
 static inline void update_clause_class(ull class_id, ull clause, ull rel_clause, int clause_output, int patch_idx_y,
-                                       int patch_idx_x, int clause_density, uint* ta_states, const float* clause_weights,
-                                       const int* Xe, const float* grad,
-                                       float lambda_plus, float lambda_minus, const int* feat_mins, const int* literal_offsets,
+                                       int patch_idx_x, int clause_density, uint* ta_states,
+                                       const float* clause_weights, const int* Xe, const float* grad, float lambda_plus,
+                                       float lambda_minus, const int* feat_mins, const int* literal_offsets,
                                        int8_t* is_clause_synced, ull rng_k, uint* rng_counter) {
     int target = (grad[class_id] > 0.0f) - (grad[class_id] < 0.0f);
     float lam = (target > 0) ? lambda_plus : lambda_minus;
@@ -146,8 +146,8 @@ static inline void update_clause_class(ull class_id, ull clause, ull rel_clause,
     }
 }
 
-void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask, const float* grad,
-                    const float lr, float* clause_weights) {
+void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mask, const float* grad, const float lr,
+                    float* clause_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || selected_patch_ids[clause] < 0)
@@ -161,11 +161,17 @@ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mas
     }
 }
 
-
+void update_bias(const float* grad, const float lr, float* bias) {
+#if BIAS
+#pragma omp parallel for schedule(static)
+    for (int c = 0; c < CLASSES; c++)
+        bias[c] += lr * grad[c];
+#endif
+}
 
 void update_clauses(const ull seed, const int* selected_patch_ids, const int* clause_density,
-                    const int8_t* clause_drop_mask, const int* X, const int e,
-                    const float* grad, const float lambda_plus, const float lambda_minus, uint* global_ta_states,
+                    const int8_t* clause_drop_mask, const int* X, const int e, const float* grad,
+                    const float lambda_plus, const float lambda_minus, uint* global_ta_states,
                     const float* clause_weights, const int* feat_mins, const int* literal_offsets,
                     int8_t* is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -194,8 +200,8 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* cl
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
             update_clause_class(class_id, clause, rel_clause, clause_output, patch_idx_y, patch_idx_x, cd, ta_states,
-                                clause_weights, Xe, grad, lambda_plus, lambda_minus, feat_mins,
-                                literal_offsets, is_clause_synced, rng_k, &rng_counter);
+                                clause_weights, Xe, grad, lambda_plus, lambda_minus, feat_mins, literal_offsets,
+                                is_clause_synced, rng_k, &rng_counter);
         }
     }
 }
