@@ -18,6 +18,7 @@ class CUDADevice(BaseDevice):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         header = f"""
 {self._build_header()}
+#define WARPS_PER_CLAUSE {self.args.warps_per_clause}
 """
         common = header + "\n" + read_file(os.path.join(cur_dir, "common.cu")) + "\n"
 
@@ -51,6 +52,9 @@ class CUDADevice(BaseDevice):
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
+        self.kconf_update_clauses = self._kernel_config(
+            self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"]
+        )
         self.kconf_decide = self._kernel_config(self.total_clauses)
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
         self.kconf_bias = self._kernel_config(self.args.n_classes if self.args.bias else 1)
@@ -244,7 +248,7 @@ class CUDADevice(BaseDevice):
                     (grad, np.float32(_lr), self.bias),
                 )
                 self.k_update_clauses(
-                    *self.kconf_clauses,
+                    *self.kconf_update_clauses,
                     (
                         np.uint64(rng_state),
                         selected_patch_ids,
