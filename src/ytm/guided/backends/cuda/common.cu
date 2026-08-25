@@ -50,10 +50,12 @@
 #define INFINITY __int_as_float(0x7f800000)
 #endif
 
+#define WARP_SIZE 32
+
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
-using warp_t = cg::thread_block_tile<32>;
+using warp_t = cg::thread_block_tile<WARP_SIZE>;
 typedef unsigned int uint;
 typedef signed char int8_t;
 typedef unsigned char uint8_t;

@@ -75,7 +75,7 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
     }
 #endif
 
-    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
+    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += WARP_SIZE) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -93,14 +93,14 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
 __device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane) {
     if (S > 1.0f) {
         int suc = geom_sample(rng_key, rng_counter, S_INV) - 1;
-        while (suc * 32 + lane < N_LITERALS) {
-            int li = suc * 32 + lane;
+        while (suc * WARP_SIZE + lane < N_LITERALS) {
+            int li = suc * WARP_SIZE + lane;
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
             suc += geom_sample(rng_key, rng_counter, S_INV);
         }
     } else {
-        for (int li = lane; li < N_LITERALS; li += 32)
+        for (int li = lane; li < N_LITERALS; li += WARP_SIZE)
             if (ta_state[li] > 0)
                 ta_state[li] -= 1;
     }
@@ -120,7 +120,7 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
     }
 #endif
 
-    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += 32) {
+    for (int fid = lane; fid < N_RAW_PATCH_FEATS; fid += WARP_SIZE) {
         int lit_start = N_POSITION_FEATS + literal_offsets[fid];
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
@@ -214,7 +214,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
                                           const int e, const int e_global, const float* prob, const float* label_probs,
                                           uint* global_ta_states, float* clause_weights, const int* feat_mins,
                                           const int* literal_offsets, int8_t* is_clause_synced) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();

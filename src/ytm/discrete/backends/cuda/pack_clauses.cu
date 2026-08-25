@@ -17,7 +17,7 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
     uint includes = 0;
 
-    for (int base = 0; base < N_POSITION_FEATS_Y; base += 32) {
+    for (int base = 0; base < N_POSITION_FEATS_Y; base += WARP_SIZE) {
         int lit = base + lane;
         if (lit < N_POSITION_FEATS_Y) {
             if (is_included(ta_state[lit])) {
@@ -35,7 +35,7 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
             return {pos0, pos1, pos2, pos3, includes, false};
     }
 
-    for (int base = 0; base < N_POSITION_FEATS_X; base += 32) {
+    for (int base = 0; base < N_POSITION_FEATS_X; base += WARP_SIZE) {
         int lit = base + lane;
         if (lit < N_POSITION_FEATS_X) {
             if (is_included(ta_state[N_POSITION_FEATS_Y + lit])) {
@@ -77,7 +77,7 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
     int write_offset = 0;
     bool all_valid = true;
 
-    for (int base = 0; base < N_RAW_PATCH_FEATS; base += 32) {
+    for (int base = 0; base < N_RAW_PATCH_FEATS; base += WARP_SIZE) {
         int fid = base + lane;
         bool in_range = (fid < N_RAW_PATCH_FEATS);
         bool is_bounded = false;
@@ -128,7 +128,7 @@ extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int*
                                         const int* literal_offsets, int* clause_position_bounds,
                                         int* clause_feat_bounds, int* bounded_feat_ids, int* n_bounded_feats,
                                         int* clause_density, int8_t* is_clause_synced) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();

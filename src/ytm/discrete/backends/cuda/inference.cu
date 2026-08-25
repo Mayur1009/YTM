@@ -5,7 +5,7 @@
 __device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const int N, const int* clause_position_bounds,
                                    const int* clause_feat_bounds, const int* bounded_feat_ids,
                                    const int* n_bounded_feats, const int* clause_density) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
@@ -35,7 +35,7 @@ __device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const i
         int patches_to_consider = n_y * n_x;
 
         bool found = false;
-        for (int base = 0; base < patches_to_consider && !found; base += 32) {
+        for (int base = 0; base < patches_to_consider && !found; base += WARP_SIZE) {
             int i = base + lane;
             bool match = false;
             if (i < patches_to_consider) {
@@ -55,7 +55,7 @@ __device__ void infer_clauses_conv(const int* X, int8_t* clause_outputs, const i
 __device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const int N, const int* clause_feat_bounds,
                                      const int* bounded_feat_ids, const int* n_bounded_feats,
                                      const int* clause_density) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
@@ -80,7 +80,7 @@ __device__ void infer_clauses_noconv(const int* X, int8_t* clause_outputs, const
         int n_bounded_fids = n_bounded_feats[clause];
 
         bool is_matching = true;
-        for (int base = 0; base < n_bounded_fids; base += 32) {
+        for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
             int i = base + lane;
             if (i < n_bounded_fids) {
                 int fid = bounded_fids[i];
@@ -112,7 +112,7 @@ extern "C" __global__ void infer_clauses(const int* X, int8_t* clause_outputs, c
 
 extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums,
                                      const int N) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();

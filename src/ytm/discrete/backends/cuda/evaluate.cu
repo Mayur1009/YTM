@@ -5,7 +5,7 @@
 __device__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_drop_mask,
                                 const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
                                 const int* clause_density, int* selected_patch_ids) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
@@ -31,7 +31,7 @@ __device__ void evaluate_noconv(const int* X, const int e, const int8_t* clause_
         int n_bounded_fids = n_bounded_feats[clause];
 
         bool my_match = true;
-        for (int base = 0; base < n_bounded_fids; base += 32) {
+        for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
             int i = base + lane;
             if (i < n_bounded_fids) {
                 int fid = bounded_fids[i];
@@ -53,7 +53,7 @@ __device__ void evaluate_conv(const int* X, const int e, const int e_global, con
                               const int* clause_position_bounds, const int* clause_feat_bounds,
                               const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
                               const ull seed, int* selected_patch_ids, int* patch_weights) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
@@ -96,7 +96,7 @@ __device__ void evaluate_conv(const int* X, const int e, const int e_global, con
         int n_x = pos3 - pos2 + 1;
         int patches_to_consider = n_y * n_x;
 
-        for (int base = 0; base < patches_to_consider; base += 32) {
+        for (int base = 0; base < patches_to_consider; base += WARP_SIZE) {
             int i = base + lane;
             bool match = false;
             if (i < patches_to_consider) {
@@ -146,7 +146,7 @@ extern "C" __global__ void evaluate(const int* X, const int e, const int e_globa
 }
 
 extern "C" __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
     ull warp_id = grid.thread_rank() / warp.size();
