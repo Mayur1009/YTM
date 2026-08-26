@@ -3,4 +3,4 @@ from .classifier import (
     MultiClassTM as MultiClassTM,
     MultiOutputTM as MultiOutputTM,
 )
-from .regressor import RegressionTM as RegressionTM
+from .regressor import RegTM as RegTM

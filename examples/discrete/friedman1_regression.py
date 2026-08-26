@@ -5,11 +5,11 @@ from sklearn.datasets import make_friedman1
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
-from ytm.discrete.regressor import RegressionTM
+from ytm.discrete.regressor import RegTM
 from ytm.utils import print_table
 
 
-def train(tm: RegressionTM, X_train, Y_train, X_test, Y_test, epochs=1):
+def train(tm: RegTM, X_train, Y_train, X_test, Y_test, epochs=1):
     for epoch in range(epochs):
         tm.fit(X_train, Y_train)
         pred_train, _ = tm.predict(X_train)
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     X = ((X / X.max()) * 300.0).astype(np.int32)
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.33, random_state=args.seed)
 
-    tm = RegressionTM(
+    tm = RegTM(
         n_clauses=args.n_clauses,
         T=args.T,
         s=args.s,

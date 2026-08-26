@@ -59,7 +59,8 @@ class MultiClassTM(Classifier):
             Process samples in batches. ``-1`` processes all at once.
             Use when X cannot fit in the GPU mem.
         label_sampling : bool, default=False
-            DNU
+            If ``True``, undersample the majority side each epoch so
+            feedback stays balanced across classes.
         """
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
@@ -140,7 +141,8 @@ class MultiOutputTM(Classifier):
         batch_size : int, default=-1
             Batch size. ``-1`` processes all at once.
         label_sampling : bool, default=False
-            DNU
+            If ``True``, undersample the majority side each epoch so
+            feedback stays balanced across classes.
         """
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
@@ -232,7 +234,8 @@ class BinaryTM(Classifier):
         batch_size : int, default=-1
             Batch size. ``-1`` processes all at once.
         label_sampling : bool, default=False
-            DNU
+            If ``True``, undersample the majority side each epoch so
+            feedback stays balanced across classes.
         """
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"

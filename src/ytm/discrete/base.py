@@ -48,13 +48,15 @@ class BaseTM:
         ``(n_features, 1, 1)``.
     n_classes : int
         Number of output classes.
-    feat_mins : int or ndarray of shape (n_patch_feats,), default=0
+    feat_mins : int or ndarray of shape (patch_dim[0] * patch_dim[1] * dim[2],), default=0
         Minimum value per feature. Scalar broadcasts to all features.
-    feat_maxs : int or ndarray of shape (n_patch_feats,), default=1
+    feat_maxs : int or ndarray of shape (patch_dim[0] * patch_dim[1] * dim[2],), default=1
         Maximum value per feature. Scalar broadcasts to all features.
-    patch_dim : tuple of (int, int) or None, default=None
-        Patch height and width for convolution TM variants. ``None``
-        treats the full input as a single patch (same as no convolution).
+    patch_dim : tuple of (int, int), default=(0, 0)
+        Patch height and width for convolution TM variants. A dimension
+        that is ``<= 0`` (or larger than the matching ``dim`` entry) falls
+        back to the full ``dim`` size, so ``(0, 0)`` treats the full input
+        as a single patch (same as no convolution).
     stride : tuple of (int, int), default=(1, 1)
         Stride ``(row, col)`` for patch extraction.
     q : float, default=1.0
@@ -92,11 +94,11 @@ class BaseTM:
     track_patch_weights : bool, default=True
         Accumulate per-patch counts, used for global interpretability.
     boost_tp_fb : bool, default=True
-        Make TIa feedback literal increments non-stocastic (prob=1),
-        instead of prob=1/s.
-    seed : int or None, default=None
-        Random seed. ``None`` or negative values draw a random seed.
-        ``0`` is not allowed.
+        Make TIa feedback literal increments non-stochastic (prob=1),
+        instead of prob=1-1/s.
+    seed : int, default=-1
+        Random seed. Negative values draw a random seed.
+        ``0`` is treated as ``1``.
     device : {"cpu", "cuda"}, default="cpu"
         Compute device. ``"cuda"`` requires ``cupy`` to be installed.
     n_threads : int, default=1
@@ -184,6 +186,25 @@ class BaseTM:
             class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
         return class_sums
 
+    def transform(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+        """Return per-clause outputs for each sample.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ...)
+            Input samples.
+        batch_size : int, default=-1
+            Number of samples processed per batch. ``-1`` processes all
+            samples at once.
+
+        Returns
+        -------
+        ndarray of shape (N, n_clause_banks, n_clauses)
+            Clause activation (0 or 1) per sample.
+        """
+        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size)
+        return clause_outputs.reshape(clause_outputs.shape[0], self.dev.n_clause_banks, self.args.n_clauses)
+
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         """Return per-patch clause outputs for each sample.
 
@@ -197,7 +218,7 @@ class BaseTM:
 
         Returns
         -------
-        ndarray of shape (N, n_patches, n_clause_banks, n_clauses)
+        ndarray of shape (N, n_clause_banks, n_clauses, n_patches_y, n_patches_x)
             Clause activation (0 or 1) per patch per sample.
         """
         patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size)
@@ -238,8 +259,8 @@ class BaseTM:
 
         Returns
         -------
-        ndarray of shape (n_clause_banks, n_clauses)
-            Integer clause weight per class bank.
+        ndarray of shape (n_classes, n_clauses)
+            Integer clause weight per class.
         """
         return self.dev.get_weights()
 
@@ -271,7 +292,7 @@ class BaseTM:
 
         Returns
         -------
-        ndarray of shape (n_clauses, n_patches)
+        ndarray of shape (n_clause_banks, n_clauses, n_patches_y, n_patches_x)
             Patch weights per clause.
         """
         return self.dev.get_patch_weights()
@@ -391,6 +412,11 @@ class BaseTM:
         -------
         BaseTM
             Restored model instance of the calling subclass type.
+
+        Examples
+        --------
+        >>> state = tm.get_state_dict()
+        >>> restored = MultiClassTM.from_state_dict(state)
         """
         instance = cls.__new__(cls)
         instance.load_state_dict(state)

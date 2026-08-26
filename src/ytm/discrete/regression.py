@@ -1,3 +1,3 @@
-from ytm.discrete.regressor import RegressionTM
+from ytm.discrete.regressor import RegTM
 
-__all__ = ["RegressionTM"]
+__all__ = ["RegTM"]

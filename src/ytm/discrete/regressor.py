@@ -2,29 +2,48 @@ import numpy as np
 from .base import BaseTM
 
 
-class RegressionTM(BaseTM):
+class RegTM(BaseTM):
     """Tsetlin Machine for regression.
 
-    ``negative_clauses`` is forced to ``False`` and ``q`` is clamped to 1.0.
+    ``negative_clauses`` defaults to ``False`` and ``q`` defaults to 1.0,
+    unlike :class:`~ytm.discrete.base.BaseTM`. Both can be overridden.
 
     Parameters
     ----------
     y_range : tuple of (float, float)
         ``(min, max)`` of the target variable. Used for normalization.
         Must satisfy ``y_range[0] < y_range[1]``.
+    q : float, default=1.0
+        See :class:`~ytm.discrete.base.BaseTM`.
+    negative_clauses : bool, default=False
+        See :class:`~ytm.discrete.base.BaseTM`.
 
     See :class:`~ytm.discrete.base.BaseTM` for all other constructor parameters.
     """
 
-    def __init__(self, n_clauses: int, T: float, s: float, dim: tuple, y_range: tuple, **opt_args):
+    def __init__(
+        self,
+        n_clauses: int,
+        T: float,
+        s: float,
+        dim: tuple,
+        y_range: tuple,
+        q=1.0,
+        negative_clauses=False,
+        **opt_args,
+    ):
         assert y_range[0] < y_range[1], "y_range[0] must be < y_range[1]"
         self.y_range = y_range
-        opt_args["negative_clauses"] = False
-        q = opt_args.get("q", 1.0)
-        if q > 1.0:
-            print(f"Warning: Got q = {q}, q > 1.0 not supported for regression, setting q=1.0")
-        opt_args["q"] = 1.0
-        super().__init__(n_clauses=n_clauses, T=(0.0, float(T)), s=s, dim=dim, n_classes=1, **opt_args)
+        super().__init__(
+            n_clauses=n_clauses,
+            T=(0.0, float(T)),
+            s=s,
+            dim=dim,
+            n_classes=1,
+            q=q,
+            negative_clauses=negative_clauses,
+            **opt_args,
+        )
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         encoded_Y = ((Y - self.y_range[0]) / (self.y_range[1] - self.y_range[0])).astype(np.float32)
