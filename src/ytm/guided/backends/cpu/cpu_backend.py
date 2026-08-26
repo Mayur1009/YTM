@@ -8,10 +8,8 @@ import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 
 import numpy as np
-from scipy.special import expit, softmax
 
 from ..base import BaseDevice, tqdm_bar
-from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -100,6 +98,7 @@ class CPUDevice(BaseDevice):
 {self._read_file(dir_path / "evaluate.c")}
 {self._read_file(dir_path / "update.c")}
 {self._read_file(dir_path / "inference.c")}
+{self._read_file(dir_path / "losses.c")}
         """
         self.lib = self._compile_code(code)
 
@@ -121,8 +120,6 @@ class CPUDevice(BaseDevice):
 
     def dev_init(self):
         self.xp = np
-        self._softmax = softmax
-        self._expit = expit
         self._select_compiler()
         self._openmp_flags()
         self._init_clauses()
@@ -133,57 +130,14 @@ class CPUDevice(BaseDevice):
         self._init_lib()
         self._init_pointers()
         self.set_threads(self.args.n_threads)
-        self._init_act_fn()
         self._init_loss_fn()
 
     def _to_host(self, arr):
         return arr.copy()
 
     def _init_loss_fn(self):
-        if isinstance(self.args.loss_fn, str):
-            lw = np.asarray(
-                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=np.float32,
-            )
-
-            if self.args.loss_fn == "ce":
-                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-7)
-                _loss_fn, _grad_fn = build_ce(lw, gamma, eps, self.args.act_fn)
-            elif self.args.loss_fn == "mse":
-                _loss_fn, _grad_fn = build_mse(lw, self.dact_fn)
-            elif self.args.loss_fn == "mae":
-                _loss_fn, _grad_fn = build_mae(lw, self.dact_fn)
-            elif self.args.loss_fn == "sce":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
-                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
-                _loss_fn, _grad_fn = build_sce(lw, alpha, beta, eps, self.args.act_fn)
-            elif self.args.loss_fn == "asl":
-                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
-                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
-                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                _loss_fn, _grad_fn = build_asl(gamma_pos, gamma_neg, clip, eps)
-            elif self.args.loss_fn == "tversky":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
-                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
-                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                _loss_fn, _grad_fn = build_tversky(lw, alpha, beta, gamma, eps, self.dact_fn)
-            elif self.args.loss_fn == "huber":
-                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
-                _loss_fn, _grad_fn = build_huber(lw, delta, self.dact_fn)
-            else:
-                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
-
-            self.loss_fn = _loss_fn
-            self.grad_fn = _grad_fn
-
-        elif callable(self.args.loss_fn):
-            self.loss_fn = self.args.loss_fn
-        else:
-            raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
+        super()._init_loss_fn()
+        self.p_loss_class_weights = self._loss_class_weights.ctypes.data_as(float_p)
 
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(n))
@@ -215,6 +169,8 @@ class CPUDevice(BaseDevice):
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         grad = np.empty(self.args.n_classes, dtype=np.float32)
+        y_hat = np.empty(self.args.n_classes, dtype=np.float32)
+        loss_val = np.empty(1, dtype=np.float32)
         running_loss = 0.0
         n_polls = 0
 
@@ -223,6 +179,8 @@ class CPUDevice(BaseDevice):
         p_selected_pids = selected_pids.ctypes.data_as(int32_p)
         p_votes = votes.ctypes.data_as(float_p)
         p_grad = grad.ctypes.data_as(float_p)
+        p_y_hat = y_hat.ctypes.data_as(float_p)
+        p_loss = loss_val.ctypes.data_as(float_p)
 
         pbar = tqdm_bar(range(N), desc="Fit")
         for e in pbar:
@@ -257,8 +215,15 @@ class CPUDevice(BaseDevice):
                 self.p_bias,
                 p_votes,
             )
-            y_hat = self.act_fn(votes)
-            self.grad_fn(Y[e], y_hat, grad)
+            poll = (e % loss_poll_interval == 0) or (e == N - 1)
+            self.lib.compute_act_loss_grad(
+                p_votes,
+                Y[e].ctypes.data_as(float_p),
+                self.p_loss_class_weights,
+                p_y_hat,
+                p_grad,
+                p_loss if poll else None,
+            )
             self.lib.update_clauses(
                 c_uint64(rng_state),
                 p_selected_pids,
@@ -288,8 +253,8 @@ class CPUDevice(BaseDevice):
                 self.p_bias,
             )
 
-            if e % loss_poll_interval == 0 or e == N - 1:
-                running_loss += self.loss_fn(Y[e], y_hat)
+            if poll:
+                running_loss += float(loss_val[0])
                 n_polls += 1
                 pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
 
@@ -333,7 +298,9 @@ class CPUDevice(BaseDevice):
                 votes.ctypes.data_as(float_p),
             )
 
-        return self.act_fn(votes).astype(np.float32)
+        y_hat = np.empty((N, self.args.n_classes), dtype=np.float32)
+        self.lib.apply_act_batch(votes.ctypes.data_as(float_p), c_int(N), y_hat.ctypes.data_as(float_p))
+        return y_hat
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

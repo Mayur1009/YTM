@@ -4,8 +4,6 @@ import cupy as cp
 import numpy as np
 
 from ..base import BaseDevice, tqdm_bar
-from .activations import sigmoid, softmax
-from .losses import build_asl, build_ce, build_huber, build_mae, build_mse, build_sce, build_tversky
 
 
 def read_file(path):
@@ -51,6 +49,13 @@ class CUDADevice(BaseDevice):
         self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
+        losses_mod = cp.RawModule(
+            code=common + read_file(os.path.join(cur_dir, "losses.cu")),
+            options=("--use_fast_math",),
+        )
+        self.k_compute_act_loss_grad = losses_mod.get_function("compute_act_loss_grad")
+        self.k_apply_act_batch = losses_mod.get_function("apply_act_batch")
+
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_update_clauses = self._kernel_config(
             self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"]
@@ -58,6 +63,7 @@ class CUDADevice(BaseDevice):
         self.kconf_decide = self._kernel_config(self.total_clauses)
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
         self.kconf_bias = self._kernel_config(self.args.n_classes if self.args.bias else 1)
+        self.kconf_loss = ((1, 1, 1), (self.cuda_props["warp_size"], 1, 1))
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -70,8 +76,6 @@ class CUDADevice(BaseDevice):
 
     def dev_init(self):
         self.xp = cp
-        self._softmax = softmax
-        self._expit = sigmoid
 
         self.cuda_dev = cp.cuda.Device()
         props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
@@ -91,57 +95,10 @@ class CUDADevice(BaseDevice):
         self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
         self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
         self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
-        self._init_act_fn()
         self._init_loss_fn()
 
     def _to_host(self, arr):
         return arr.get()
-
-    def _init_loss_fn(self):
-        if isinstance(self.args.loss_fn, str):
-            lw = cp.asarray(
-                self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)),
-                dtype=np.float32,
-            )
-
-            if self.args.loss_fn == "ce":
-                gamma = self.args.loss_fn_kwargs.get("gamma", 0.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-7)
-                _loss_fn, _grad_fn = build_ce(lw, gamma, eps, self.args.act_fn)
-            elif self.args.loss_fn == "mse":
-                _loss_fn, _grad_fn = build_mse(lw, self.dact_fn)
-            elif self.args.loss_fn == "mae":
-                _loss_fn, _grad_fn = build_mae(lw, self.dact_fn)
-            elif self.args.loss_fn == "sce":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 1.0)
-                beta = self.args.loss_fn_kwargs.get("beta", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-4)
-                _loss_fn, _grad_fn = build_sce(lw, alpha, beta, eps, self.args.act_fn)
-            elif self.args.loss_fn == "asl":
-                gamma_pos = self.args.loss_fn_kwargs.get("gamma_pos", 0.0)
-                gamma_neg = self.args.loss_fn_kwargs.get("gamma_neg", 4.0)
-                clip = self.args.loss_fn_kwargs.get("clip", 0.05)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                _loss_fn, _grad_fn = build_asl(gamma_pos, gamma_neg, clip, eps)
-            elif self.args.loss_fn == "tversky":
-                alpha = self.args.loss_fn_kwargs.get("alpha", 0.5)
-                beta = self.args.loss_fn_kwargs.get("beta", 0.5)
-                gamma = self.args.loss_fn_kwargs.get("gamma", 1.0)
-                eps = self.args.loss_fn_kwargs.get("eps", 1e-6)
-                _loss_fn, _grad_fn = build_tversky(lw, alpha, beta, gamma, eps, self.dact_fn)
-            elif self.args.loss_fn == "huber":
-                delta = self.args.loss_fn_kwargs.get("delta", 1.0)
-                _loss_fn, _grad_fn = build_huber(lw, delta, self.dact_fn)
-            else:
-                raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
-
-            self.loss_fn = _loss_fn
-            self.grad_fn = _grad_fn
-
-        elif callable(self.args.loss_fn):
-            self.loss_fn = self.args.loss_fn
-        else:
-            raise NotImplementedError(f"loss_fn '{self.args.loss_fn}' not implemented")
 
     def set_threads(self, n: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
@@ -174,6 +131,8 @@ class CUDADevice(BaseDevice):
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.empty(self.args.n_classes, dtype=np.float32)
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
+        y_hat = cp.empty(self.args.n_classes, dtype=np.float32)
+        loss_val = cp.empty(1, dtype=np.float32)
         running_loss = 0.0
         n_polls = 0
 
@@ -223,8 +182,11 @@ class CUDADevice(BaseDevice):
                     (selected_patch_ids, self.clause_weights, self.bias, votes),
                 )
 
-                y_hat = self.act_fn(votes)
-                self.grad_fn(Y_batch[e], y_hat, grad)
+                poll = (i + e) % loss_poll_interval == 0 or (i + e) == N - 1
+                self.k_compute_act_loss_grad(
+                    *self.kconf_loss,
+                    (votes, Y_batch[e], self._loss_class_weights, np.int32(poll), y_hat, grad, loss_val),
+                )
 
                 self.k_decide_feedback(
                     *self.kconf_decide,
@@ -262,8 +224,8 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                if (i + e) % loss_poll_interval == 0 or (i + e) == N - 1:
-                    running_loss += self.loss_fn(Y_batch[e], y_hat)
+                if poll:
+                    running_loss += float(loss_val[0])
                     n_polls += 1
                     pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
 
@@ -331,7 +293,12 @@ class CUDADevice(BaseDevice):
                 ),
             )
 
-        return self.act_fn(class_sums).astype(cp.float32).get()
+        y_hat = cp.empty((N, self.args.n_classes), dtype=np.float32)
+        self.k_apply_act_batch(
+            *self._kernel_config(N * self.cuda_props["warp_size"]),
+            (class_sums, np.int32(N), y_hat),
+        )
+        return y_hat.get()
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]

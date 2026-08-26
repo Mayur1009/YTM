@@ -1,10 +1,12 @@
 import importlib.util
 import shutil
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 import numpy as np
+
+ACT_FN_CODES = {"softmax": 0, "sigmoid": 1, "identity": 2}
+LOSS_FN_CODES = {"ce": 0, "mse": 1, "mae": 2, "sce": 3, "asl": 4, "tversky": 5, "huber": 6}
 
 
 @dataclass()
@@ -19,8 +21,8 @@ class TMArgs:
     stride: tuple[int, int] = (1, 1)
     lr: float = 0.1
     lambda_: float | tuple[float, float] = 1.0
-    act_fn: str | Callable[..., np.ndarray] = "softmax"
-    loss_fn: str | Callable[..., float] = "ce"
+    act_fn: Literal["softmax", "sigmoid", "identity"] = "softmax"
+    loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
     weighted: bool = True
     bias: bool = False
@@ -58,15 +60,11 @@ class TMArgs:
         if self.device == "cpu" and not (shutil.which("gcc") or shutil.which("clang")):
             raise OSError("`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found.")
 
-        if not callable(self.act_fn):
-            _valid_act_fns = {"softmax", "sigmoid", "identity"}
-            if self.act_fn not in _valid_act_fns:
-                raise ValueError(f"act_fn must be one of {_valid_act_fns} or a callable, got '{self.act_fn}'")
+        if self.act_fn not in ACT_FN_CODES:
+            raise ValueError(f"act_fn must be one of {set(ACT_FN_CODES)}, got '{self.act_fn}'")
 
-        if not callable(self.loss_fn):
-            _valid_loss_fns = {"ce", "sce", "mse", "mae", "huber", "tversky", "asl"}
-            if self.loss_fn not in _valid_loss_fns:
-                raise ValueError(f"loss_fn must be one of {_valid_loss_fns} or a callable, got '{self.loss_fn}'")
+        if self.loss_fn not in LOSS_FN_CODES:
+            raise ValueError(f"loss_fn must be one of {set(LOSS_FN_CODES)}, got '{self.loss_fn}'")
 
         self.n_threads = max(1, self.n_threads)
         self.warps_per_clause = max(1, self.warps_per_clause)
@@ -134,8 +132,8 @@ class T_args(TypedDict, total=False):
     stride: tuple[int, int]
     lr: float
     lambda_: float | tuple[float, float]
-    act_fn: str | Callable
-    loss_fn: str | Callable
+    act_fn: Literal["softmax", "sigmoid", "identity"]
+    loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"]
     loss_fn_kwargs: dict
     weighted: bool
     bias: bool

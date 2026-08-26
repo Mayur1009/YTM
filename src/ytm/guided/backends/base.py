@@ -1,13 +1,12 @@
 import abc
 import types
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from tqdm import tqdm
 
-from ..args import TMArgs
+from ..args import ACT_FN_CODES, LOSS_FN_CODES, TMArgs
 
 
 @dataclass
@@ -33,11 +32,6 @@ def tqdm_bar(iter, **kwargs):
 
 class BaseDevice(abc.ABC):
     xp: types.ModuleType
-    _softmax: Callable
-    _expit: Callable
-    act_fn: Callable
-    loss_fn: Callable
-    grad_fn: Callable
 
     def __init__(self, args: TMArgs):
         self.args = args
@@ -130,9 +124,10 @@ class BaseDevice(abc.ABC):
     def load_state_dict(self, state_dict: dict):
         pass
 
-    @abc.abstractmethod
     def _init_loss_fn(self):
-        """Build self.loss_fn(v, y, grad, **kwargs) -> float, writing the gradient into `grad` in place."""
+        self._loss_class_weights = self.xp.asarray(
+            self.args.loss_fn_kwargs.get("class_weights", np.ones(self.args.n_classes)), dtype=np.float32
+        )
 
     def _init_clauses(self):
         if self.args.ta_init == "middle":
@@ -266,6 +261,20 @@ class BaseDevice(abc.ABC):
         )
 
     def _build_header(self):
+        act_fn_code = ACT_FN_CODES[self.args.act_fn]
+        loss_fn_code = LOSS_FN_CODES[self.args.loss_fn]
+
+        kw = self.args.loss_fn_kwargs
+        loss_fn = self.args.loss_fn
+        loss_gamma = kw.get("gamma", 1.0 if loss_fn == "tversky" else 0.0)
+        loss_eps = kw.get("eps", 1e-4 if loss_fn == "sce" else (1e-7 if loss_fn == "ce" else 1e-6))
+        loss_alpha = kw.get("alpha", 1.0 if loss_fn == "sce" else 0.5)
+        loss_beta = kw.get("beta", 1.0 if loss_fn == "sce" else 0.5)
+        loss_delta = kw.get("delta", 1.0)
+        loss_clip = kw.get("clip", 0.05)
+        loss_gamma_pos = kw.get("gamma_pos", 0.0)
+        loss_gamma_neg = kw.get("gamma_neg", 4.0)
+
         header = f"""
 #define TOTAL_CLAUSES {self.total_clauses}
 #define S {float(self.args.s)}f
@@ -300,5 +309,16 @@ class BaseDevice(abc.ABC):
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
 #define BIAS {1 if self.args.bias else 0}
+
+#define ACT_FN {act_fn_code}
+#define LOSS_FN {loss_fn_code}
+#define LOSS_GAMMA {float(loss_gamma)}f
+#define LOSS_EPS {float(loss_eps)}f
+#define LOSS_ALPHA {float(loss_alpha)}f
+#define LOSS_BETA {float(loss_beta)}f
+#define LOSS_DELTA {float(loss_delta)}f
+#define LOSS_CLIP {float(loss_clip)}f
+#define LOSS_GAMMA_POS {float(loss_gamma_pos)}f
+#define LOSS_GAMMA_NEG {float(loss_gamma_neg)}f
 """
         return header
