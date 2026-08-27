@@ -60,7 +60,7 @@ class CPUDevice(BaseDevice):
             raise RuntimeError("No suitable C compiler found (clang or gcc)")
 
         if self.args.compile_flags is None:
-            self.compiler_flags = ["-shared", "-fPIC", "-lm", "-O3", "-ffast-math", "-march=native", "-mtune=native"]
+            self.compiler_flags = ["-shared", "-fPIC", "-lm", "-O3", "-march=native", "-mtune=native"]
         else:
             self.compiler_flags = self.args.compile_flags
 

@@ -22,20 +22,20 @@ class CUDADevice(BaseDevice):
 
         pack_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "pack_clauses.cu")),
-            options=("--use_fast_math",),
+            options=(),
         )
         self.k_pack_clauses = pack_mod.get_function("pack_clauses")
 
         eval_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "evaluate.cu")),
-            options=("--use_fast_math",),
+            options=(),
         )
         self.k_evaluate = eval_mod.get_function("evaluate")
         self.k_count_votes = eval_mod.get_function("count_votes")
 
         update_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "update.cu")),
-            options=("--use_fast_math",),
+            options=(),
         )
         self.k_update_clauses = update_mod.get_function("update_clauses")
         self.k_decide_feedback = update_mod.get_function("decide_feedback_and_update_weights")
@@ -43,7 +43,7 @@ class CUDADevice(BaseDevice):
 
         infer_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "inference.cu")),
-            options=("--use_fast_math",),
+            options=(),
         )
         self.k_eval_clauses = infer_mod.get_function("infer_clauses")
         self.k_sum_votes = infer_mod.get_function("sum_votes")
@@ -51,7 +51,7 @@ class CUDADevice(BaseDevice):
 
         losses_mod = cp.RawModule(
             code=common + read_file(os.path.join(cur_dir, "losses.cu")),
-            options=("--use_fast_math",),
+            options=(),
         )
         self.k_compute_act_loss_grad = losses_mod.get_function("compute_act_loss_grad")
         self.k_apply_act_batch = losses_mod.get_function("apply_act_batch")
