@@ -26,6 +26,11 @@
 
 #define NEG_INF -1e30f
 
+__device__ inline float safe_pow(float base, float exp) {
+    float b = fmaxf(base, 0.0f);
+    return (exp == 0.0f) ? 1.0f : powf(b, exp);
+}
+
 __device__ inline void compute_act(warp_t warp, const float* votes, float* y_hat) {
     int lane = warp.thread_rank();
 
@@ -73,7 +78,7 @@ __device__ inline void compute_ce(warp_t warp, const float* y, const float* y_ha
     for (int c = lane; c < CLASSES; c += WARP_SIZE)
         partial += y[c] * y_hat[c];
     float dot_val = cg::reduce(warp, partial, cg::plus<float>());
-    float fw = powf(1.0f - dot_val, LOSS_GAMMA);
+    float fw = safe_pow(1.0f - dot_val, LOSS_GAMMA);
 
     float acc = 0.0f;
     for (int c = lane; c < CLASSES; c += WARP_SIZE) {
@@ -90,7 +95,7 @@ __device__ inline void compute_ce(warp_t warp, const float* y, const float* y_ha
     float acc = 0.0f;
     for (int c = lane; c < CLASSES; c += WARP_SIZE) {
         float p_t = y[c] * y_hat[c] + (1.0f - y[c]) * (1.0f - y_hat[c]);
-        float fw = powf(1.0f - p_t, LOSS_GAMMA);
+        float fw = safe_pow(1.0f - p_t, LOSS_GAMMA);
         if (compute_loss)
             acc += class_weights[c] * fw *
                    (y[c] * logf(y_hat[c] + LOSS_EPS) + (1.0f - y[c]) * logf(1.0f - y_hat[c] + LOSS_EPS));
