@@ -220,8 +220,10 @@ extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, co
         ull idx = clause * (ull)CLASSES + class_id;
         decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
                   lambda_minus, feedback_type, is_clause_synced);
-        if (clause_output)
-            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
+        if (clause_output) {
+            ull widx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+            clause_weights[widx] = clip(clause_weights[widx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
+        }
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             ull idx = clause * (ull)CLASSES + class_id;
@@ -229,8 +231,10 @@ extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, co
                       lambda_plus, lambda_minus, feedback_type, is_clause_synced);
         }
         if (clause_output)
-            for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id)
-                clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
+            for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
+                ull widx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+                clause_weights[widx] = clip(clause_weights[widx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
+            }
 #endif
     }
 }

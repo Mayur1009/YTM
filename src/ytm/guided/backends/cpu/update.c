@@ -156,7 +156,8 @@ void update_weights(const int* selected_patch_ids, const int8_t* clause_drop_mas
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause] += lr * grad[class_id];
+            ull idx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+            clause_weights[idx] = clip(clause_weights[idx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
         }
     }
 }
