@@ -21,7 +21,8 @@ examples = [
     "datasets",
     "scikit-learn",
     "medmnist",
-    "albumentationsx[headless]"
+    "albumentationsx[headless]",
+    "wordcloud"
 ]
 
 [build-system]
