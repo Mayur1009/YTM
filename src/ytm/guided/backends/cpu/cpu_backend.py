@@ -66,10 +66,10 @@ class CPUDevice(BaseDevice):
             self.compiler_flags = self.args.compile_flags
 
     def _openmp_flags(self):
-        if self.args.n_threads > 1 and _check_openmp_support(self.compiler):
+        if self.n_threads > 1 and _check_openmp_support(self.compiler):
             self.omp_flags = omp_flags[self.compiler]
         else:
-            self.args.n_threads = 1
+            self.n_threads = 1
             self.omp_flags = []
 
     def _compile_code(self, code: str):
@@ -122,6 +122,12 @@ class CPUDevice(BaseDevice):
 
     def dev_init(self):
         self.xp = np
+
+        if self.args.device == "cpu":
+            self.n_threads = 1
+        else:
+            self.n_threads = max(1, int(self.args.device[4:]))
+
         self._select_compiler()
         self._openmp_flags()
         self._init_clauses()
@@ -132,7 +138,7 @@ class CPUDevice(BaseDevice):
         self._init_lib()
         self.feedback_type = np.zeros((self.total_clauses, self.args.n_classes), dtype=np.uint8)
         self._init_pointers()
-        self.set_threads(self.args.n_threads)
+        self.set_threads(self.n_threads)
         self._init_loss_fn()
 
     def _to_host(self, arr):

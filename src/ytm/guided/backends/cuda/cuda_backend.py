@@ -12,6 +12,36 @@ def read_file(path):
 
 
 class CUDADevice(BaseDevice):
+    def dev_init(self):
+        self.xp = cp
+
+        if self.args.device == "cuda":
+            dev_id = 0
+        else:
+            dev_id = max(0, int(self.args.device[5:]))
+
+        self.cuda_dev = cp.cuda.Device(dev_id)
+
+        props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
+        self.cuda_props = {
+            "max_threads_per_block": props["maxThreadsPerBlock"],
+            "multiprocessor_count": props["multiProcessorCount"],
+            "warp_size": props["warpSize"],
+        }
+
+        with self.cuda_dev:
+            self._init_clauses()
+            self._init_weights()
+            self._init_bias()
+            self._init_packed_clauses()
+            self._init_frozen_clauses()
+            self._init_kernels()
+            self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
+            self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
+            self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
+            self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
+            self._init_loss_fn()
+
     def _init_kernels(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         header = f"""
@@ -73,34 +103,14 @@ class CUDADevice(BaseDevice):
             gs = self.args.grid_size
         return (gs, 1, 1), (bs, 1, 1)
 
-    def dev_init(self):
-        self.xp = cp
-
-        self.cuda_dev = cp.cuda.Device()
-        props = cp.cuda.runtime.getDeviceProperties(self.cuda_dev.id)
-        self.cuda_props = {
-            "max_threads_per_block": props["maxThreadsPerBlock"],
-            "multiprocessor_count": props["multiProcessorCount"],
-            "warp_size": props["warpSize"],
-        }
-
-        self._init_clauses()
-        self._init_weights()
-        self._init_bias()
-        self._init_packed_clauses()
-        self._init_frozen_clauses()
-        self._init_kernels()
-        self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
-        self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
-        self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
-        self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
-        self._init_loss_fn()
-
     def _to_host(self, arr):
-        return arr.get()
+        with self.cuda_dev:
+            return arr.get()
 
     def set_threads(self, n: int):
         raise RuntimeError("set_nthreads is only supported for CPU device")
+
+    # -- Public API -----------------------------------------------------
 
     def fit_epoch(
         self,
@@ -110,6 +120,36 @@ class CUDADevice(BaseDevice):
         batch_size: int,
         lr: float | None = None,
         lambda_: float | None = None,
+    ):
+        with self.cuda_dev:
+            return self._fit_epoch_impl(X, Y, clause_drop_p, batch_size, lr, lambda_)
+
+    def pack_clauses(self, force_repack: bool = False):
+        with self.cuda_dev:
+            return self._pack_clauses_impl(force_repack)
+
+    def infer(self, X: np.ndarray, batch_size: int):
+        with self.cuda_dev:
+            return self._infer_impl(X, batch_size)
+
+    def transform(self, X: np.ndarray, batch_size: int):
+        with self.cuda_dev:
+            return self._transform_impl(X, batch_size)
+
+    def transform_patchwise(self, X: np.ndarray, batch_size: int):
+        with self.cuda_dev:
+            return self._transform_patchwise_impl(X, batch_size)
+
+    # -- Impls ------------------------------------------------------------
+
+    def _fit_epoch_impl(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        clause_drop_p: float,
+        batch_size: int,
+        lr: float | None,
+        lambda_: float | None,
     ):
         N = X.shape[0]
         if batch_size == -1:
@@ -233,7 +273,7 @@ class CUDADevice(BaseDevice):
         del X_batch, Y_batch
         return result
 
-    def pack_clauses(self, force_repack: bool = False):
+    def _pack_clauses_impl(self, force_repack: bool = False):
         if force_repack:
             self.packed_clauses.is_clause_synced.fill(0)
 
@@ -253,7 +293,7 @@ class CUDADevice(BaseDevice):
             ),
         )
 
-    def infer(self, X: np.ndarray, batch_size: int):
+    def _infer_impl(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -301,7 +341,7 @@ class CUDADevice(BaseDevice):
         del class_sums, batch_X, co_batch, y_hat
         return result
 
-    def transform(self, X: np.ndarray, batch_size: int):
+    def _transform_impl(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -333,7 +373,7 @@ class CUDADevice(BaseDevice):
         del batch_X, co_batch
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int):
+    def _transform_patchwise_impl(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
@@ -365,4 +405,3 @@ class CUDADevice(BaseDevice):
         result = patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
         del batch_X, po_batch
         return result
-

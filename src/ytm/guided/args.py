@@ -46,18 +46,17 @@ class TMArgs:
     seed: int = -1
 
     # Device specific arguments
-    device: Literal["cpu", "cuda"] = "cpu"
-    n_threads: int = 1
+    device: Literal["cpu", "cuda"] | str = "cpu:1"
     compile_flags: None | list[str] = None
     grid_size: int | None = None
     block_size: int = 256
     warps_per_clause: int = 1
 
     def __post_init__(self):
-        if self.device == "cuda" and importlib.util.find_spec("cupy") is None:
+        if self.device.startswith("cuda") and importlib.util.find_spec("cupy") is None:
             raise ImportError("`device='cuda'` requires `cupy` to be installed. But `cupy` is not available in the current environment.")
 
-        if self.device == "cpu" and not (shutil.which("gcc") or shutil.which("clang")):
+        if self.device.startswith("cpu") and not (shutil.which("gcc") or shutil.which("clang")):
             raise OSError("`device='cpu'` requires `gcc` or `clang` to be available in the PATH. But no suitable compiler was found.")
 
         if self.act_fn not in ACT_FN_CODES:
@@ -66,7 +65,6 @@ class TMArgs:
         if self.loss_fn not in LOSS_FN_CODES:
             raise ValueError(f"loss_fn must be one of {set(LOSS_FN_CODES)}, got '{self.loss_fn}'")
 
-        self.n_threads = max(1, self.n_threads)
         self.warps_per_clause = max(1, self.warps_per_clause)
 
         self.n_clauses = max(1, int(self.n_clauses))
@@ -150,7 +148,6 @@ class T_args(TypedDict, total=False):
     boost_tp_fb: bool
     seed: int
     device: Literal["cpu", "cuda"]
-    n_threads: int
     compile_flags: list[str]
     grid_size: int | None
     block_size: int

@@ -24,11 +24,11 @@ class BaseTM:
         self.args = TMArgs(n_clauses, s, dim, n_classes, **opt_args)
         self._rng = np.random.default_rng(self.args.seed)
 
-        if self.args.device == "cpu":
+        if self.args.device.startswith("cpu"):
             from .backends.cpu.cpu_backend import CPUDevice
 
             self.dev = CPUDevice(self.args)
-        elif self.args.device == "cuda":
+        elif self.args.device.startswith("cuda"):
             from .backends.cuda.cuda_backend import CUDADevice
 
             self.dev = CUDADevice(self.args)
@@ -108,13 +108,14 @@ class BaseTM:
             clause_density=clause_density,
         )
 
-    def to(self, device: Literal["cpu", "cuda"]):
+    def to(self, device: str):
         orig_dev_state = self.dev.get_state_dict()
-        if device == "cpu":
+        self.args.device = device
+        if device.startswith("cpu"):
             from .backends.cpu.cpu_backend import CPUDevice
 
             self.dev = CPUDevice(self.args)
-        elif device == "cuda":
+        elif device.startswith("cuda"):
             from .backends.cuda.cuda_backend import CUDADevice
 
             self.dev = CUDADevice(self.args)
@@ -122,11 +123,9 @@ class BaseTM:
             raise ValueError(f"Unsupported device: {device}")
 
         self.dev.load_state_dict(orig_dev_state)
-        self.args.device = device
 
     def set_threads(self, n: int) -> None:
-        self.args.n_threads = max(1, n)
-        self.dev.set_threads(self.args.n_threads)
+        self.dev.set_threads(max(1, n))
 
     def get_state_dict(self) -> dict:
         from dataclasses import replace
