@@ -1,6 +1,6 @@
 import abc
 import types
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
@@ -74,7 +74,7 @@ class BaseDevice(abc.ABC):
             for lit in range(self.literal_offsets[fid], self.literal_offsets[fid + 1]):
                 self.lit_to_fid[lit] = fid
 
-        self.np_rng = np.random.default_rng(self.args.seed)
+        self._rng = np.random.default_rng(self.args.seed + 1)
 
         self.dev_init()
 
@@ -105,7 +105,15 @@ class BaseDevice(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, rng_state: int, lr: float | None = None):
+    def fit_epoch(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        clause_drop_p: float,
+        batch_size: int,
+        lr: float | None = None,
+        lambda_: float | None = None,
+    ):
         pass
 
     @abc.abstractmethod
@@ -118,10 +126,6 @@ class BaseDevice(abc.ABC):
 
     @abc.abstractmethod
     def transform_patchwise(self, X: np.ndarray, batch_size: int):
-        pass
-
-    @abc.abstractmethod
-    def load_state_dict(self, state_dict: dict):
         pass
 
     def _init_loss_fn(self):
@@ -138,11 +142,11 @@ class BaseDevice(abc.ABC):
             )
         elif self.args.ta_init == "random":
             self.ta_states = self.xp.asarray(
-                self.np_rng.integers(0, self.args.n_states, size=(self.total_clauses, self.n_literals)),
+                self._rng.integers(0, self.args.n_states, size=(self.total_clauses, self.n_literals)),
                 dtype=np.uint32,
             )
         elif self.args.ta_init == "random_include":
-            choice = self.np_rng.integers(0, 2, size=(self.total_clauses, self.n_literals))
+            choice = self._rng.integers(0, 2, size=(self.total_clauses, self.n_literals))
             states = np.where(choice == 1, self.args.include_state, self.args.include_state - 1)
             self.ta_states = self.xp.asarray(states, dtype=np.uint32)
         elif isinstance(self.args.ta_init, str) and self.args.ta_init.startswith("random_"):
@@ -151,7 +155,7 @@ class BaseDevice(abc.ABC):
             low = max(0, mid - n)
             high = min(self.args.n_states - 1, mid + n)
             self.ta_states = self.xp.asarray(
-                self.np_rng.integers(low, high + 1, size=(self.total_clauses, self.n_literals)),
+                self._rng.integers(low, high + 1, size=(self.total_clauses, self.n_literals)),
                 dtype=np.uint32,
             )
         else:
@@ -165,7 +169,7 @@ class BaseDevice(abc.ABC):
         shape = (self.args.n_classes, self.args.n_clauses)
 
         if self.args.weight_init == "random":
-            mag = self.np_rng.uniform(0.0, 1.0, size=shape).astype(np.float32)
+            mag = self._rng.uniform(0.0, 1.0, size=shape).astype(np.float32)
         else:
             mag = np.full(shape, float(self.args.weight_init), dtype=np.float32)
 
@@ -176,7 +180,7 @@ class BaseDevice(abc.ABC):
                 for i in range(self.args.n_classes):
                     pol = np.ones(self.args.n_clauses, dtype=np.float32)
                     pol[n_neg_polarity:] = -1.0
-                    sign[i, :] = self.np_rng.permutation(pol)
+                    sign[i, :] = self._rng.permutation(pol)
             else:
                 sign[:, n_neg_polarity:] = -1.0
             mag = mag * sign
@@ -195,29 +199,13 @@ class BaseDevice(abc.ABC):
             if isinstance(self.args.bias_init, float):
                 self.bias = self.xp.full((self.args.n_classes,), self.args.bias_init, dtype=np.float32)
             elif self.args.bias_init == "random":
-                bias_rand = self.np_rng.uniform(0.0, 1.0, size=(self.args.n_classes,))
+                bias_rand = self._rng.uniform(0.0, 1.0, size=(self.args.n_classes,))
                 self.bias = self.xp.asarray(bias_rand, dtype=np.float32)
             else:
                 raise ValueError
 
     def _init_frozen_clauses(self):
         self.frozen_clauses = self.xp.zeros((self.n_clause_banks, self.args.n_clauses), dtype=np.int8)
-
-    def _init_act_fn(self):
-        if callable(self.args.act_fn):
-            self.act_fn = self.args.act_fn
-            self.dact_fn = lambda act: self.xp.ones_like(act)
-        elif self.args.act_fn == "softmax":
-            self.act_fn = lambda v: self._softmax(v / self.args.n_clauses, axis=-1)
-            self.dact_fn = lambda act: self.xp.ones_like(act)
-        elif self.args.act_fn == "sigmoid":
-            self.act_fn = lambda v: self._expit(v / self.args.n_clauses)
-            self.dact_fn = lambda act: act * (1.0 - act)
-        elif self.args.act_fn == "identity":
-            self.act_fn = lambda v: v
-            self.dact_fn = lambda act: self.xp.ones_like(act)
-        else:
-            raise NotImplementedError(f"act_fn '{self.args.act_fn}' not implemented")
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         clause_ids = np.asarray(clause_ids, dtype=np.int32)
@@ -247,7 +235,24 @@ class BaseDevice(abc.ABC):
             "ta_states": self._to_host(self.ta_states),
             "clause_weights": self._to_host(self.clause_weights),
             "patch_weights": self._to_host(self.patch_weights),
+            "bias": self._to_host(self.bias),
+            "rng": self._rng,
         }
+
+    def load_state_dict(self, state_dict: dict):
+        self.ta_states = self.xp.asarray(state_dict["ta_states"])
+        self.clause_weights = self.xp.asarray(state_dict["clause_weights"])
+        self.patch_weights = self.xp.asarray(state_dict["patch_weights"])
+        self.bias = self.xp.asarray(state_dict["bias"])
+        self._rng = state_dict["rng"]
+        self.packed_clauses.is_clause_synced.fill(0)
+
+    def __getstate__(self):
+        return {"args": asdict(self.args), "params": self.get_state_dict()}
+
+    def __setstate__(self, state):
+        self.__init__(TMArgs(**state["args"]))
+        self.load_state_dict(state["params"])
 
     def get_packed_clauses(self) -> PackedClauses:
         pc = self.packed_clauses

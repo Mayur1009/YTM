@@ -34,11 +34,12 @@ class CUDADevice(BaseDevice):
         self.k_count_votes = eval_mod.get_function("count_votes")
 
         update_mod = cp.RawModule(
-            code=common + read_file(os.path.join(cur_dir, "update.cu")),
+            code=common + read_file(os.path.join(cur_dir, "losses.cu")) + read_file(os.path.join(cur_dir, "update.cu")),
             options=(),
         )
         self.k_update_clauses = update_mod.get_function("update_clauses")
-        self.k_decide_feedback = update_mod.get_function("decide_feedback_and_update_weights")
+        self.k_decide_feedback = update_mod.get_function("decide_feedback")
+        self.k_update_weights = update_mod.get_function("update_weights")
         self.k_update_bias = update_mod.get_function("update_bias")
 
         infer_mod = cp.RawModule(
@@ -57,13 +58,11 @@ class CUDADevice(BaseDevice):
         self.k_apply_act_batch = losses_mod.get_function("apply_act_batch")
 
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
-        self.kconf_update_clauses = self._kernel_config(
-            self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"]
-        )
+        self.kconf_update_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
         self.kconf_decide = self._kernel_config(self.total_clauses)
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
         self.kconf_bias = self._kernel_config(self.args.n_classes if self.args.bias else 1)
-        self.kconf_loss = ((1, 1, 1), (self.cuda_props["warp_size"], 1, 1))
+        self.kconf_loss = ((1, 1, 1), (1, 1, 1))
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -109,20 +108,19 @@ class CUDADevice(BaseDevice):
         Y: np.ndarray,
         clause_drop_p: float,
         batch_size: int,
-        rng_state: int,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         N = X.shape[0]
-        loss_poll_interval = max(1, int(N * loss_poll_rate))
         if batch_size == -1:
             batch_size = N
 
         _lr = lr if lr is not None else self.args.lr
+        _lambda = lambda_ if lambda_ is not None else self.args.lambda_
 
         # Clause dropout mask (same for entire epoch)
         if clause_drop_p > 0.0:
-            clause_drop_mask_gpu = cp.asarray(self.np_rng.random(self.total_clauses) <= clause_drop_p, dtype=cp.int8)
+            clause_drop_mask_gpu = cp.asarray(self._rng.random(self.total_clauses) <= clause_drop_p, dtype=cp.int8)
         else:
             clause_drop_mask_gpu = cp.zeros(self.total_clauses, dtype=np.int8)
 
@@ -133,8 +131,7 @@ class CUDADevice(BaseDevice):
         grad = cp.empty(self.args.n_classes, dtype=np.float32)
         y_hat = cp.empty(self.args.n_classes, dtype=np.float32)
         loss_val = cp.empty(1, dtype=np.float32)
-        running_loss = 0.0
-        n_polls = 0
+        running_loss_val = cp.zeros(1, dtype=np.float32)
 
         pbar = tqdm_bar(None, desc="Fit", total=N)
         for i in range(0, N, batch_size):
@@ -144,6 +141,8 @@ class CUDADevice(BaseDevice):
             bs = batch_end - i
 
             for e in range(bs):
+                _rng_key = np.uint64(self._rng.integers(1, 1 << 63, dtype=np.uint64))
+
                 self.k_pack_clauses(
                     *self.kconf_clauses,
                     (
@@ -162,16 +161,15 @@ class CUDADevice(BaseDevice):
                 self.k_evaluate(
                     *self.kconf_clauses,
                     (
+                        _rng_key,
                         X_batch,
                         np.int32(e),
-                        np.int32(i + e),
                         clause_drop_mask_gpu,
                         self.packed_clauses.clause_position_bounds,
                         self.packed_clauses.clause_feat_bounds,
                         self.packed_clauses.bounded_feat_ids,
                         self.packed_clauses.n_bounded_feats,
                         self.packed_clauses.clause_density,
-                        np.uint64(rng_state),
                         selected_patch_ids,
                         self.patch_weights,
                     ),
@@ -182,28 +180,31 @@ class CUDADevice(BaseDevice):
                     (selected_patch_ids, self.clause_weights, self.bias, votes),
                 )
 
-                poll = (i + e) % loss_poll_interval == 0 or (i + e) == N - 1
                 self.k_compute_act_loss_grad(
                     *self.kconf_loss,
-                    (votes, Y_batch[e], self._loss_class_weights, np.int32(poll), y_hat, grad, loss_val),
+                    (votes, Y_batch[e], self._loss_class_weights, np.int32(True), y_hat, grad, loss_val),
                 )
 
                 self.k_decide_feedback(
                     *self.kconf_decide,
                     (
-                        np.uint64(rng_state),
-                        np.int32(i + e),
-                        grad,
-                        np.float32(_lr),
+                        _rng_key,
+                        votes,
+                        Y_batch[e],
+                        self._loss_class_weights,
+                        loss_val,
                         self.clause_weights,
                         self.packed_clauses.clause_density,
                         selected_patch_ids,
                         clause_drop_mask_gpu,
-                        np.float32(self.args.lambda_plus),
-                        np.float32(self.args.lambda_minus),
+                        np.float32(_lambda),
                         self.feedback_type,
                         self.packed_clauses.is_clause_synced,
                     ),
+                )
+                self.k_update_weights(
+                    *self.kconf_decide,
+                    (grad, np.float32(_lr), selected_patch_ids, clause_drop_mask_gpu, self.clause_weights),
                 )
                 self.k_update_bias(
                     *self.kconf_bias,
@@ -212,27 +213,25 @@ class CUDADevice(BaseDevice):
                 self.k_update_clauses(
                     *self.kconf_update_clauses,
                     (
-                        np.uint64(rng_state),
+                        _rng_key,
                         selected_patch_ids,
                         X_batch,
                         np.int32(e),
-                        np.int32(i + e),
-                        self.ta_states,
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
                         self.feedback_type,
+                        self.ta_states,
                     ),
                 )
 
-                if poll:
-                    running_loss += float(loss_val[0])
-                    n_polls += 1
-                    pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
-
+                running_loss_val += loss_val
                 pbar.update(1)
         pbar.close()
 
-        return running_loss / n_polls
+        result = float(running_loss_val[0]) / N
+        del clause_drop_mask_gpu, selected_patch_ids, votes, grad, y_hat, loss_val, running_loss_val
+        del X_batch, Y_batch
+        return result
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
@@ -295,10 +294,12 @@ class CUDADevice(BaseDevice):
 
         y_hat = cp.empty((N, self.args.n_classes), dtype=np.float32)
         self.k_apply_act_batch(
-            *self._kernel_config(N * self.cuda_props["warp_size"]),
+            *self._kernel_config(N),
             (class_sums, np.int32(N), y_hat),
         )
-        return y_hat.get()
+        result = y_hat.get()
+        del class_sums, batch_X, co_batch, y_hat
+        return result
 
     def transform(self, X: np.ndarray, batch_size: int):
         N = X.shape[0]
@@ -329,6 +330,7 @@ class CUDADevice(BaseDevice):
             )
             clause_outputs[i:batch_end] = co_batch.get()
 
+        del batch_X, co_batch
         return clause_outputs
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int):
@@ -360,10 +362,7 @@ class CUDADevice(BaseDevice):
             )
             patch_output[i:batch_end] = po_batch.get()
 
-        return patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
+        result = patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
+        del batch_X, po_batch
+        return result
 
-    def load_state_dict(self, state_dict: dict):
-        self.ta_states = cp.asarray(state_dict["ta_states"])
-        self.clause_weights = cp.asarray(state_dict["clause_weights"])
-        self.patch_weights = cp.asarray(state_dict["patch_weights"])
-        self.packed_clauses.is_clause_synced.fill(0)

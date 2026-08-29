@@ -19,8 +19,8 @@ class TMArgs:
     feat_maxs: int | np.ndarray = 1
     patch_dim: tuple[int, int] = (0, 0)
     stride: tuple[int, int] = (1, 1)
-    lr: float = 0.1
-    lambda_: float | tuple[float, float] = 1.0
+    lr: float = 1.0
+    lambda_: float = 1.0
     act_fn: Literal["softmax", "sigmoid", "identity"] = "softmax"
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
@@ -104,13 +104,7 @@ class TMArgs:
             self.feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32)
             assert self.feat_maxs.shape == (n_feat,), f"feat_maxs must have shape ({n_feat},), got {self.feat_maxs.shape}"
 
-        if isinstance(self.lambda_, tuple):
-            assert len(self.lambda_) == 2, f"lambda_ tuple must be (lambda_plus, lambda_minus), got {len(self.lambda_)} elements"
-            self.lambda_plus = float(self.lambda_[0])
-            self.lambda_minus = float(self.lambda_[1])
-        else:
-            self.lambda_plus = float(self.lambda_)
-            self.lambda_minus = float(self.lambda_)
+        self.lambda_ = float(self.lambda_)
 
         if isinstance(self.ta_init, int):
             assert 0 <= self.ta_init <= self.n_states - 1, (
@@ -131,7 +125,7 @@ class T_args(TypedDict, total=False):
     patch_dim: tuple[int, int]
     stride: tuple[int, int]
     lr: float
-    lambda_: float | tuple[float, float]
+    lambda_: float
     act_fn: Literal["softmax", "sigmoid", "identity"]
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"]
     loss_fn_kwargs: dict

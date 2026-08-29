@@ -22,8 +22,7 @@ class BaseTM:
         **opt_args: Unpack[T_args],
     ):
         self.args = TMArgs(n_clauses, s, dim, n_classes, **opt_args)
-        self.np_rng = np.random.default_rng(self.args.seed)
-        self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
+        self._rng = np.random.default_rng(self.args.seed)
 
         if self.args.device == "cpu":
             from .backends.cpu.cpu_backend import CPUDevice
@@ -44,23 +43,15 @@ class BaseTM:
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        X = np.ascontiguousarray(X)
-
         N = X.shape[0]
-        iota = np.arange(N)
-        if shuffle:
-            self.np_rng.shuffle(iota)
-        X = X[iota]
-        Y = Y[iota]
-
-        Y = Y.astype(np.float32)
-
-        epoch_loss = self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, self.rng_state, lr=lr, loss_poll_rate=loss_poll_rate)
-        self.rng_state = self.np_rng.integers(1, 1 << 63, dtype=np.uint64)
+        iota = self._rng.permutation(np.arange(N))
+        X = np.ascontiguousarray(X)[iota]
+        Y = Y[iota].astype(np.float32)
+        epoch_loss = self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr=lr, lambda_=lambda_)
         return epoch_loss
 
     def score(self, X: np.ndarray, batch_size: int = -1):
@@ -138,20 +129,21 @@ class BaseTM:
         self.dev.set_threads(self.args.n_threads)
 
     def get_state_dict(self) -> dict:
+        from dataclasses import replace
+
         return {
-            "args": asdict(self.args),
-            "params": self.dev.get_state_dict(),
-            "rng_state": self.rng_state,
-            "np_rng_state": self.np_rng.bit_generator.state,
+            "args": asdict(replace(self.args, device="cpu")),
+            "dev": self.dev.get_state_dict(),
+            "rng": self._rng,
         }
 
     def load_state_dict(self, state: dict) -> None:
-        state["args"]["device"] = "cpu"
-        BaseTM.__init__(self, **state["args"])
-        self.dev.load_state_dict(state["params"])
+        from .backends.cpu.cpu_backend import CPUDevice
 
-        self.rng_state = state.get("rng_state", self.rng_state)
-        self.np_rng.bit_generator.state = state.get("np_rng_state", self.np_rng.bit_generator.state)
+        self.args = TMArgs(**state["args"])
+        self.dev = CPUDevice(self.args)
+        self.dev.load_state_dict(state["dev"])
+        self._rng = state["rng"]
 
     @classmethod
     def from_state_dict(cls, state: dict) -> "BaseTM":

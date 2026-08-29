@@ -36,15 +36,17 @@
 #define BIAS 0
 #define WARPS_PER_CLAUSE 1
 #endif
-
+#pragma once
 #define S_INV (1.0f / (float)(S))
 #define N_POSITION_FEATS_Y (N_PATCHES_Y - 1)
 #define N_POSITION_FEATS_X (N_PATCHES_X - 1)
 
 #if COALESCED == 0
 #define CLAUSES_PER_CLASS (TOTAL_CLAUSES / CLASSES)
+#define LOOP_CLASS_ID(class_id, clause) class_id = (ull)clause / (CLAUSES_PER_CLASS);
 #else
 #define CLAUSES_PER_CLASS TOTAL_CLAUSES
+#define LOOP_CLASS_ID(class_id, clause) for (class_id = 0; class_id < CLASSES; ++class_id)
 #endif
 
 #ifndef INFINITY

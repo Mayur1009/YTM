@@ -1,5 +1,6 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "common.cu"
+#include "losses.cu"
 #endif
 
 #define FB_NONE 0
@@ -16,8 +17,8 @@ __device__ inline int geom_sample(ull rng_key, uint* rng_counter, float p) {
     return sample;
 }
 
-__device__ inline void dec_literals(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end, int offset,
-                                    int lane) {
+__device__ inline void dec_literals(ull rng_key, uint* rng_counter, int start, int end, int offset, int lane,
+                                    uint* ta_state) {
     if (S > 1.0f) {
         int li = start + geom_sample(rng_key, rng_counter, S_INV) - 1;
         while (li < end) {
@@ -32,15 +33,15 @@ __device__ inline void dec_literals(ull rng_key, uint* rng_counter, uint* ta_sta
     }
 }
 
-__device__ inline void t2_inc_literals(uint* ta_state, int start, int end, int offset) {
+__device__ inline void t2_inc_literals(int start, int end, int offset, uint* ta_state) {
     for (int li = start; li < end; ++li) {
         if (ta_state[li + offset] < MAX_TA_STATE)
             ta_state[li + offset] += 1;
     }
 }
 
-__device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta_state, int start, int end,
-                                        int offset) {
+__device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, int start, int end, int offset,
+                                        uint* ta_state) {
 #if BOOST_TP_FB
     for (int li = start; li < end; ++li)
         if (ta_state[li + offset] < MAX_TA_STATE)
@@ -57,26 +58,26 @@ __device__ inline void t1a_inc_literals(ull rng_key, uint* rng_counter, uint* ta
 #endif
 }
 
-__device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states, const int* X, int patch_idx_y,
-                                 int patch_idx_x, const int* feat_mins, const int* literal_offsets, int lane,
-                                 ull tile_id) {
+__device__ inline void type1a_fb(ull rng_key, uint* rng_counter, const int* X, int patch_idx_y, int patch_idx_x,
+                                 const int* feat_mins, const int* literal_offsets, int lane, ull tile_id,
+                                 uint* ta_states) {
 
 #if POSITION_LITERALS
     if (tile_id == 0 && lane == 0) {
-        t1a_inc_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, 0);
-        t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0);
+        t1a_inc_literals(rng_key, rng_counter, 0, patch_idx_y, 0, ta_states);
+        t1a_inc_literals(rng_key, rng_counter, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, 0, ta_states);
 
-        dec_literals(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, 0, lane);
-        dec_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, lane);
+        dec_literals(rng_key, rng_counter, patch_idx_y, N_POSITION_FEATS_Y, 0, lane, ta_states);
+        dec_literals(rng_key, rng_counter, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, lane, ta_states);
 
 #if NEGATED_LITERALS
-        t1a_inc_literals(rng_key, rng_counter, ta_states, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2);
-        t1a_inc_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS,
-                         N_LITERALS / 2);
+        t1a_inc_literals(rng_key, rng_counter, patch_idx_y, N_POSITION_FEATS_Y, N_LITERALS / 2, ta_states);
+        t1a_inc_literals(rng_key, rng_counter, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, N_LITERALS / 2,
+                         ta_states);
 
-        dec_literals(rng_key, rng_counter, ta_states, 0, patch_idx_y, N_LITERALS / 2, lane);
-        dec_literals(rng_key, rng_counter, ta_states, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x,
-                     N_LITERALS / 2, lane);
+        dec_literals(rng_key, rng_counter, 0, patch_idx_y, N_LITERALS / 2, lane, ta_states);
+        dec_literals(rng_key, rng_counter, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, lane,
+                    ta_states);
 #endif
     }
 #endif
@@ -86,17 +87,17 @@ __device__ inline void type1a_fb(ull rng_key, uint* rng_counter, uint* ta_states
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
-        t1a_inc_literals(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, 0);
-        dec_literals(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, 0, lane);
+        t1a_inc_literals(rng_key, rng_counter, lit_start, lit_start + shifted_val, 0, ta_states);
+        dec_literals(rng_key, rng_counter, lit_start + shifted_val, lit_end, 0, lane, ta_states);
 
 #if NEGATED_LITERALS
-        t1a_inc_literals(rng_key, rng_counter, ta_states, lit_start + shifted_val, lit_end, N_LITERALS / 2);
-        dec_literals(rng_key, rng_counter, ta_states, lit_start, lit_start + shifted_val, N_LITERALS / 2, lane);
+        t1a_inc_literals(rng_key, rng_counter, lit_start + shifted_val, lit_end, N_LITERALS / 2, ta_states);
+        dec_literals(rng_key, rng_counter, lit_start, lit_start + shifted_val, N_LITERALS / 2, lane, ta_states);
 #endif
     }
 }
 
-__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state, int lane, ull tile_id) {
+__device__ inline void type1b_fb(ull rng_key, uint* rng_counter, int lane, ull tile_id, uint* ta_state) {
     ull global_lane = tile_id * WARP_SIZE + lane;
     ull total_lanes = WARPS_PER_CLAUSE * WARP_SIZE;
 
@@ -115,16 +116,16 @@ __device__ inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_state,
     }
 }
 
-__device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                                const int* literal_offsets, int lane, ull tile_id) {
+__device__ inline void type2_fb(const int* X, int patch_idx_y, int patch_idx_x, const int* feat_mins,
+                                const int* literal_offsets, int lane, ull tile_id, uint* ta_state) {
 #if POSITION_LITERALS
     if (tile_id == 0 && lane == 0) {
-        t2_inc_literals(ta_state, patch_idx_y, N_POSITION_FEATS_Y, 0);
-        t2_inc_literals(ta_state, N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0);
+        t2_inc_literals(patch_idx_y, N_POSITION_FEATS_Y, 0, ta_state);
+        t2_inc_literals(N_POSITION_FEATS_Y + patch_idx_x, N_POSITION_FEATS, 0, ta_state);
 
 #if NEGATED_LITERALS
-        t2_inc_literals(ta_state, 0, patch_idx_y, N_LITERALS / 2);
-        t2_inc_literals(ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2);
+        t2_inc_literals(0, patch_idx_y, N_LITERALS / 2, ta_state);
+        t2_inc_literals(N_POSITION_FEATS_Y, N_POSITION_FEATS_Y + patch_idx_x, N_LITERALS / 2, ta_state);
 #endif
     }
 #endif
@@ -134,73 +135,39 @@ __device__ inline void type2_fb(uint* ta_state, const int* X, int patch_idx_y, i
         int lit_end = N_POSITION_FEATS + literal_offsets[fid + 1];
         int shifted_val = get_feature_value(X, patch_idx_y, patch_idx_x, fid) - feat_mins[fid];
 
-        t2_inc_literals(ta_state, lit_start + shifted_val, lit_end, 0);
+        t2_inc_literals(lit_start + shifted_val, lit_end, 0, ta_state);
 
 #if NEGATED_LITERALS
-        t2_inc_literals(ta_state, lit_start, lit_start + shifted_val, N_LITERALS / 2);
+        t2_inc_literals(lit_start, lit_start + shifted_val, N_LITERALS / 2, ta_state);
 #endif
     }
 }
 
-__device__ inline void apply_feedback(uint8_t fb_type, ull rng_key, uint* rng_counter, uint* ta_states,
-                                      const int* Xe, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                                      const int* literal_offsets, int lane, ull tile_id) {
+__device__ inline void apply_feedback(ull rng_key, uint* rng_counter, uint8_t fb_type, const int* Xe,
+                                      int patch_idx_y, int patch_idx_x, const int* feat_mins,
+                                      const int* literal_offsets, int lane, ull tile_id, uint* ta_states) {
     if (fb_type == FB_T1A) {
 #if TYPE1A_FB
-        type1a_fb(rng_key, rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane,
-                  tile_id);
+        type1a_fb(rng_key, rng_counter, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane, tile_id,
+                  ta_states);
 #endif
     } else if (fb_type == FB_T1B) {
 #if TYPE1B_FB
-        type1b_fb(rng_key, rng_counter, ta_states, lane, tile_id);
+        type1b_fb(rng_key, rng_counter, lane, tile_id, ta_states);
 #endif
     } else if (fb_type == FB_T2) {
 #if TYPE2_FB
-        type2_fb(ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane, tile_id);
+        type2_fb(Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane, tile_id, ta_states);
 #endif
     }
 }
 
-__device__ inline void decide_one(ull seed, int e, ull idx, ull clause, ull class_id, ull rel_clause,
-                                  int clause_output, int clause_density, const float* grad,
-                                  const float* clause_weights, float lambda_plus, float lambda_minus,
-                                  uint8_t* feedback_type, int8_t* is_clause_synced) {
-    ull rng_k = rng_hash(seed, idx, (ull)e, 0xD00D1E00ULL);
-    uint rng_counter = 0;
-
-    int target = (grad[class_id] > 0.0f) - (grad[class_id] < 0.0f);
-    float lam = (target > 0) ? lambda_plus : lambda_minus;
-    float weight_val = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
-    float update_prob = 1.0f - expf(-lam * fabsf(grad[class_id] * weight_val));
-
-    bool skip = (target == 0 || grad[class_id] == 0.0f || rand_uniform(rng_k, &rng_counter) > update_prob);
-    if (skip) {
-        feedback_type[idx] = FB_NONE;
-        return;
-    }
-
-    is_clause_synced[clause] = 0;
-
-    int sign = (weight_val >= 0) - (weight_val < 0);
-    bool has_space = (clause_density <= (int)MAX_INCLUDED_LITERALS);
-    bool t1 = (target * sign) > 0;
-
-    if (t1 && clause_output && has_space) {
-        feedback_type[idx] = FB_T1A;
-    } else if (t1 && !(clause_output && has_space)) {
-        feedback_type[idx] = FB_T1B;
-    } else if ((target * sign) < 0 && clause_output) {
-        feedback_type[idx] = FB_T2;
-    } else {
-        feedback_type[idx] = FB_NONE;
-    }
-}
-
-extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, const int e, const float* grad, const float lr,
-                                           float* clause_weights, const int* clause_density,
-                                           const int* selected_patch_ids, const int8_t* clause_drop_mask,
-                                           const float lambda_plus, const float lambda_minus, uint8_t* feedback_type,
-                                           int8_t* is_clause_synced) {
+extern "C" __global__ void decide_feedback(const ull seed, const float* votes, const float* y,
+                                           const float* class_weights, const float* loss,
+                                           const float* clause_weights, const int* clause_density,
+                                           const int* selected_patch_ids,
+                                           const int8_t* clause_drop_mask, const float lambda_,
+                                           uint8_t* feedback_type, int8_t* is_clause_synced) {
     ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
     ull stride = (ull)blockDim.x * gridDim.x;
 
@@ -211,31 +178,74 @@ extern "C" __global__ void decide_feedback_and_update_weights(const ull seed, co
             continue;
         }
 
-        int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
-        int cd = clause_density[clause];
+        int ck = (selected_patch_ids[clause] >= 0) ? 1 : 0;
+        bool has_space = (clause_density[clause] <= (int)MAX_INCLUDED_LITERALS);
+        bool did_clause_change = false;
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+        ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL, 0xD00D1E00ULL);
+        uint rng_counter = 0;
+        float temp[CLASSES];
+        ull class_id = 0;
+        LOOP_CLASS_ID(class_id, clause) {
+            // For this clause, for this class_id, we need to find "loss_neg_ck", ie., what will the loss be if this
+            // clause was turned off. We either find this for all the classes outside this loop, or just find it for
+            // this one class here.
+            float weight_val = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+            float vote_diff_delta = ck ? -weight_val : weight_val;
 
-#if COALESCED == 0
-        ull class_id = clause / (ull)CLAUSES_PER_CLASS;
-        ull idx = clause * (ull)CLASSES + class_id;
-        decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights, lambda_plus,
-                  lambda_minus, feedback_type, is_clause_synced);
-        if (clause_output) {
-            ull widx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
-            clause_weights[widx] = clip(clause_weights[widx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
-        }
-#else
-        for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-            ull idx = clause * (ull)CLASSES + class_id;
-            decide_one(seed, e, idx, clause, class_id, rel_clause, clause_output, cd, grad, clause_weights,
-                      lambda_plus, lambda_minus, feedback_type, is_clause_synced);
-        }
-        if (clause_output)
-            for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
-                ull widx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
-                clause_weights[widx] = clip(clause_weights[widx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
+            float loss_neg_ck;
+            compute_act_loss_grad_serial(votes, y, class_weights, temp, nullptr, &loss_neg_ck, (int)class_id,
+                                         vote_diff_delta);
+
+            float lam = lambda_;
+            float delta_L = *loss - loss_neg_ck;
+            float update_prob = 1.0f - expf(-lam * fabs(delta_L) * CLAUSES_PER_CLASS);
+
+            ull fbtype_ind = clause * (ull)CLASSES + class_id;
+            if (rand_uniform(rng_k, &rng_counter) > update_prob) {
+                feedback_type[fbtype_ind] = FB_NONE;
+            } else {
+                // T1a -> ck = 1, and deltaL < 0, meaning turning ck=0 increased the loss
+                // T1b -> ck = 0, and deltaL > 0, meaning turning ck=1 decreased the loss
+                // T2 -> ck = 1, and deltaL > 0, meaning turning ck=0 decreased the loss
+                // None -> ck = 0, and deltaL < 0, meaning turning ck = 1 increased the loss.
+                bool t1a = (ck == 1 && delta_L < 0 && has_space);
+                bool t1b = ((ck == 0 && delta_L > 0) || (ck == 1 && delta_L < 0 && !has_space));
+                bool t2 = (ck == 1 && delta_L > 0);
+                if (t1a)
+                    feedback_type[fbtype_ind] = FB_T1A;
+                else if (t1b)
+                    feedback_type[fbtype_ind] = FB_T1B;
+                else if (t2)
+                    feedback_type[fbtype_ind] = FB_T2;
+                else
+                    feedback_type[fbtype_ind] = FB_NONE;
             }
-#endif
+            did_clause_change |= (feedback_type[fbtype_ind] != FB_NONE);
+        }
+        is_clause_synced[clause] = (int)(!did_clause_change);
+    }
+}
+
+extern "C" __global__ void update_weights(const float* grad, const float lr, const int* selected_patch_ids,
+                                          const int8_t* clause_drop_mask, float* clause_weights) {
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    ull stride = (ull)blockDim.x * gridDim.x;
+
+    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+        if (clause_drop_mask[clause] == 1)
+            continue;
+
+        int ck = selected_patch_ids[clause] >= 0;
+        if (ck == 0)
+            continue;
+
+        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+        ull class_id = 0;
+        LOOP_CLASS_ID(class_id, clause) {
+            ull widx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+            clause_weights[widx] = clip(clause_weights[widx] + lr * grad[class_id] * ck, -MAX_WEIGHT, MAX_WEIGHT);
+        }
     }
 }
 
@@ -249,8 +259,8 @@ extern "C" __global__ void update_bias(const float* grad, const float lr, float*
 }
 
 extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
-                                          const int e_global, uint* global_ta_states, const int* feat_mins,
-                                          const int* literal_offsets, const uint8_t* feedback_type) {
+                                          const int* feat_mins, const int* literal_offsets,
+                                          const uint8_t* feedback_type, uint* global_ta_states) {
     ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
     ull warp_id = tid / WARP_SIZE;
     ull lane = tid % WARP_SIZE;
@@ -264,7 +274,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
         ull tile_id = gtile % (ull)WARPS_PER_CLAUSE;
 
         ull rng_id = gtile * WARP_SIZE + lane;
-        ull rng_k = rng_hash(seed, rng_id, (ull)e_global, 0xCAFEBABEULL);
+        ull rng_k = rng_hash(seed, rng_id, 0xC0DEBA5EULL, 0xCAFEBABEULL);
         uint rng_counter = 0;
 
         int patch_id = selected_patch_ids[clause];
@@ -280,13 +290,13 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
 #if COALESCED == 0
         ull class_id = clause / (ull)CLAUSES_PER_CLASS;
         uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
-        apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
-                       lane, tile_id);
+        apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane,
+                       tile_id, ta_states);
 #else
         for (ull class_id = 0; class_id < (ull)CLASSES; ++class_id) {
             uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
-            apply_feedback(fb, rng_k, &rng_counter, ta_states, Xe, patch_idx_y, patch_idx_x, feat_mins,
-                           literal_offsets, lane, tile_id);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, lane,
+                           tile_id, ta_states);
         }
 #endif
     }

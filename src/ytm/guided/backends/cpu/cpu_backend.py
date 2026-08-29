@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import warnings
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint8, c_uint32, c_uint64
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from ..base import BaseDevice, tqdm_bar
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
+uint8_p = POINTER(c_uint8)
 float_p = POINTER(c_float)
 
 omp_flags = {
@@ -96,9 +97,9 @@ class CPUDevice(BaseDevice):
 {self._read_file(dir_path / "common.c")}
 {self._read_file(dir_path / "pack_clauses.c")}
 {self._read_file(dir_path / "evaluate.c")}
+{self._read_file(dir_path / "losses.c")}
 {self._read_file(dir_path / "update.c")}
 {self._read_file(dir_path / "inference.c")}
-{self._read_file(dir_path / "losses.c")}
         """
         self.lib = self._compile_code(code)
 
@@ -117,6 +118,7 @@ class CPUDevice(BaseDevice):
         self.p_feat_mins = np.asarray(self.args.feat_mins).ctypes.data_as(int32_p)
         self.p_feat_maxs = np.asarray(self.args.feat_maxs).ctypes.data_as(int32_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
+        self.p_feedback_type = self.feedback_type.ctypes.data_as(uint8_p)
 
     def dev_init(self):
         self.xp = np
@@ -128,6 +130,7 @@ class CPUDevice(BaseDevice):
         self._init_packed_clauses()
         self._init_frozen_clauses()
         self._init_lib()
+        self.feedback_type = np.zeros((self.total_clauses, self.args.n_classes), dtype=np.uint8)
         self._init_pointers()
         self.set_threads(self.args.n_threads)
         self._init_loss_fn()
@@ -148,15 +151,13 @@ class CPUDevice(BaseDevice):
         Y: np.ndarray,
         clause_drop_p: float,
         batch_size: int,
-        rng_state: int,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         N = X.shape[0]
-        loss_poll_interval = max(1, int(N * loss_poll_rate))
 
         if clause_drop_p > 0.0:
-            clause_drop_mask = (self.np_rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
+            clause_drop_mask = (self._rng.random(self.total_clauses) <= clause_drop_p).astype(np.int8)
         else:
             clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
 
@@ -172,7 +173,6 @@ class CPUDevice(BaseDevice):
         y_hat = np.empty(self.args.n_classes, dtype=np.float32)
         loss_val = np.empty(1, dtype=np.float32)
         running_loss = 0.0
-        n_polls = 0
 
         p_X = X.ctypes.data_as(int32_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
@@ -196,7 +196,10 @@ class CPUDevice(BaseDevice):
                 self.p_clause_density,
                 self.p_is_clause_synced,
             )
+            _rng_key = c_uint64(int(self._rng.integers(1, 1 << 63, dtype=np.uint64)))
+
             self.lib.evaluate(
+                _rng_key,
                 p_X,
                 c_int(e),
                 p_clause_drop_mask,
@@ -205,7 +208,6 @@ class CPUDevice(BaseDevice):
                 self.p_bounded_feat_ids,
                 self.p_n_bounded_feats,
                 self.p_clause_density,
-                c_uint64(rng_state),
                 p_selected_pids,
                 self.p_patch_weights,
             )
@@ -215,29 +217,28 @@ class CPUDevice(BaseDevice):
                 self.p_bias,
                 p_votes,
             )
-            poll = (e % loss_poll_interval == 0) or (e == N - 1)
             self.lib.compute_act_loss_grad(
                 p_votes,
                 Y[e].ctypes.data_as(float_p),
                 self.p_loss_class_weights,
                 p_y_hat,
                 p_grad,
-                p_loss if poll else None,
+                p_loss,
+                c_int(-1),
+                c_float(0.0),
             )
-            self.lib.update_clauses(
-                c_uint64(rng_state),
-                p_selected_pids,
-                self.p_clause_density,
-                p_clause_drop_mask,
-                p_X,
-                c_int(e),
-                p_grad,
-                c_float(self.args.lambda_plus),
-                c_float(self.args.lambda_minus),
-                self.p_ta_states,
+            self.lib.decide_feedback(
+                _rng_key,
+                p_votes,
+                Y[e].ctypes.data_as(float_p),
+                self.p_loss_class_weights,
+                p_loss,
                 self.p_clause_weights,
-                self.p_feat_mins,
-                self.p_literal_offsets,
+                self.p_clause_density,
+                p_selected_pids,
+                p_clause_drop_mask,
+                c_float(self.args.lambda_),
+                self.p_feedback_type,
                 self.p_is_clause_synced,
             )
             self.lib.update_weights(
@@ -252,13 +253,21 @@ class CPUDevice(BaseDevice):
                 c_float(_lr),
                 self.p_bias,
             )
+            self.lib.update_clauses(
+                _rng_key,
+                p_selected_pids,
+                p_X,
+                c_int(e),
+                self.p_feat_mins,
+                self.p_literal_offsets,
+                self.p_feedback_type,
+                self.p_ta_states,
+            )
 
-            if poll:
-                running_loss += float(loss_val[0])
-                n_polls += 1
-                pbar.set_postfix(loss=f"{running_loss / n_polls:.4f}")
+            running_loss += float(loss_val[0])
+            pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
 
-        return running_loss / n_polls
+        return running_loss / N
 
     def pack_clauses(self, force_repack: bool = False):
         if force_repack:
@@ -354,8 +363,5 @@ class CPUDevice(BaseDevice):
         return patch_outputs.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
 
     def load_state_dict(self, state_dict):
-        self.ta_states = state_dict["ta_states"]
-        self.clause_weights = state_dict["clause_weights"]
-        self.patch_weights = state_dict["patch_weights"]
-        self.packed_clauses.is_clause_synced.fill(0)
+        super().load_state_dict(state_dict)
         self._init_pointers()

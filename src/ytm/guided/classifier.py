@@ -34,7 +34,7 @@ class MultiClassTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
@@ -43,7 +43,7 @@ class MultiClassTM(Classifier):
         for i in range(self.args.n_classes):
             one_hot_Y[:, i] = np.where(Y == i, 1, 0)
 
-        return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, lr=lr, loss_poll_rate=loss_poll_rate)
+        return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, lr=lr, lambda_=lambda_)
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)
@@ -65,11 +65,11 @@ class MultiOutputTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, Y, shuffle, clause_drop_p, batch_size, lr=lr, loss_poll_rate=loss_poll_rate)
+        return self._fit(X, Y, shuffle, clause_drop_p, batch_size, lr=lr, lambda_=lambda_)
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)
@@ -92,11 +92,11 @@ class BinaryTM(Classifier):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr=lr, loss_poll_rate=loss_poll_rate)
+        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr=lr, lambda_=lambda_)
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)

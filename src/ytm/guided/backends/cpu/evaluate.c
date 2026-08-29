@@ -27,10 +27,10 @@ static inline void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask
     }
 }
 
-static inline void evaluate_conv(const int* Xe, const int8_t* clause_drop_mask, const int* clause_position_bounds,
-                                 const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
-                                 const int* clause_density, const ull seed, const ull e, int* selected_patch_ids,
-                                 int* patch_weights) {
+static inline void evaluate_conv(const ull seed, const int* Xe, const int8_t* clause_drop_mask,
+                                 const int* clause_position_bounds, const int* clause_feat_bounds,
+                                 const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
+                                 int* selected_patch_ids, int* patch_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int cd = clause_density[clause];
@@ -39,7 +39,7 @@ static inline void evaluate_conv(const int* Xe, const int8_t* clause_drop_mask, 
             continue;
         }
 
-        ull rng_k = rng_hash(seed, clause, e, 0xDEADBEEFULL);
+        ull rng_k = rng_hash(seed, clause, 0xBAADF00DULL, 0xDEADBEEFULL);
         uint rng_counter = 0;
 
         if (cd == 0) {
@@ -82,13 +82,13 @@ static inline void evaluate_conv(const int* Xe, const int8_t* clause_drop_mask, 
     }
 }
 
-void evaluate(const int* X, const int e, const int8_t* clause_drop_mask, const int* clause_position_bounds,
-              const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
-              const int* clause_density, const ull seed, int* selected_patch_ids, int* patch_weights) {
+void evaluate(const ull seed, const int* X, const int e, const int8_t* clause_drop_mask,
+              const int* clause_position_bounds, const int* clause_feat_bounds, const int* bounded_feat_ids,
+              const int* n_bounded_feats, const int* clause_density, int* selected_patch_ids, int* patch_weights) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 #if (N_PATCHES > 1)
-    evaluate_conv(Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids, n_bounded_feats,
-                  clause_density, seed, (ull)e, selected_patch_ids, patch_weights);
+    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                  n_bounded_feats, clause_density, selected_patch_ids, patch_weights);
 #else
     evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, bounded_feat_ids, n_bounded_feats, clause_density,
                     selected_patch_ids);

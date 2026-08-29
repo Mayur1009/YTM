@@ -14,11 +14,11 @@ class RegressionTM(BaseTM):
         clause_drop_p: float = 0.0,
         batch_size: int = -1,
         lr: float | None = None,
-        loss_poll_rate: float = 0.1,
+        lambda_: float | None = None,
     ):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr=lr, loss_poll_rate=loss_poll_rate)
+        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr=lr, lambda_=lambda_)
 
     def predict(self, X: np.ndarray, batch_size: int = -1):
         class_sums = self.score(X, batch_size)

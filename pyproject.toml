@@ -67,7 +67,7 @@ marimo = "*"
 platforms = ["linux-cuda", "win-cuda"]
 
 [tool.pixi.feature.cuda.dependencies]
-# cuda = "*"
+cuda = "*"
 
 [tool.pixi.environments]
 default = { features = ["dev"] }
