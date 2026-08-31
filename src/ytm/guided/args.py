@@ -5,6 +5,7 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
+FB_SIGNAL_CODES = {"grad": 0, "delta_l": 1}
 ACT_FN_CODES = {"softmax": 0, "sigmoid": 1, "identity": 2}
 LOSS_FN_CODES = {"ce": 0, "mse": 1, "mae": 2, "sce": 3, "asl": 4, "tversky": 5, "huber": 6}
 
@@ -24,6 +25,7 @@ class TMArgs:
     act_fn: Literal["softmax", "sigmoid", "identity"] = "softmax"
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
+    fb_signal: Literal["delta_l", "grad"] = "delta_l"
     weighted: bool = True
     bias: bool = False
     max_weight: float = float(np.finfo(np.float32).max)
@@ -35,8 +37,8 @@ class TMArgs:
     max_includes: int = -1
     n_states: int = 256
     include_state: int = -1
-    ta_init: Literal["random", "middle", "random_include"] | str | int = "random_include"
-    weight_init: Literal["random"] | float = "random"
+    ta_init: Literal["random", "middle", "random_include"] | str | int = "middle"
+    weight_init: Literal["random"] | float | str = "random"
     bias_init: Literal["random"] | float = "random"
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
@@ -64,6 +66,9 @@ class TMArgs:
 
         if self.loss_fn not in LOSS_FN_CODES:
             raise ValueError(f"loss_fn must be one of {set(LOSS_FN_CODES)}, got '{self.loss_fn}'")
+
+        if self.fb_signal not in ("delta_l", "grad"):
+            raise ValueError(f"fb_signal must be one of {{'delta_l', 'grad'}}, got '{self.fb_signal}'")
 
         self.warps_per_clause = max(1, self.warps_per_clause)
 
@@ -127,6 +132,7 @@ class T_args(TypedDict, total=False):
     act_fn: Literal["softmax", "sigmoid", "identity"]
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"]
     loss_fn_kwargs: dict
+    fb_signal: Literal["delta_l", "grad"]
     weighted: bool
     bias: bool
     max_weight: float
@@ -139,7 +145,7 @@ class T_args(TypedDict, total=False):
     n_states: int
     include_state: int
     ta_init: Literal["random", "middle", "random_include"] | str | int
-    weight_init: Literal["random"] | float
+    weight_init: Literal["random"] | float | str
     bias_init: Literal["random"] | float
     skip_t1a_fb: bool
     skip_t1b_fb: bool
@@ -147,7 +153,7 @@ class T_args(TypedDict, total=False):
     track_patch_weights: bool
     boost_tp_fb: bool
     seed: int
-    device: Literal["cpu", "cuda"]
+    device: Literal["cpu", "cuda"] | str
     compile_flags: list[str]
     grid_size: int | None
     block_size: int

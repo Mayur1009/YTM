@@ -39,7 +39,6 @@ class CUDADevice(BaseDevice):
             self.feat_mins_gpu = cp.asarray(self.args.feat_mins, dtype=np.int32)
             self.feat_maxs_gpu = cp.asarray(self.args.feat_maxs, dtype=np.int32)
             self.literal_offsets_gpu = cp.asarray(self.literal_offsets.astype(np.int32))
-            self.feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
             self._init_loss_fn()
 
     def _init_kernels(self):
@@ -67,8 +66,12 @@ class CUDADevice(BaseDevice):
             code=common + read_file(os.path.join(cur_dir, "losses.cu")) + read_file(os.path.join(cur_dir, "update.cu")),
             options=(),
         )
+        self.k_decide_feedback_grad = update_mod.get_function("decide_feedback_grad")
+        self.k_decide_feedback_delta_l = update_mod.get_function("decide_feedback_delta_l")
+        self.k_compute_votes_neg_ck = update_mod.get_function("compute_votes_neg_ck")
+        self.k_compute_loss_neg_ck = update_mod.get_function("compute_loss_neg_ck")
+
         self.k_update_clauses = update_mod.get_function("update_clauses")
-        self.k_decide_feedback = update_mod.get_function("decide_feedback")
         self.k_update_weights = update_mod.get_function("update_weights")
         self.k_update_bias = update_mod.get_function("update_bias")
 
@@ -84,15 +87,22 @@ class CUDADevice(BaseDevice):
             code=common + read_file(os.path.join(cur_dir, "losses.cu")),
             options=(),
         )
-        self.k_compute_act_loss_grad = losses_mod.get_function("compute_act_loss_grad")
-        self.k_apply_act_batch = losses_mod.get_function("apply_act_batch")
+        self.k_votes_activation = losses_mod.get_function("votes_activation")
+        self.k_votes_activation_batch = losses_mod.get_function("votes_activation_batch")
+        self.k_loss_gradient = losses_mod.get_function("loss_gradient")
 
-        self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
+        self.kconf_serial = ((1, 1, 1), (1, 1, 1))
+        self.kconf_clauses_warp = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
+        self.kconf_classes_warp = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
+
+        self.kconf_clauses = self._kernel_config(self.total_clauses)
+        self.kconf_clauses_classes = self._kernel_config(self.total_clauses * self.args.n_classes)
+        self.kconf_classes = self._kernel_config(self.args.n_classes)
+
+        self.kconf_votes_activation = self.kconf_serial if self.args.act_fn == "softmax" else self.kconf_classes
+        self.kconf_delta_l_y_hat = self.kconf_clauses if self.args.act_fn == "softmax" else self.kconf_clauses_classes
+
         self.kconf_update_clauses = self._kernel_config(self.total_clauses * self.args.warps_per_clause * self.cuda_props["warp_size"])
-        self.kconf_decide = self._kernel_config(self.total_clauses)
-        self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
-        self.kconf_bias = self._kernel_config(self.args.n_classes if self.args.bias else 1)
-        self.kconf_loss = ((1, 1, 1), (1, 1, 1))
 
     def _kernel_config(self, n) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         bs = min(self.args.block_size, self.cuda_props["max_threads_per_block"])
@@ -168,9 +178,18 @@ class CUDADevice(BaseDevice):
 
         selected_patch_ids = cp.empty(self.total_clauses, dtype=np.int32)
         votes = cp.empty(self.args.n_classes, dtype=np.float32)
-        grad = cp.empty(self.args.n_classes, dtype=np.float32)
         y_hat = cp.empty(self.args.n_classes, dtype=np.float32)
-        loss_val = cp.empty(1, dtype=np.float32)
+        grad = cp.empty(self.args.n_classes, dtype=np.float32)
+        loss = cp.empty(1, dtype=np.float32)
+
+        if self.args.fb_signal == "grad":
+            feedback_type = cp.zeros((self.total_clauses, self.args.n_classes), dtype=cp.uint8)
+        elif self.args.fb_signal == "delta_l":
+            feedback_type = cp.zeros((self.total_clauses), dtype=cp.uint8)
+            votes_neg_ck = cp.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
+            y_hat_neg_ck = cp.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
+            loss_neg_ck = cp.empty((self.total_clauses), dtype=np.float32)
+
         running_loss_val = cp.zeros(1, dtype=np.float32)
 
         pbar = tqdm_bar(None, desc="Fit", total=N)
@@ -184,7 +203,7 @@ class CUDADevice(BaseDevice):
                 _rng_key = np.uint64(self._rng.integers(1, 1 << 63, dtype=np.uint64))
 
                 self.k_pack_clauses(
-                    *self.kconf_clauses,
+                    *self.kconf_clauses_warp,
                     (
                         self.ta_states,
                         self.feat_mins_gpu,
@@ -199,7 +218,7 @@ class CUDADevice(BaseDevice):
                     ),
                 )
                 self.k_evaluate(
-                    *self.kconf_clauses,
+                    *self.kconf_clauses_warp,
                     (
                         _rng_key,
                         X_batch,
@@ -216,40 +235,60 @@ class CUDADevice(BaseDevice):
                 )
 
                 self.k_count_votes(
-                    *self.kconf_classes,
+                    *self.kconf_classes_warp,
                     (selected_patch_ids, self.clause_weights, self.bias, votes),
                 )
 
-                self.k_compute_act_loss_grad(
-                    *self.kconf_loss,
-                    (votes, Y_batch[e], self._loss_class_weights, np.int32(True), y_hat, grad, loss_val),
+                self.k_votes_activation(
+                    *self.kconf_votes_activation,
+                    (votes, y_hat),
+                )
+                self.k_loss_gradient(
+                    *self.kconf_serial,
+                    (y_hat, Y_batch[e], self._loss_class_weights, grad, loss),
                 )
 
-                self.k_decide_feedback(
-                    *self.kconf_decide,
-                    (
-                        _rng_key,
-                        votes,
-                        Y_batch[e],
-                        self._loss_class_weights,
-                        loss_val,
-                        self.clause_weights,
-                        self.packed_clauses.clause_density,
-                        selected_patch_ids,
-                        clause_drop_mask_gpu,
-                        np.float32(_lambda),
-                        self.feedback_type,
-                        self.packed_clauses.is_clause_synced,
-                    ),
-                )
-                self.k_update_weights(
-                    *self.kconf_decide,
-                    (grad, np.float32(_lr), selected_patch_ids, clause_drop_mask_gpu, self.clause_weights),
-                )
-                self.k_update_bias(
-                    *self.kconf_bias,
-                    (grad, np.float32(_lr), self.bias),
-                )
+                if self.args.fb_signal == "grad":
+                    self.k_decide_feedback_grad(
+                        *self.kconf_clauses_classes,
+                        (
+                            _rng_key,
+                            grad,
+                            self.clause_weights,
+                            self.packed_clauses.clause_density,
+                            selected_patch_ids,
+                            clause_drop_mask_gpu,
+                            np.float32(_lambda),
+                            feedback_type,
+                        ),
+                    )
+                elif self.args.fb_signal == "delta_l":
+                    self.k_compute_votes_neg_ck(
+                        *self.kconf_clauses_classes,
+                        (votes, self.clause_weights, selected_patch_ids, votes_neg_ck),
+                    )
+                    self.k_votes_activation_batch(
+                        *self.kconf_delta_l_y_hat,
+                        (votes_neg_ck, np.int32(self.total_clauses), y_hat_neg_ck),
+                    )
+                    self.k_compute_loss_neg_ck(
+                        *self.kconf_clauses,
+                        (y_hat_neg_ck, Y_batch[e], self._loss_class_weights, loss_neg_ck),
+                    )
+                    self.k_decide_feedback_delta_l(
+                        *self.kconf_clauses,
+                        (
+                            _rng_key,
+                            loss,
+                            loss_neg_ck,
+                            self.packed_clauses.clause_density,
+                            selected_patch_ids,
+                            clause_drop_mask_gpu,
+                            np.float32(_lambda),
+                            feedback_type,
+                        ),
+                    )
+
                 self.k_update_clauses(
                     *self.kconf_update_clauses,
                     (
@@ -259,17 +298,31 @@ class CUDADevice(BaseDevice):
                         np.int32(e),
                         self.feat_mins_gpu,
                         self.literal_offsets_gpu,
-                        self.feedback_type,
+                        feedback_type,
                         self.ta_states,
+                        self.packed_clauses.is_clause_synced,
                     ),
                 )
 
-                running_loss_val += loss_val
+                self.k_update_weights(
+                    *self.kconf_clauses,
+                    (grad, np.float32(_lr), selected_patch_ids, clause_drop_mask_gpu, self.clause_weights),
+                )
+
+                if self.args.bias:
+                    self.k_update_bias(
+                        *self.kconf_classes,
+                        (grad, np.float32(_lr), self.bias),
+                    )
+
+                running_loss_val += loss
                 pbar.update(1)
         pbar.close()
 
         result = float(running_loss_val[0]) / N
-        del clause_drop_mask_gpu, selected_patch_ids, votes, grad, y_hat, loss_val, running_loss_val
+        del clause_drop_mask_gpu, selected_patch_ids, votes, grad, y_hat, loss, running_loss_val, feedback_type
+        if self.args.fb_signal == "delta_l":
+            del votes_neg_ck, y_hat_neg_ck, loss_neg_ck
         del X_batch, Y_batch
         return result
 
@@ -278,7 +331,7 @@ class CUDADevice(BaseDevice):
             self.packed_clauses.is_clause_synced.fill(0)
 
         self.k_pack_clauses(
-            *self.kconf_clauses,
+            *self.kconf_clauses_warp,
             (
                 self.ta_states,
                 self.feat_mins_gpu,
@@ -333,8 +386,9 @@ class CUDADevice(BaseDevice):
             )
 
         y_hat = cp.empty((N, self.args.n_classes), dtype=np.float32)
-        self.k_apply_act_batch(
-            *self._kernel_config(N),
+        act_kconf = self._kernel_config(N) if self.args.act_fn == "softmax" else self._kernel_config(N * self.args.n_classes)
+        self.k_votes_activation_batch(
+            *act_kconf,
             (class_sums, np.int32(N), y_hat),
         )
         result = y_hat.get()

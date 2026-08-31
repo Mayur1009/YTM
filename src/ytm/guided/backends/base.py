@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from ..args import ACT_FN_CODES, LOSS_FN_CODES, TMArgs
+from ..args import ACT_FN_CODES, FB_SIGNAL_CODES, LOSS_FN_CODES, TMArgs
 
 
 @dataclass
@@ -149,8 +149,8 @@ class BaseDevice(abc.ABC):
             choice = self._rng.integers(0, 2, size=(self.total_clauses, self.n_literals))
             states = np.where(choice == 1, self.args.include_state, self.args.include_state - 1)
             self.ta_states = self.xp.asarray(states, dtype=np.uint32)
-        elif isinstance(self.args.ta_init, str) and self.args.ta_init.startswith("random_"):
-            n = int(self.args.ta_init[len("random_") :])
+        elif isinstance(self.args.ta_init, str) and self.args.ta_init.startswith("random:"):
+            n = int(self.args.ta_init[len("random:") :])
             mid = self.args.include_state - 1
             low = max(0, mid - n)
             high = min(self.args.n_states - 1, mid + n)
@@ -170,6 +170,9 @@ class BaseDevice(abc.ABC):
 
         if self.args.weight_init == "random":
             mag = self._rng.uniform(0.0, 1.0, size=shape).astype(np.float32)
+        elif isinstance(self.args.weight_init, str) and self.args.weight_init.startswith("random:"):
+            n = float(self.args.weight_init[len("random:") :])
+            mag = self._rng.uniform(0.0, n, size=shape).astype(np.float32)
         else:
             mag = np.full(shape, float(self.args.weight_init), dtype=np.float32)
 
@@ -266,6 +269,7 @@ class BaseDevice(abc.ABC):
         )
 
     def _build_header(self):
+        fb_signal_code = FB_SIGNAL_CODES[self.args.fb_signal]
         act_fn_code = ACT_FN_CODES[self.args.act_fn]
         loss_fn_code = LOSS_FN_CODES[self.args.loss_fn]
 
@@ -315,6 +319,7 @@ class BaseDevice(abc.ABC):
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
 #define BIAS {1 if self.args.bias else 0}
 
+#define FB_SIGNAL {fb_signal_code}
 #define ACT_FN {act_fn_code}
 #define LOSS_FN {loss_fn_code}
 #define LOSS_GAMMA {float(loss_gamma)}f

@@ -22,7 +22,8 @@ examples = [
     "scikit-learn",
     "medmnist",
     "albumentationsx[headless]",
-    "wordcloud"
+    "wordcloud",
+    "nltk"
 ]
 
 [build-system]

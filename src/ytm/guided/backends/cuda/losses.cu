@@ -26,42 +26,15 @@
 
 #define NEG_INF -1e30f
 
+#if NEGATIVE_CLAUSES
+#define NORM ((float)CLAUSES_PER_CLASS / 2.0f)
+#else
+#define NORM ((float)CLAUSES_PER_CLASS)
+#endif
+
 __device__ inline float safe_pow(float base, float exp) {
     float b = fmaxf(base, 0.0f);
     return (exp == 0.0f) ? 1.0f : powf(b, exp);
-}
-
-__device__ inline float vote_at(const float* votes, int c, int vote_diff_ind = -1, float vote_diff_delta = 0.0f) {
-    return votes[c] + (c == vote_diff_ind ? vote_diff_delta : 0.0f);
-}
-
-__device__ inline void compute_act(const float* votes, float* y_hat, int vote_diff_ind = -1,
-                                   float vote_diff_delta = 0.0f) {
-#if ACT_FN == ACT_SOFTMAX
-    float max_v = NEG_INF;
-    for (int c = 0; c < CLASSES; c++) {
-        float v = vote_at(votes, c, vote_diff_ind, vote_diff_delta) / (float)CLAUSES_PER_CLASS;
-        if (v > max_v)
-            max_v = v;
-    }
-    float sum_exp = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        float raw = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-        float e = expf(raw / (float)CLAUSES_PER_CLASS - max_v);
-        y_hat[c] = e;
-        sum_exp += e;
-    }
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] /= sum_exp;
-#elif ACT_FN == ACT_SIGMOID
-    for (int c = 0; c < CLASSES; c++) {
-        float raw = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-        y_hat[c] = 1.0f / (1.0f + expf(-raw / (float)CLAUSES_PER_CLASS));
-    }
-#else
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-#endif
 }
 
 __device__ inline float dact_of(float act) {
@@ -244,11 +217,70 @@ __device__ inline void compute_tversky(const float* y, const float* y_hat, const
         *loss = safe_pow(1.0f - T, LOSS_GAMMA);
 }
 
-__device__ inline void compute_act_loss_grad_serial(const float* votes, const float* y, const float* class_weights,
-                                                    float* y_hat, float* grad, float* loss, int vote_diff_ind = -1,
-                                                    float vote_diff_delta = 0.0f) {
-    compute_act(votes, y_hat, vote_diff_ind, vote_diff_delta);
+__device__ inline void _softmax(const float* votes, float* y_hat) {
+    float max_v = NEG_INF;
+    for (int c = 0; c < CLASSES; c++) {
+        float v = votes[c] / NORM;
+        if (v > max_v)
+            max_v = v;
+    }
+    float sum_exp = 0.0f;
+    for (int c = 0; c < CLASSES; c++) {
+        float e = expf((votes[c] / NORM) - max_v);
+        y_hat[c] = e;
+        sum_exp += e;
+    }
+    for (int c = 0; c < CLASSES; c++)
+        y_hat[c] /= sum_exp;
+}
 
+__device__ inline float _sigmoid(float x) { return 1.0f / (1.0f + expf(-x / NORM)); }
+
+__device__ inline float _identity(float x) { return x; }
+
+extern "C" __global__ void votes_activation(const float* votes, float* y_hat) {
+    /*
+     * Apply activation function to the clause votes.
+     * Parallel across the vector, except for softmax
+     */
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    ull stride = (ull)blockDim.x * gridDim.x;
+
+#if ACT_FN == ACT_SOFTMAX
+    if (tid == 0)
+        _softmax(votes, y_hat);
+#elif ACT_FN == ACT_SIGMOID
+    for (ull c = tid; c < (ull)CLASSES; c += stride)
+        y_hat[c] = _sigmoid(votes[c]);
+#else
+    for (ull c = tid; c < (ull)CLASSES; c += stride)
+        y_hat[c] = _identity(votes[c]);
+#endif
+}
+
+extern "C" __global__ void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
+    /*
+     * Apply activation function to a batch of votes in parallel.
+     */
+    ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
+    ull stride = (ull)blockDim.x * gridDim.x;
+
+#if ACT_FN == ACT_SOFTMAX
+    for (ull e = tid; e < (ull)n_samples; e += stride)
+        _softmax(&votes[e * (ull)CLASSES], &y_hat[e * (ull)CLASSES]);
+#else
+    ull total = (ull)n_samples * (ull)CLASSES;
+    for (ull idx = tid; idx < total; idx += stride)
+#if ACT_FN == ACT_SIGMOID
+        y_hat[idx] = _sigmoid(votes[idx]);
+#else
+        y_hat[idx] = _identity(votes[idx]);
+#endif
+#endif
+}
+
+__device__ inline void loss_gradient_impl(const float* y_hat, const float* y, const float* class_weights, float* grad,
+                                          float* loss) {
 #if LOSS_FN == LOSS_CE
     compute_ce(y, y_hat, class_weights, grad, loss);
 #elif LOSS_FN == LOSS_MSE
@@ -266,15 +298,13 @@ __device__ inline void compute_act_loss_grad_serial(const float* votes, const fl
 #endif
 }
 
-extern "C" __global__ void compute_act_loss_grad(const float* votes, const float* y, const float* class_weights,
-                                                 int compute_loss_flag, float* y_hat, float* grad, float* loss) {
-    compute_act_loss_grad_serial(votes, y, class_weights, y_hat, grad, compute_loss_flag != 0 ? loss : nullptr);
-}
-
-extern "C" __global__ void apply_act_batch(const float* votes, int n_samples, float* y_hat) {
+extern "C" __global__ void loss_gradient(const float* y_hat, const float* y, const float* class_weights, float* grad,
+                                         float* loss) {
+    /*
+     * Calculate loss and gradient. Fully serial.
+     */
     ull tid = (ull)blockIdx.x * blockDim.x + threadIdx.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull e = tid; e < (ull)n_samples; e += stride)
-        compute_act(&votes[e * (ull)CLASSES], &y_hat[e * (ull)CLASSES]);
+    if (tid == 0) {
+        loss_gradient_impl(y_hat, y, class_weights, grad, loss);
+    }
 }
