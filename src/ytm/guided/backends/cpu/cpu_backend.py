@@ -118,7 +118,6 @@ class CPUDevice(BaseDevice):
         self.p_feat_mins = np.asarray(self.args.feat_mins).ctypes.data_as(int32_p)
         self.p_feat_maxs = np.asarray(self.args.feat_maxs).ctypes.data_as(int32_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(int32_p)
-        self.p_feedback_type = self.feedback_type.ctypes.data_as(uint8_p)
 
     def dev_init(self):
         self.xp = np
@@ -136,7 +135,6 @@ class CPUDevice(BaseDevice):
         self._init_packed_clauses()
         self._init_frozen_clauses()
         self._init_lib()
-        self.feedback_type = np.zeros((self.total_clauses, self.args.n_classes), dtype=np.uint8)
         self._init_pointers()
         self.set_threads(self.n_threads)
         self._init_loss_fn()
@@ -173,6 +171,7 @@ class CPUDevice(BaseDevice):
         Y = Y.astype(np.float32)
 
         _lr = lr if lr is not None else self.args.lr
+        _lambda = lambda_ if lambda_ is not None else self.args.lambda_
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
         votes = np.empty(self.args.n_classes, dtype=np.float32)
         grad = np.empty(self.args.n_classes, dtype=np.float32)
@@ -188,20 +187,22 @@ class CPUDevice(BaseDevice):
         p_y_hat = y_hat.ctypes.data_as(float_p)
         p_loss = loss_val.ctypes.data_as(float_p)
 
+        if self.args.fb_signal == "grad":
+            feedback_type = np.zeros((self.total_clauses, self.args.n_classes), dtype=np.uint8)
+            p_feedback_type = feedback_type.ctypes.data_as(uint8_p)
+        else:
+            feedback_type = np.zeros(self.total_clauses, dtype=np.uint8)
+            p_feedback_type = feedback_type.ctypes.data_as(uint8_p)
+            votes_neg_ck = np.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
+            y_hat_neg_ck = np.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
+            loss_neg_ck = np.empty(self.total_clauses, dtype=np.float32)
+            p_votes_neg_ck = votes_neg_ck.ctypes.data_as(float_p)
+            p_y_hat_neg_ck = y_hat_neg_ck.ctypes.data_as(float_p)
+            p_loss_neg_ck = loss_neg_ck.ctypes.data_as(float_p)
+
         pbar = tqdm_bar(range(N), desc="Fit")
         for e in pbar:
-            self.lib.pack_clauses(
-                self.p_ta_states,
-                self.p_feat_mins,
-                self.p_feat_maxs,
-                self.p_literal_offsets,
-                self.p_clause_position_bounds,
-                self.p_clause_feat_bounds,
-                self.p_bounded_feat_ids,
-                self.p_n_bounded_feats,
-                self.p_clause_density,
-                self.p_is_clause_synced,
-            )
+            self.pack_clauses()
             _rng_key = c_uint64(int(self._rng.integers(1, 1 << 63, dtype=np.uint64)))
 
             self.lib.evaluate(
@@ -223,42 +224,55 @@ class CPUDevice(BaseDevice):
                 self.p_bias,
                 p_votes,
             )
-            self.lib.compute_act_loss_grad(
-                p_votes,
-                Y[e].ctypes.data_as(float_p),
-                self.p_loss_class_weights,
+            self.lib.votes_activation(p_votes, p_y_hat)
+            self.lib.loss_gradient(
                 p_y_hat,
-                p_grad,
-                p_loss,
-                c_int(-1),
-                c_float(0.0),
-            )
-            self.lib.decide_feedback(
-                _rng_key,
-                p_votes,
                 Y[e].ctypes.data_as(float_p),
                 self.p_loss_class_weights,
+                p_grad,
                 p_loss,
-                self.p_clause_weights,
-                self.p_clause_density,
-                p_selected_pids,
-                p_clause_drop_mask,
-                c_float(self.args.lambda_),
-                self.p_feedback_type,
-                self.p_is_clause_synced,
             )
-            self.lib.update_weights(
-                p_selected_pids,
-                p_clause_drop_mask,
-                p_grad,
-                c_float(_lr),
-                self.p_clause_weights,
-            )
-            self.lib.update_bias(
-                p_grad,
-                c_float(_lr),
-                self.p_bias,
-            )
+
+            if self.args.fb_signal == "grad":
+                self.lib.decide_feedback_grad(
+                    _rng_key,
+                    p_grad,
+                    self.p_clause_weights,
+                    self.p_clause_density,
+                    p_selected_pids,
+                    p_clause_drop_mask,
+                    c_float(_lambda),
+                    p_feedback_type,
+                )
+            else:
+                self.lib.compute_votes_neg_ck(
+                    p_votes,
+                    self.p_clause_weights,
+                    p_selected_pids,
+                    p_votes_neg_ck,
+                )
+                self.lib.votes_activation_batch(
+                    p_votes_neg_ck,
+                    c_int(self.total_clauses),
+                    p_y_hat_neg_ck,
+                )
+                self.lib.compute_loss_neg_ck(
+                    p_y_hat_neg_ck,
+                    Y[e].ctypes.data_as(float_p),
+                    self.p_loss_class_weights,
+                    p_loss_neg_ck,
+                )
+                self.lib.decide_feedback_delta_l(
+                    _rng_key,
+                    p_loss,
+                    p_loss_neg_ck,
+                    self.p_clause_density,
+                    p_selected_pids,
+                    p_clause_drop_mask,
+                    c_float(_lambda),
+                    p_feedback_type,
+                )
+
             self.lib.update_clauses(
                 _rng_key,
                 p_selected_pids,
@@ -266,8 +280,21 @@ class CPUDevice(BaseDevice):
                 c_int(e),
                 self.p_feat_mins,
                 self.p_literal_offsets,
-                self.p_feedback_type,
+                p_feedback_type,
                 self.p_ta_states,
+                self.p_is_clause_synced,
+            )
+            self.lib.update_weights(
+                p_grad,
+                c_float(_lr),
+                p_selected_pids,
+                p_clause_drop_mask,
+                self.p_clause_weights,
+            )
+            self.lib.update_bias(
+                p_grad,
+                c_float(_lr),
+                self.p_bias,
             )
 
             running_loss += float(loss_val[0])
@@ -314,7 +341,7 @@ class CPUDevice(BaseDevice):
             )
 
         y_hat = np.empty((N, self.args.n_classes), dtype=np.float32)
-        self.lib.apply_act_batch(votes.ctypes.data_as(float_p), c_int(N), y_hat.ctypes.data_as(float_p))
+        self.lib.votes_activation_batch(votes.ctypes.data_as(float_p), c_int(N), y_hat.ctypes.data_as(float_p))
         return y_hat
 
     def transform(self, X: np.ndarray, batch_size: int):

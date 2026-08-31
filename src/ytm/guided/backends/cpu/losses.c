@@ -28,41 +28,15 @@
 
 #define NEG_INF -1e30f
 
+#if NEGATIVE_CLAUSES
+#define NORM ((float)CLAUSES_PER_CLASS / 2.0f)
+#else
+#define NORM ((float)CLAUSES_PER_CLASS)
+#endif
+
 static inline float safe_pow(float base, float exp) {
     float b = (base < 0.0f) ? 0.0f : base;
     return (exp == 0.0f) ? 1.0f : powf(b, exp);
-}
-
-static inline float vote_at(const float* votes, int c, int vote_diff_ind, float vote_diff_delta) {
-    return votes[c] + (c == vote_diff_ind ? vote_diff_delta : 0.0f);
-}
-
-static inline void compute_act(const float* votes, float* y_hat, int vote_diff_ind, float vote_diff_delta) {
-    int clauses_per_class = CLAUSES_PER_CLASS;
-#if ACT_FN == ACT_SOFTMAX
-    float max_v = NEG_INF;
-    for (int c = 0; c < CLASSES; c++) {
-        float v = vote_at(votes, c, vote_diff_ind, vote_diff_delta) / (float)clauses_per_class;
-        if (v > max_v)
-            max_v = v;
-    }
-    float sum_exp = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        float raw = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-        y_hat[c] = expf((raw / (float)clauses_per_class) - max_v);
-        sum_exp += y_hat[c];
-    }
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] /= sum_exp;
-#elif ACT_FN == ACT_SIGMOID
-    for (int c = 0; c < CLASSES; c++) {
-        float raw = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-        y_hat[c] = 1.0f / (1.0f + expf(-raw / (float)clauses_per_class));
-    }
-#else
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = vote_at(votes, c, vote_diff_ind, vote_diff_delta);
-#endif
 }
 
 static inline float dact_of(float act) {
@@ -248,10 +222,57 @@ static inline void compute_tversky(const float* y, const float* y_hat, const flo
         *loss = safe_pow(1.0f - T, LOSS_GAMMA);
 }
 
-void compute_act_loss_grad(const float* votes, const float* y, const float* class_weights, float* y_hat, float* grad,
-                           float* loss, int vote_diff_ind, float vote_diff_delta) {
-    compute_act(votes, y_hat, vote_diff_ind, vote_diff_delta);
+static inline void _softmax(const float* votes, float* y_hat) {
+    float max_v = NEG_INF;
+    for (int c = 0; c < CLASSES; c++) {
+        float v = votes[c] / NORM;
+        if (v > max_v)
+            max_v = v;
+    }
+    float sum_exp = 0.0f;
+    for (int c = 0; c < CLASSES; c++) {
+        float e = expf((votes[c] / NORM) - max_v);
+        y_hat[c] = e;
+        sum_exp += e;
+    }
+    for (int c = 0; c < CLASSES; c++)
+        y_hat[c] /= sum_exp;
+}
 
+static inline float _sigmoid(float x) { return 1.0f / (1.0f + expf(-x / NORM)); }
+
+static inline float _identity(float x) { return x; }
+
+void votes_activation(const float* votes, float* y_hat) {
+#if ACT_FN == ACT_SOFTMAX
+    _softmax(votes, y_hat);
+#elif ACT_FN == ACT_SIGMOID
+    for (int c = 0; c < CLASSES; c++)
+        y_hat[c] = _sigmoid(votes[c]);
+#else
+    for (int c = 0; c < CLASSES; c++)
+        y_hat[c] = _identity(votes[c]);
+#endif
+}
+
+void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
+#if ACT_FN == ACT_SOFTMAX
+#pragma omp parallel for schedule(static)
+    for (int e = 0; e < n_samples; e++)
+        _softmax(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
+#else
+    ull total = (ull)n_samples * (ull)CLASSES;
+#pragma omp parallel for schedule(static)
+    for (ull idx = 0; idx < total; idx++)
+#if ACT_FN == ACT_SIGMOID
+        y_hat[idx] = _sigmoid(votes[idx]);
+#else
+        y_hat[idx] = _identity(votes[idx]);
+#endif
+#endif
+}
+
+void loss_gradient_impl(const float* y_hat, const float* y, const float* class_weights, float* grad, float* loss) {
 #if LOSS_FN == LOSS_CE
     compute_ce(y, y_hat, class_weights, grad, loss);
 #elif LOSS_FN == LOSS_MSE
@@ -269,8 +290,6 @@ void compute_act_loss_grad(const float* votes, const float* y, const float* clas
 #endif
 }
 
-void apply_act_batch(const float* votes, int n_samples, float* y_hat) {
-#pragma omp parallel for schedule(static)
-    for (int e = 0; e < n_samples; e++)
-        compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES], -1, 0.0f);
+void loss_gradient(const float* y_hat, const float* y, const float* class_weights, float* grad, float* loss) {
+    loss_gradient_impl(y_hat, y, class_weights, grad, loss);
 }

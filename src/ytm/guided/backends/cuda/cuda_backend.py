@@ -202,21 +202,7 @@ class CUDADevice(BaseDevice):
             for e in range(bs):
                 _rng_key = np.uint64(self._rng.integers(1, 1 << 63, dtype=np.uint64))
 
-                self.k_pack_clauses(
-                    *self.kconf_clauses_warp,
-                    (
-                        self.ta_states,
-                        self.feat_mins_gpu,
-                        self.feat_maxs_gpu,
-                        self.literal_offsets_gpu,
-                        self.packed_clauses.clause_position_bounds,
-                        self.packed_clauses.clause_feat_bounds,
-                        self.packed_clauses.bounded_feat_ids,
-                        self.packed_clauses.n_bounded_feats,
-                        self.packed_clauses.clause_density,
-                        self.packed_clauses.is_clause_synced,
-                    ),
-                )
+                self.pack_clauses()
                 self.k_evaluate(
                     *self.kconf_clauses_warp,
                     (
