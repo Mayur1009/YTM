@@ -81,6 +81,7 @@ void set_num_threads(int n) {}
 #endif
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 typedef unsigned int uint;
 typedef unsigned long long ull;
