@@ -62,8 +62,11 @@ class CUDADevice(BaseDevice):
         self.k_evaluate = eval_mod.get_function("evaluate")
         self.k_count_votes = eval_mod.get_function("count_votes")
 
+        activations_src = read_file(os.path.join(cur_dir, "activations.cu"))
+        losses_src = read_file(os.path.join(cur_dir, "losses.cu"))
+
         update_mod = cp.RawModule(
-            code=common + read_file(os.path.join(cur_dir, "losses.cu")) + read_file(os.path.join(cur_dir, "update.cu")),
+            code=common + activations_src + losses_src + read_file(os.path.join(cur_dir, "update.cu")),
             options=(),
         )
         self.k_decide_feedback_grad = update_mod.get_function("decide_feedback_grad")
@@ -83,12 +86,17 @@ class CUDADevice(BaseDevice):
         self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
-        losses_mod = cp.RawModule(
-            code=common + read_file(os.path.join(cur_dir, "losses.cu")),
+        activations_mod = cp.RawModule(
+            code=common + activations_src,
             options=(),
         )
-        self.k_votes_activation = losses_mod.get_function("votes_activation")
-        self.k_votes_activation_batch = losses_mod.get_function("votes_activation_batch")
+        self.k_votes_activation = activations_mod.get_function("votes_activation")
+        self.k_votes_activation_batch = activations_mod.get_function("votes_activation_batch")
+
+        losses_mod = cp.RawModule(
+            code=common + activations_src + losses_src,
+            options=(),
+        )
         self.k_loss_gradient = losses_mod.get_function("loss_gradient")
 
         self.kconf_serial = ((1, 1, 1), (1, 1, 1))

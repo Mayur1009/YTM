@@ -97,6 +97,7 @@ class CPUDevice(BaseDevice):
 {self._read_file(dir_path / "common.c")}
 {self._read_file(dir_path / "pack_clauses.c")}
 {self._read_file(dir_path / "evaluate.c")}
+{self._read_file(dir_path / "activations.c")}
 {self._read_file(dir_path / "losses.c")}
 {self._read_file(dir_path / "update.c")}
 {self._read_file(dir_path / "inference.c")}

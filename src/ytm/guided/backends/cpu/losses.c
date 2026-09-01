@@ -1,107 +1,100 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "common.c"
+#include "activations.c"
 #endif
 
 #include <math.h>
-
-#define NEG_INF -1e30f
-
-#if NEGATIVE_CLAUSES
-#define NORM ((float)CLAUSES_PER_CLASS / 2.0f)
-#else
-#define NORM ((float)CLAUSES_PER_CLASS)
-#endif
 
 static inline float safe_pow(float base, float exp) {
     float b = (base < 0.0f) ? 0.0f : base;
     return (exp == 0.0f) ? 1.0f : powf(b, exp);
 }
 
-static inline float dact_of(float act) {
-#if ACT_FN == ACT_SIGMOID
-    return act * (1.0f - act);
-#else
-    return 1.0f;
-#endif
+static inline float _ce(float a, float b, float w) { return w * a * logf(b + LOSS_EPS); }
+
+static inline float _bce(float a, float b, float w) {
+    return w * (a * logf(b + LOSS_EPS) + (1.0f - a) * logf(1.0f - b + LOSS_EPS));
 }
+
+static inline float _ce_grad(float a, float b, float w) { return w * (a - b); }
 
 static inline void compute_ce(const float* y, const float* y_hat, const float* class_weights, float* grad,
                               float* loss) {
 #if ACT_FN == ACT_SOFTMAX
-    float dot_val = 0.0f;
+    float p_t = 0.0f;
     for (int c = 0; c < CLASSES; c++)
-        dot_val += y[c] * y_hat[c];
-    float fw = safe_pow(1.0f - dot_val, LOSS_GAMMA);
+        p_t += y[c] * y_hat[c];
+    float fw = safe_pow(1.0f - p_t, LOSS_GAMMA);
 
-    float acc = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        if (loss)
-            acc += class_weights[c] * y[c] * logf(y_hat[c] + LOSS_EPS);
-        if (grad)
-            grad[c] = class_weights[c] * fw * (y[c] - y_hat[c]);
+    if (loss) {
+        float loss_sum = 0.0f;
+        for (int c = 0; c < CLASSES; c++) {
+            loss_sum += _ce(y[c], y_hat[c], class_weights[c]);
+        }
+        *loss = -loss_sum * fw;
     }
-    if (loss)
-        *loss = -acc * fw;
+
+    if (grad) {
+        for (int c = 0; c < CLASSES; c++)
+            grad[c] = fw * _ce_grad(y[c], y_hat[c], class_weights[c]);
+    }
 #else
-    float acc = 0.0f;
+    float loss_sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         float p_t = y[c] * y_hat[c] + (1.0f - y[c]) * (1.0f - y_hat[c]);
         float fw = safe_pow(1.0f - p_t, LOSS_GAMMA);
         if (loss)
-            acc += class_weights[c] * fw *
-                   (y[c] * logf(y_hat[c] + LOSS_EPS) + (1.0f - y[c]) * logf(1.0f - y_hat[c] + LOSS_EPS));
+            loss_sum += fw * _bce(y[c], y_hat[c], class_weights[c]);
         if (grad)
-            grad[c] = class_weights[c] * fw * (y[c] - y_hat[c]);
+            grad[c] = fw * _ce_grad(y[c], y_hat[c], class_weights[c]);
     }
     if (loss)
-        *loss = -acc;
+        *loss = -loss_sum;
 #endif
 }
 
 static inline void compute_sce(const float* y, const float* y_hat, const float* class_weights, float* grad,
                                float* loss) {
 #if ACT_FN == ACT_SOFTMAX
-    float logy[CLASSES];
-    for (int c = 0; c < CLASSES; c++)
-        logy[c] = logf(y[c] + LOSS_EPS);
-
-    float dot_val = 0.0f;
-    for (int c = 0; c < CLASSES; c++)
-        dot_val += y_hat[c] * logy[c];
-
-    float term_a = 0.0f, term_b = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        if (loss) {
-            term_a += class_weights[c] * y[c] * logf(y_hat[c] + LOSS_EPS);
-            term_b += class_weights[c] * y_hat[c] * logy[c];
+    if (loss) {
+        float term_ce = 0.0f, term_rce = 0.0f;
+        for (int c = 0; c < CLASSES; c++) {
+            term_ce += _ce(y[c], y_hat[c], class_weights[c]);
+            term_rce += _ce(y_hat[c], y[c], class_weights[c]);
         }
-        if (grad)
-            grad[c] = class_weights[c] * (LOSS_ALPHA * (y[c] - y_hat[c]) + LOSS_BETA * y_hat[c] * (logy[c] - dot_val));
+        *loss = -LOSS_ALPHA * term_ce - LOSS_BETA * term_rce;
     }
-    if (loss)
-        *loss = -LOSS_ALPHA * term_a - LOSS_BETA * term_b;
+
+    if (grad) {
+        float dot_val = 0.0f;
+        for (int c = 0; c < CLASSES; c++)
+            dot_val += y_hat[c] * logf(y[c] + LOSS_EPS);
+        for (int c = 0; c < CLASSES; c++) {
+            float logy = logf(y[c] + LOSS_EPS);
+            grad[c] = LOSS_ALPHA * _ce_grad(y[c], y_hat[c], class_weights[c]) +
+                      class_weights[c] * LOSS_BETA * y_hat[c] * (logy - dot_val);
+        }
+    }
 #else
-    float term_a = 0.0f, term_b = 0.0f;
+    float term_ce = 0.0f, term_rce = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         if (loss) {
-            term_a += class_weights[c] *
-                      (y[c] * logf(y_hat[c] + LOSS_EPS) + (1.0f - y[c]) * logf(1.0f - y_hat[c] + LOSS_EPS));
-            term_b += class_weights[c] *
-                      (y_hat[c] * logf(y[c] + LOSS_EPS) + (1.0f - y_hat[c]) * logf(1.0f - y[c] + LOSS_EPS));
+            term_ce += _bce(y[c], y_hat[c], class_weights[c]);
+            term_rce += _bce(y_hat[c], y[c], class_weights[c]);
         }
         if (grad) {
             float lograt = logf((y[c] + LOSS_EPS) / (1.0f - y[c] + LOSS_EPS));
-            grad[c] =
-                class_weights[c] * (LOSS_ALPHA * (y[c] - y_hat[c]) + LOSS_BETA * lograt * y_hat[c] * (1.0f - y_hat[c]));
+            grad[c] = LOSS_ALPHA * _ce_grad(y[c], y_hat[c], class_weights[c]) +
+                      class_weights[c] * LOSS_BETA * lograt * y_hat[c] * (1.0f - y_hat[c]);
         }
     }
     if (loss)
-        *loss = -LOSS_ALPHA * term_a - LOSS_BETA * term_b;
+        *loss = -LOSS_ALPHA * term_ce - LOSS_BETA * term_rce;
 #endif
 }
 
 static inline void compute_asl(const float* y, const float* y_hat, float* grad, float* loss) {
-    float acc = 0.0f;
+    float loss_sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         float p = fminf(fmaxf(y_hat[c], LOSS_EPS), 1.0f - LOSS_EPS);
         float pm = LOSS_CLIP > 0.0f ? fminf(fmaxf(p - LOSS_CLIP, 0.0f), 1.0f) : p;
@@ -113,7 +106,7 @@ static inline void compute_asl(const float* y, const float* y_hat, float* grad, 
         if (loss) {
             float loss_pos = powf(1.0f - p, LOSS_GAMMA_POS) * log_p;
             float loss_neg = powf(pm, LOSS_GAMMA_NEG) * log_1mpm;
-            acc += y[c] * loss_pos + (1.0f - y[c]) * loss_neg;
+            loss_sum += y[c] * loss_pos + (1.0f - y[c]) * loss_neg;
         }
 
         if (grad) {
@@ -127,46 +120,46 @@ static inline void compute_asl(const float* y, const float* y_hat, float* grad, 
         }
     }
     if (loss)
-        *loss = -acc;
+        *loss = -loss_sum;
 }
 
 static inline void compute_mse(const float* y, const float* y_hat, const float* class_weights, float* grad,
                                float* loss) {
-    float acc = 0.0f;
+    float loss_sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         float d = y[c] - y_hat[c];
         if (loss)
-            acc += class_weights[c] * d * d;
+            loss_sum += class_weights[c] * d * d;
         if (grad)
             grad[c] = 2.0f * class_weights[c] * d * dact_of(y_hat[c]);
     }
     if (loss)
-        *loss = acc;
+        *loss = loss_sum;
 }
 
 static inline void compute_mae(const float* y, const float* y_hat, const float* class_weights, float* grad,
                                float* loss) {
-    float acc = 0.0f;
+    float loss_sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         float d = y[c] - y_hat[c];
         float s = (d > 0.0f) - (d < 0.0f);
         if (loss)
-            acc += class_weights[c] * fabsf(d);
+            loss_sum += class_weights[c] * fabsf(d);
         if (grad)
             grad[c] = class_weights[c] * s * dact_of(y_hat[c]);
     }
     if (loss)
-        *loss = acc;
+        *loss = loss_sum;
 }
 
 static inline void compute_huber(const float* y, const float* y_hat, const float* class_weights, float* grad,
                                  float* loss) {
-    float acc = 0.0f;
+    float loss_sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {
         float r = y[c] - y_hat[c];
         if (loss) {
             float ar = fabsf(r);
-            acc += class_weights[c] * (ar <= LOSS_DELTA ? 0.5f * r * r : LOSS_DELTA * (ar - 0.5f * LOSS_DELTA));
+            loss_sum += class_weights[c] * (ar <= LOSS_DELTA ? 0.5f * r * r : LOSS_DELTA * (ar - 0.5f * LOSS_DELTA));
         }
         if (grad) {
             float rc = fminf(fmaxf(r, -LOSS_DELTA), LOSS_DELTA);
@@ -174,7 +167,7 @@ static inline void compute_huber(const float* y, const float* y_hat, const float
         }
     }
     if (loss)
-        *loss = acc;
+        *loss = loss_sum;
 }
 
 static inline void compute_tversky(const float* y, const float* y_hat, const float* class_weights, float* grad,
@@ -198,56 +191,6 @@ static inline void compute_tversky(const float* y, const float* y_hat, const flo
     }
     if (loss)
         *loss = safe_pow(1.0f - T, LOSS_GAMMA);
-}
-
-static inline void _softmax(const float* votes, float* y_hat) {
-    float max_v = NEG_INF;
-    for (int c = 0; c < CLASSES; c++) {
-        float v = votes[c] / NORM;
-        if (v > max_v)
-            max_v = v;
-    }
-    float sum_exp = 0.0f;
-    for (int c = 0; c < CLASSES; c++) {
-        float e = expf((votes[c] / NORM) - max_v);
-        y_hat[c] = e;
-        sum_exp += e;
-    }
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] /= sum_exp;
-}
-
-static inline float _sigmoid(float x) { return 1.0f / (1.0f + expf(-x / NORM)); }
-
-static inline float _identity(float x) { return x; }
-
-void votes_activation(const float* votes, float* y_hat) {
-#if ACT_FN == ACT_SOFTMAX
-    _softmax(votes, y_hat);
-#elif ACT_FN == ACT_SIGMOID
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = _sigmoid(votes[c]);
-#else
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = _identity(votes[c]);
-#endif
-}
-
-void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
-#if ACT_FN == ACT_SOFTMAX
-#pragma omp parallel for schedule(static)
-    for (int e = 0; e < n_samples; e++)
-        _softmax(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
-#else
-    ull total = (ull)n_samples * (ull)CLASSES;
-#pragma omp parallel for schedule(static)
-    for (ull idx = 0; idx < total; idx++)
-#if ACT_FN == ACT_SIGMOID
-        y_hat[idx] = _sigmoid(votes[idx]);
-#else
-        y_hat[idx] = _identity(votes[idx]);
-#endif
-#endif
 }
 
 void loss_gradient_impl(const float* y_hat, const float* y, const float* class_weights, float* grad, float* loss) {
