@@ -150,6 +150,10 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             return self._transform_patchwise_impl(X, batch_size)
 
+    def load_state_dict(self, state_dict):
+        with self.cuda_dev:
+            super().load_state_dict(state_dict)
+
     # -- Impls ------------------------------------------------------------
 
     def _fit_epoch_impl(

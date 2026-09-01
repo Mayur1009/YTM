@@ -192,19 +192,20 @@ class CPUDevice(BaseDevice):
             p_feedback_type = feedback_type.ctypes.data_as(uint8_p)
         else:
             feedback_type = np.zeros(self.total_clauses, dtype=np.uint8)
-            p_feedback_type = feedback_type.ctypes.data_as(uint8_p)
             votes_neg_ck = np.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
             y_hat_neg_ck = np.empty((self.total_clauses, self.args.n_classes), dtype=np.float32)
             loss_neg_ck = np.empty(self.total_clauses, dtype=np.float32)
+
+            p_feedback_type = feedback_type.ctypes.data_as(uint8_p)
             p_votes_neg_ck = votes_neg_ck.ctypes.data_as(float_p)
             p_y_hat_neg_ck = y_hat_neg_ck.ctypes.data_as(float_p)
             p_loss_neg_ck = loss_neg_ck.ctypes.data_as(float_p)
 
         pbar = tqdm_bar(range(N), desc="Fit")
         for e in pbar:
-            self.pack_clauses()
             _rng_key = c_uint64(int(self._rng.integers(1, 1 << 63, dtype=np.uint64)))
 
+            self.pack_clauses()
             self.lib.evaluate(
                 _rng_key,
                 p_X,
