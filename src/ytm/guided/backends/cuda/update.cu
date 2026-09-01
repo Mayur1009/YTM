@@ -1,16 +1,12 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "common.cu"
 #include "losses.cu"
-#define FB_SIGNAL 0
 #endif
 
 #define FB_NONE 0
 #define FB_T1A 1
 #define FB_T1B 2
 #define FB_T2 3
-
-#define FB_SIGNAL_GRAD 0
-#define FB_SIGNAL_DELTAL 1
 
 __device__ inline int geom_sample(ull rng_key, uint* rng_counter, float p) {
     float u = rand_uniform(rng_key, rng_counter);

@@ -9,6 +9,10 @@ from tqdm import tqdm
 from ..args import ACT_FN_CODES, FB_SIGNAL_CODES, LOSS_FN_CODES, TMArgs
 
 
+def _dict_to_header(prefix: str, codes: dict[str, int]) -> str:
+    return "\n".join(f"#define {prefix}_{name.upper()} {code}" for name, code in codes.items())
+
+
 @dataclass
 class PackedClauses:
     clause_position_bounds: Any
@@ -318,6 +322,10 @@ class BaseDevice(abc.ABC):
 #define TRACK_PATCH_WEIGHTS {1 if self.args.track_patch_weights else 0}
 #define BOOST_TP_FB {1 if self.args.boost_tp_fb else 0}
 #define BIAS {1 if self.args.bias else 0}
+
+{_dict_to_header("FB_SIGNAL", FB_SIGNAL_CODES)}
+{_dict_to_header("ACT", ACT_FN_CODES)}
+{_dict_to_header("LOSS", LOSS_FN_CODES)}
 
 #define FB_SIGNAL {fb_signal_code}
 #define ACT_FN {act_fn_code}

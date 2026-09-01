@@ -1,7 +1,6 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "common.c"
 #include "losses.c"
-#define FB_SIGNAL 0
 #endif
 
 #include <math.h>
@@ -10,9 +9,6 @@
 #define FB_T1A 1
 #define FB_T1B 2
 #define FB_T2 3
-
-#define FB_SIGNAL_GRAD 0
-#define FB_SIGNAL_DELTAL 1
 
 static inline int geom_sample(ull rng_key, uint* rng_counter, float p) {
     float u = rand_uniform(rng_key, rng_counter);

@@ -34,6 +34,29 @@
 #define TRACK_PATCH_WEIGHTS 1
 #define BOOST_TP_FB 1
 #define BIAS 0
+#define ACT_SOFTMAX 0
+#define ACT_SIGMOID 1
+#define ACT_IDENTITY 2
+#define LOSS_CE 0
+#define LOSS_MSE 1
+#define LOSS_MAE 2
+#define LOSS_SCE 3
+#define LOSS_ASL 4
+#define LOSS_TVERSKY 5
+#define LOSS_HUBER 6
+#define FB_SIGNAL_GRAD 0
+#define FB_SIGNAL_DELTA_L 1
+#define ACT_FN 0
+#define LOSS_FN 0
+#define LOSS_GAMMA 0.0f
+#define LOSS_EPS 1e-6f
+#define LOSS_ALPHA 0.5f
+#define LOSS_BETA 0.5f
+#define LOSS_DELTA 1.0f
+#define LOSS_CLIP 0.05f
+#define LOSS_GAMMA_POS 0.0f
+#define LOSS_GAMMA_NEG 4.0f
+#define FB_SIGNAL 0
 #endif
 
 #define S_INV (1.0f / (float)(S))
