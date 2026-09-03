@@ -185,6 +185,10 @@ class BaseTM:
             class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
         return class_sums
 
+    def transform(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size)
+        return clause_outputs
+
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         """Return per-patch clause outputs for each sample.
 

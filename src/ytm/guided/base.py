@@ -45,7 +45,9 @@ class BaseTM:
         lr: float | None = None,
         lambda_: float | None = None,
     ):
-        assert np.prod(X.shape[1:]) == np.prod(self.args.dim), f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
+        assert np.prod(X.shape[1:]) == np.prod(self.args.dim), (
+            f"Expected input features to match dim {self.args.dim}, but got {X.shape[1:]}"
+        )
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         N = X.shape[0]
         iota = self._rng.permutation(np.arange(N))
@@ -56,6 +58,10 @@ class BaseTM:
 
     def score(self, X: np.ndarray, batch_size: int = -1):
         return self.dev.infer(np.ascontiguousarray(X), batch_size)
+
+    def transform(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size)
+        return clause_outputs
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
         patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size)
@@ -92,9 +98,7 @@ class BaseTM:
         self.dev.pack_clauses(force_repack)
         buf = self.dev.get_packed_clauses()
 
-        clause_feat_bounds = buf.clause_feat_bounds.reshape(
-            (self.dev.n_clause_banks, self.args.n_clauses, self.dev.n_raw_patch_feats * 2)
-        )
+        clause_feat_bounds = buf.clause_feat_bounds.reshape((self.dev.n_clause_banks, self.args.n_clauses, self.dev.n_raw_patch_feats * 2))
 
         position_bounds = None
         if self.args.position_literals or self.dev.n_patches > 1:
