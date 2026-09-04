@@ -231,7 +231,15 @@ class BaseTM:
         ndarray of shape (H, W, D)
             Raw per-feature contribution. Apply :func:`ytm.utils.norm_asymmetric`
             to normalize.
+
+        Raises
+        ------
+        ValueError
+            If this is a convolutional model and ``track_patch_weights``
+            was ``False`` during training.
         """
+        if self.dev.n_patches > 1 and not self.args.track_patch_weights:
+            raise ValueError("track_patch_weights=True is required for wic() on a convolutional model.")
         return self.dev.wic(class_id, polarity, pw_th, force_repack)
 
     def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:

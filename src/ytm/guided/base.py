@@ -68,6 +68,8 @@ class BaseTM:
         return patch_outputs
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        if self.dev.n_patches > 1 and not self.args.track_patch_weights:
+            raise ValueError("track_patch_weights=True is required for wic() on a convolutional model.")
         return self.dev.wic(class_id, polarity, pw_th, force_repack)
 
     def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
