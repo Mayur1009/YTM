@@ -101,6 +101,7 @@ class CPUDevice(BaseDevice):
 {self._read_file(dir_path / "losses.c")}
 {self._read_file(dir_path / "update.c")}
 {self._read_file(dir_path / "inference.c")}
+{self._read_file(dir_path / "interpret.c")}
         """
         self.lib = self._compile_code(code)
 
@@ -346,13 +347,13 @@ class CPUDevice(BaseDevice):
         self.lib.votes_activation_batch(votes.ctypes.data_as(float_p), c_int(N), y_hat.ctypes.data_as(float_p))
         return y_hat
 
-    def transform(self, X: np.ndarray, batch_size: int):
+    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False):
         N = X.shape[0]
         X = X.astype(np.int32)
         clause_outputs = np.zeros((N, self.total_clauses), dtype=np.int8)
         clause_drop_mask = np.zeros(self.total_clauses, dtype=np.int8)
         selected_pids = np.empty(self.total_clauses, dtype=np.int32)
-        self.pack_clauses()
+        self.pack_clauses(force_repack)
 
         p_X = X.ctypes.data_as(int32_p)
         p_clause_drop_mask = clause_drop_mask.ctypes.data_as(int8_p)
@@ -376,12 +377,12 @@ class CPUDevice(BaseDevice):
 
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int):
+    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False):
         N = X.shape[0]
         X = X.astype(np.int32)
         p_X = X.ctypes.data_as(int32_p)
         patch_outputs = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
-        self.pack_clauses()
+        self.pack_clauses(force_repack)
 
         for e in tqdm_bar(range(N), desc="Transform"):
             self.lib.eval_sample_patchwise(
@@ -396,6 +397,70 @@ class CPUDevice(BaseDevice):
             )
 
         return patch_outputs.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False):
+        self.pack_clauses(force_repack)
+
+        # per-clause-max normalization; new arrays, never touches self.patch_weights
+        pw = self.patch_weights.astype(np.float32)
+        patch_weights_norm = pw / (pw.max(axis=-1, keepdims=True) + 1e-7)
+
+        output = np.zeros(self.args.dim, dtype=np.float32)
+
+        self.lib.wic(
+            c_int(class_id),
+            c_int(polarity),
+            self.p_clause_weights,
+            self.p_clause_feat_bounds,
+            self.p_clause_position_bounds,
+            self.p_clause_density,
+            patch_weights_norm.ctypes.data_as(float_p),
+            self.p_feat_mins,
+            self.p_feat_maxs,
+            c_float(pw_th),
+            output.ctypes.data_as(float_p),
+        )
+        return output
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False):
+        N = X.shape[0]
+        X = X.astype(np.int32)
+        p_X = X.ctypes.data_as(int32_p)
+        self.pack_clauses(force_repack)
+
+        patch_output = np.zeros((N, self.total_clauses, self.n_patches_y, self.n_patches_x), dtype=np.int8)
+        p_patch_output = patch_output.ctypes.data_as(int8_p)
+
+        for e in tqdm_bar(range(N), desc="WAC activations"):
+            self.lib.eval_sample_patchwise(
+                self.p_clause_position_bounds,
+                self.p_clause_feat_bounds,
+                self.p_bounded_feat_ids,
+                self.p_n_bounded_feats,
+                self.p_clause_density,
+                p_X,
+                c_int(e),
+                p_patch_output,
+            )
+
+        H, W, D = self.args.dim
+        output = np.zeros((N, H, W, D), dtype=np.float32)
+        p_output = output.ctypes.data_as(float_p)
+
+        for e in tqdm_bar(range(N), desc="WAC"):
+            self.lib.wac_sample(
+                c_int(int(target_classes[e])),
+                c_int(polarity),
+                p_patch_output,
+                c_int(e),
+                self.p_clause_weights,
+                self.p_clause_feat_bounds,
+                self.p_clause_density,
+                self.p_feat_mins,
+                self.p_feat_maxs,
+                p_output,
+            )
+        return output
 
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)

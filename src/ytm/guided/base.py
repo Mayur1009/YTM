@@ -59,13 +59,19 @@ class BaseTM:
     def score(self, X: np.ndarray, batch_size: int = -1):
         return self.dev.infer(np.ascontiguousarray(X), batch_size)
 
-    def transform(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
-        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size)
+    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size, force_repack)
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
-        patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size)
+    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size, force_repack)
         return patch_outputs
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        return self.dev.wic(class_id, polarity, pw_th, force_repack)
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+        return self.dev.wac(np.ascontiguousarray(X), target_classes, polarity, force_repack)
 
     def freeze_clauses(self, class_id: int, clause_ids: list[int] | np.ndarray):
         if self.args.coalesced:
