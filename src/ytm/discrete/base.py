@@ -185,11 +185,11 @@ class BaseTM:
             class_sums = np.clip(class_sums, self.args.T_min, self.args.T_max)
         return class_sums
 
-    def transform(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
-        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size)
+    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        clause_outputs = self.dev.transform(np.ascontiguousarray(X), batch_size, force_repack)
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1) -> np.ndarray:
+    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         """Return per-patch clause outputs for each sample.
 
         Parameters
@@ -199,14 +199,63 @@ class BaseTM:
         batch_size : int, default=-1
             Number of samples processed per batch. ``-1`` processes all
             samples at once.
+        force_repack : bool, default=False
+            Force recompute the packed clause representation.
 
         Returns
         -------
         ndarray of shape (N, n_patches, n_clause_banks, n_clauses)
             Clause activation (0 or 1) per patch per sample.
         """
-        patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size)
+        patch_outputs = self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size, force_repack)
         return patch_outputs
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        """Return the raw (unnormalized) global interpretation for one class and polarity.
+
+        Parameters
+        ----------
+        class_id : int
+            Target class index.
+        polarity : int
+            ``> 0`` includes only positive-weight clauses, ``< 0`` only
+            negative-weight clauses.
+        pw_th : float, default=0.0
+            Minimum per-clause-max-normalized patch weight for a patch
+            position to contribute.
+        force_repack : bool, default=False
+            Force recompute the packed clause representation.
+
+        Returns
+        -------
+        ndarray of shape (H, W, D)
+            Raw per-feature contribution. Apply :func:`ytm.utils.norm_asymmetric`
+            to normalize.
+        """
+        return self.dev.wic(class_id, polarity, pw_th, force_repack)
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+        """Return the raw (unnormalized) local interpretation for a set of samples.
+
+        Parameters
+        ----------
+        X : ndarray of shape (N, ...)
+            Input samples.
+        target_classes : ndarray of shape (N,)
+            Target class index per sample.
+        polarity : int
+            ``> 0`` includes only positive-weight clauses, ``< 0`` only
+            negative-weight clauses.
+        force_repack : bool, default=False
+            Force recompute the packed clause representation.
+
+        Returns
+        -------
+        ndarray of shape (N, H, W, D)
+            Raw per-feature contribution per sample. Apply
+            :func:`ytm.utils.norm_asymmetric` to normalize.
+        """
+        return self.dev.wac(np.ascontiguousarray(X), target_classes, polarity, force_repack)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         encoded_Y = np.copy(Y).astype(np.float32) * self.args.T_max

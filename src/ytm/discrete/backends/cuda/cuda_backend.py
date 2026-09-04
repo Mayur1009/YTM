@@ -98,6 +98,13 @@ class CUDADevice(BaseDevice):
         self.k_sum_votes = infer_mod.get_function("sum_votes")
         self.k_transform_patchwise = infer_mod.get_function("infer_clauses_patchwise")
 
+        interp_mod = cp.RawModule(
+            code=common + read_file(os.path.join(cur_dir, "interpret.cu")),
+            options=("--use_fast_math",),
+        )
+        self.k_wic = interp_mod.get_function("wic")
+        self.k_wac = interp_mod.get_function("wac")
+
         self.kconf_clauses = self._kernel_config(self.total_clauses * self.cuda_props["warp_size"])
         self.kconf_classes = self._kernel_config(self.args.n_classes * self.cuda_props["warp_size"])
 
@@ -331,13 +338,13 @@ class CUDADevice(BaseDevice):
 
         return class_sums.get()
 
-    def transform(self, X: np.ndarray, batch_size: int):
+    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
 
         clause_outputs = np.zeros((N, self.total_clauses), dtype=np.int8)
-        self.pack_clauses()
+        self.pack_clauses(force_repack)
 
         for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
             batch_end = min(i + batch_size, N)
@@ -362,13 +369,13 @@ class CUDADevice(BaseDevice):
 
         return clause_outputs
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int):
+    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False):
         N = X.shape[0]
         if batch_size == -1:
             batch_size = N
 
         patch_output = np.zeros((N, self.total_clauses, self.n_patches), dtype=np.int8)
-        self.pack_clauses()
+        self.pack_clauses(force_repack)
 
         for i in tqdm_bar(range(0, N, batch_size), desc="Transform batch"):
             batch_end = min(i + batch_size, N)
@@ -392,6 +399,76 @@ class CUDADevice(BaseDevice):
             patch_output[i:batch_end] = po_batch.get()
 
         return patch_output.reshape((N, self.n_clause_banks, self.args.n_clauses, self.n_patches_y, self.n_patches_x))
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False):
+        self.pack_clauses(force_repack)
+
+        # per-clause-max normalization; new arrays, never touches self.patch_weights
+        pw = self.patch_weights.astype(cp.float32)
+        patch_weights_norm = pw / (pw.max(axis=-1, keepdims=True) + 1e-7)
+
+        output = cp.zeros(self.args.dim, dtype=cp.float32)
+
+        self.k_wic(
+            *self._kernel_config(self.total_clauses * self.n_patches),
+            (
+                np.int32(class_id),
+                np.int32(polarity),
+                self.clause_weights,
+                self.packed_clauses.clause_feat_bounds,
+                self.packed_clauses.clause_position_bounds,
+                self.packed_clauses.clause_density,
+                patch_weights_norm,
+                self.feat_mins_gpu,
+                self.feat_maxs_gpu,
+                np.float32(pw_th),
+                output,
+            ),
+        )
+        return output.get()
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False):
+        N = X.shape[0]
+        self.pack_clauses(force_repack)
+
+        X_gpu = cp.asarray(X, dtype=np.int32)
+        patch_output = cp.zeros((N, self.total_clauses, self.n_patches), dtype=cp.int8)
+
+        self.k_transform_patchwise(
+            *self._kernel_config(N * self.total_clauses * self.n_patches),
+            (
+                X_gpu,
+                patch_output,
+                np.int32(N),
+                self.packed_clauses.clause_position_bounds,
+                self.packed_clauses.clause_feat_bounds,
+                self.packed_clauses.bounded_feat_ids,
+                self.packed_clauses.n_bounded_feats,
+                self.packed_clauses.clause_density,
+            ),
+        )
+
+        target_classes_gpu = cp.asarray(target_classes, dtype=np.int32)
+        H, W, D = self.args.dim
+        output = cp.zeros((N, H, W, D), dtype=cp.float32)
+
+        self.k_wac(
+            *self._kernel_config(N * self.total_clauses * self.n_patches),
+            (
+                target_classes_gpu,
+                np.int32(polarity),
+                np.int32(N),
+                self.clause_weights,
+                self.packed_clauses.clause_feat_bounds,
+                patch_output,
+                self.packed_clauses.clause_density,
+                self.feat_mins_gpu,
+                self.feat_maxs_gpu,
+                output,
+            ),
+        )
+        del X_gpu, patch_output
+        return output.get()
 
     def get_weights(self):
         return self.clause_weights.get()
