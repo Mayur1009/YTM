@@ -61,7 +61,7 @@ class CPUDevice(BaseDevice):
         """Generated header plus the shared sources. Subclasses append their own via `super()`."""
         core = pathlib.Path(__file__).parent
         return self.config._header + "".join(
-            read_file(core / name) for name in ("cpu.h", "common.h", "rng.h", "pack_clauses.c", "interpret.c")
+            read_file(core / name) for name in ("cpu.h", "common.h", "rng.h", "pack_clauses.c", "inference.c", "interpret.c")
         )
 
     def _init_lib(self):

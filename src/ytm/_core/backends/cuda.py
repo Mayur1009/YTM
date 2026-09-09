@@ -20,11 +20,11 @@ class CUDADevice(BaseDevice):
     def _build_code(self) -> str:
         """Generated header plus the shared sources. Subclasses append their own via `super()`."""
         core = pathlib.Path(__file__).parent
-        return self.config._header + "".join(read_file(core / name) for name in ("cuda.h", "common.h", "rng.h", "pack_clauses.cu", "interpret.cu"))
+        return self.config._header + "".join(read_file(core / name) for name in ("cuda.h", "common.h", "rng.h", "pack_clauses.cu", "inference.cu", "interpret.cu"))
 
     def _kernel_names(self) -> tuple[str, ...]:
         """Entry points to pull out of the module. Subclasses append their own via `super()`."""
-        return ("pack_clauses", "wic", "wac")
+        return ("pack_clauses", "infer_clauses", "infer_clauses_patchwise", "sum_votes", "wic", "wac")
 
     def _init_kernels(self):
         """One module for the whole model, so nvrtc runs once instead of per source group."""
