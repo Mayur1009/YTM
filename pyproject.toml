@@ -25,6 +25,9 @@ examples = [
     "wordcloud",
     "nltk"
 ]
+test = [
+    "pytest",
+]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -71,5 +74,5 @@ platforms = ["linux-cuda", "win-cuda"]
 cuda = "*"
 
 [tool.pixi.environments]
-default = { features = ["dev"] }
-cuda = { features = ["dev", "cuda"] }
+default = { features = ["dev", "test"] }
+cuda = { features = ["dev", "cuda", "test"] }

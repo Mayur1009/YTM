@@ -1,0 +1,293 @@
+from dataclasses import dataclass
+from typing import Literal, TypedDict
+
+import numpy as np
+
+from ._device_checks import (
+    DEFAULT_COMPILE_FLAGS,
+    check_cuda_available,
+    parse_device,
+    resolve_cuda_props,
+    resolve_openmp_flags,
+    select_compiler,
+)
+
+
+@dataclass()
+class BaseTMConfig:
+    n_clauses: int
+    s: float
+    dim: int | tuple[int] | tuple[int, int] | tuple[int, int, int]
+    n_classes: int
+
+    # discrete input
+    feat_mins: int | np.ndarray = 0
+    feat_maxs: int | np.ndarray = 1
+
+    # convolution
+    patch_dim: tuple[int, int] | None = None
+    stride: tuple[int, int] = (1, 1)
+
+    # conlutional interpretability
+    track_patch_weights: bool = True
+
+    # clause bank
+    coalesced: bool = True
+    negative_clauses: bool = True
+
+    # literals
+    negated_literals: bool = True
+    position_literals: bool = True
+    max_includes: int | None = None
+
+    # TA states
+    n_states: int = 256
+    include_state: int | None = None
+    ta_init: Literal["random", "middle", "random_include"] | str | int = "middle"
+
+    # clause weights
+    weighted: bool = True
+    weight_init: Literal["random"] | float | str = 1.0
+    max_weight: float = float(np.finfo(np.float32).max)
+    allow_polarity_change: bool = True
+
+    # bias
+    bias: bool = False
+    bias_init: Literal["random"] | float = "random"
+
+    # feedback
+    skip_t1a_fb: bool = False
+    skip_t1b_fb: bool = False
+    skip_t2_fb: bool = False
+    boost_tp_inc: bool = True
+    boost_tp_dec: bool = False
+
+    # Random state
+    seed: int | None = None
+
+    # device
+    device: Literal["cpu", "cuda"] | str = "cpu:1"
+    compile_flags: None | list[str] = None
+    grid_size: int | None = None
+    block_size: int = 256
+    warps_per_clause: int = 1
+
+    def __post_init__(self):
+        self._check_device()
+        self._check_seed()
+        self._check_params()
+        self._check_feat_bounds()
+        self._derive_vars()
+
+    def _check_device(self):
+        """Resolve device, threads and toolchain."""
+        self._device_kind, n = parse_device(self.device)
+
+        if self._device_kind == "cuda":
+            check_cuda_available()
+            self._gpu_id = n
+            self._cuda_props = resolve_cuda_props(n)
+            self._n_threads = 1
+            self._compiler = None
+            self._compiler_flags = []
+            self._omp_flags = []
+            return
+
+        self._gpu_id = -1
+        self._cuda_props = {}
+        self._n_threads = n
+        self._compiler = select_compiler()
+        self._compiler_flags = list(DEFAULT_COMPILE_FLAGS if self.compile_flags is None else self.compile_flags)
+        self._omp_flags = resolve_openmp_flags(self._compiler) if self._n_threads > 1 else []
+
+        if not self._omp_flags:
+            self._n_threads = 1
+
+    def _check_seed(self):
+        """Set a random seed when seed <= 0 or None, else use the provided seed."""
+        if self.seed is None or self.seed <= 0:
+            self.seed = int(np.random.randint(1, 1 << 31))
+        else:
+            self.seed = int(self.seed)
+
+    def _check_params(self):
+        """Clamp scalar params and validate the init options."""
+        self._n_clauses = max(1, int(self.n_clauses))
+        self._s = max(1.0, float(self.s))
+        self._warps_per_clause = max(1, int(self.warps_per_clause))
+
+        dim = (self.dim,) if isinstance(self.dim, int) else tuple(self.dim)
+        assert 1 <= len(dim) <= 3, f"dim must be an int or a tuple of length 1, 2 or 3, got {self.dim}"
+        assert all(isinstance(d, (int, np.integer)) for d in dim), f"dim entries must be ints, got {self.dim}"
+
+        # (H,) -> (H, 1, 1), (H, W) -> (H, W, 1), (H, W, C) stays as is.
+        padded = [int(d) for d in dim] + [1] * (3 - len(dim))
+        self._dim: tuple[int, int, int] = (padded[0], padded[1], padded[2])
+
+        # patch dim
+        if self.patch_dim is None:
+            self._patch_dim = (self._dim[0], self._dim[1])
+        else:
+            self._patch_dim = (
+                self._dim[0] if self.patch_dim[0] <= 0 or self.patch_dim[0] > self._dim[0] else self.patch_dim[0],
+                self._dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self._dim[1] else self.patch_dim[1],
+            )
+
+        # Stride
+        assert len(self.stride) == 2, f"stride must be a tuple of length 2, got {self.stride}"
+        assert all(isinstance(st, (int, np.integer)) and st > 0 for st in self.stride), (
+            f"stride entries must be positive ints, got {self.stride}"
+        )
+        self._stride = (int(self.stride[0]), int(self.stride[1]))
+
+        # TA states, need at least an include and an exclude state
+        assert self.n_states >= 2, f"n_states must be at least 2, got {self.n_states}"
+
+        # Include state, None or -1 means the middle state
+        if self.include_state is None or self.include_state == -1:
+            self._include_state = self.n_states // 2
+        else:
+            assert 0 <= self.include_state <= self.n_states - 1, (
+                f"include_state must be within 0 and n_states - 1 ({self.n_states - 1}), None or -1, got {self.include_state}"
+            )
+            self._include_state = self.include_state
+
+        # TA initial state
+        if isinstance(self.ta_init, str) and self.ta_init.startswith("random:"):
+            band = self.ta_init[len("random:") :]
+            assert band.isdigit(), f"ta_init 'random:N' needs a non negative int N, got {self.ta_init!r}"
+        else:
+            assert self.ta_init in ("middle", "random", "random_include") or (
+                isinstance(self.ta_init, int) and 0 <= self.ta_init <= self.n_states - 1
+            ), (
+                f"ta_init must be 'middle', 'random', 'random_include', 'random:N', "
+                f"or an int within 0 and n_states - 1 ({self.n_states - 1}), got {self.ta_init}"
+            )
+
+        # Clause weight init
+        if isinstance(self.weight_init, str) and self.weight_init.startswith("random:"):
+            try:
+                high = float(self.weight_init[len("random:") :])
+            except ValueError:
+                high = 0.0
+            assert high > 0, f"weight_init 'random:N' needs a positive float N, got {self.weight_init!r}"
+        else:
+            assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init > 0), (
+                f"weight_init must be 'random', 'random:N', or a positive number, got {self.weight_init!r}"
+            )
+
+        # Bias init
+        assert self.bias_init == "random" or isinstance(self.bias_init, (int, float)), (
+            f"bias_init must be 'random' or a float, got {self.bias_init!r}"
+        )
+
+    def _check_feat_bounds(self):
+        """Broadcast feat bounds to one int32 entry per raw patch feature."""
+        n_feat = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
+
+        if np.isscalar(self.feat_mins):
+            self._feat_mins = np.full(n_feat, self.feat_mins, dtype=np.int32)
+        else:
+            self._feat_mins = np.asarray(self.feat_mins, dtype=np.int32, order="C")
+            assert self._feat_mins.shape == (n_feat,), f"feat_mins must have shape ({n_feat},), got {self._feat_mins.shape}"
+
+        if np.isscalar(self.feat_maxs):
+            self._feat_maxs = np.full(n_feat, self.feat_maxs, dtype=np.int32)
+        else:
+            self._feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32, order="C")
+            assert self._feat_maxs.shape == (n_feat,), f"feat_maxs must have shape ({n_feat},), got {self._feat_maxs.shape}"
+
+    def _derive_vars(self):
+        """Calculate variables from the params, so that they can be used later."""
+        # Clause banks and total clauses. Coalesced shares one bank across all classes.
+        self._n_clause_banks = 1 if self.coalesced else self.n_classes
+        self._total_clauses = self._n_clause_banks * self._n_clauses
+
+        # number of patches and convolution
+        self._n_patches_y = ((self._dim[0] - self._patch_dim[0]) // self._stride[0]) + 1
+        self._n_patches_x = ((self._dim[1] - self._patch_dim[1]) // self._stride[1]) + 1
+        self._n_patches = self._n_patches_y * self._n_patches_x
+
+        # number of raw features.
+        self._n_raw_patch_feats = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
+
+        # positional literals, thermometer encoded so one less than the number of positions
+        self._n_position_feats = (self._n_patches_y - 1) + (self._n_patches_x - 1)
+
+        # thermometer bits for each feature
+        self._therm_bits = self._feat_maxs - self._feat_mins
+        self._n_patch_feats = int(np.sum(self._therm_bits))
+
+        # literal offsets for thermometer encoded features
+        self._literal_offsets = np.zeros(self._n_raw_patch_feats + 1, dtype=np.int32)
+        self._literal_offsets[1:] = np.cumsum(self._therm_bits)
+
+        # literal index -> feature id lookup
+        self._lit_to_fid = np.zeros(self._n_patch_feats, dtype=np.int32)
+        for fid in range(self._n_raw_patch_feats):
+            self._lit_to_fid[self._literal_offsets[fid] : self._literal_offsets[fid + 1]] = fid
+
+        # final number of actual literals
+        self._n_literals = self._n_patch_feats + self._n_position_feats
+        if self.negated_literals:
+            self._n_literals *= 2
+
+        # Clause budget
+        if self.max_includes is None or self.max_includes <= 0 or self.max_includes > self._n_literals:
+            self._max_includes = self._n_literals
+        else:
+            self._max_includes = self.max_includes
+
+
+class _BaseTMConfig_T(TypedDict, total=False):
+    # discrete input
+    feat_mins: int | np.ndarray
+    feat_maxs: int | np.ndarray
+
+    # convolution
+    patch_dim: tuple[int, int] | None
+    stride: tuple[int, int]
+
+    # conlutional interpretability
+    track_patch_weights: bool
+
+    # clause bank
+    coalesced: bool
+    negative_clauses: bool
+
+    # literals
+    negated_literals: bool
+    position_literals: bool
+    max_includes: int | None
+
+    # TA states
+    n_states: int
+    include_state: int | None
+    ta_init: Literal["random", "middle", "random_include"] | str | int
+
+    # clause weights
+    weighted: bool
+    weight_init: Literal["random"] | float | str
+    max_weight: float
+    allow_polarity_change: bool
+
+    # bias
+    bias: bool
+    bias_init: Literal["random"] | float
+
+    # feedback
+    skip_t1a_fb: bool
+    skip_t1b_fb: bool
+    skip_t2_fb: bool
+    boost_tp_inc: bool
+    boost_tp_dec: bool
+
+    # Random state
+    seed: int | None
+
+    # device
+    device: Literal["cpu", "cuda"] | str
+    compile_flags: None | list[str]
+    grid_size: int | None
+    block_size: int
+    warps_per_clause: int
