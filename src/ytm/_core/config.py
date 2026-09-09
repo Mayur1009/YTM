@@ -61,6 +61,7 @@ class BaseTMConfig:
         self._check_params()
         self._check_feat_bounds()
         self._derive_vars()
+        self._build_header()
 
     def _check_seed(self):
         """Set a random seed when seed <= 0 or None, else use the provided seed."""
@@ -195,6 +196,50 @@ class BaseTMConfig:
             self._max_includes = self._n_literals
         else:
             self._max_includes = self.max_includes
+
+    def _build_header(self):
+        self._header = f"""
+#define TOTAL_CLAUSES {self._total_clauses}
+#define CLASSES {self.n_classes}
+#define S {float(self._s)}f
+
+#define HEIGHT {self._dim[0]}
+#define WIDTH {self._dim[1]}
+#define DEPTH {self._dim[2]}
+#define PATCH_HEIGHT {self._patch_dim[0]}
+#define PATCH_WIDTH {self._patch_dim[1]}
+#define STRIDE_Y {self._stride[0]}
+#define STRIDE_X {self._stride[1]}
+#define N_PATCHES_Y {self._n_patches_y}
+#define N_PATCHES_X {self._n_patches_x}
+#define N_PATCHES {self._n_patches}
+
+#define N_RAW_PATCH_FEATS {self._n_raw_patch_feats}
+#define N_PATCH_FEATS {self._n_patch_feats}
+#define N_POSITION_FEATS {self._n_position_feats}
+#define N_LITERALS {self._n_literals}
+#define MAX_INCLUDED_LITERALS {self._max_includes}
+#define NEGATED_LITERALS {int(self.negated_literals)}
+#define POSITION_LITERALS {int(self.position_literals)}
+
+#define INCLUDE_STATE {self._include_state}
+#define MAX_TA_STATE {self.n_states - 1}
+
+#define COALESCED {int(self.coalesced)}
+#define NEGATIVE_CLAUSES {int(self.negative_clauses)}
+#define WEIGHTED {int(self.weighted)}
+#define MAX_WEIGHT {float(self.max_weight)}f
+#define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
+#define BIAS {int(self.bias)}
+
+#define TYPE1A_FB {int(not self.skip_t1a_fb)}
+#define TYPE1B_FB {int(not self.skip_t1b_fb)}
+#define TYPE2_FB {int(not self.skip_t2_fb)}
+#define BOOST_TP_INC {int(self.boost_tp_inc)}
+#define BOOST_TP_DEC {int(self.boost_tp_dec)}
+
+#define TRACK_PATCH_WEIGHTS {int(self.track_patch_weights)}
+"""
 
 
 class _BaseTMConfig_T(TypedDict, total=False):
