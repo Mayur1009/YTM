@@ -35,11 +35,6 @@ def make_device(device: str = "cpu:1", **kwargs) -> Device:
 
 
 class TestConstruction:
-    def test_holds_both_configs(self):
-        dev = make_device()
-        assert dev.config.n_clauses == 8
-        assert dev.device_config.device == "cpu:1"
-
     def test_rng_is_offset_from_the_config_seed(self):
         dev = make_device(seed=7, ta_init="middle", weight_init=1.0, negative_clauses=False, bias=False)
         assert np.array_equal(dev._rng.random(3), np.random.default_rng(8).random(3))

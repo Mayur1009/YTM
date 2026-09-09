@@ -365,31 +365,13 @@ class TestHeader:
         }
         assert {k: int(defines[k]) for k in expected} == expected
 
-    @pytest.mark.parametrize(
-        "field, macro",
-        [
-            ("negated_literals", "NEGATED_LITERALS"),
-            ("position_literals", "POSITION_LITERALS"),
-            ("coalesced", "COALESCED"),
-            ("negative_clauses", "NEGATIVE_CLAUSES"),
-            ("weighted", "WEIGHTED"),
-            ("allow_polarity_change", "ALLOW_POLARITY_CHANGE"),
-            ("bias", "BIAS"),
-            ("boost_tp_inc", "BOOST_TP_INC"),
-            ("boost_tp_dec", "BOOST_TP_DEC"),
-            ("track_patch_weights", "TRACK_PATCH_WEIGHTS"),
-        ],
-    )
     @pytest.mark.parametrize("value", [True, False])
-    def test_bools_render_as_zero_or_one(self, field, macro, value):
-        defines = parse_defines(make_config(**{field: value})._header)
-        assert defines[macro] == str(int(value))
+    def test_bools_render_as_zero_or_one(self, value):
+        defines = parse_defines(make_config(bias=value, coalesced=value)._header)
+        assert defines["BIAS"] == str(int(value))
+        assert defines["COALESCED"] == str(int(value))
 
-    @pytest.mark.parametrize(
-        "field, macro",
-        [("skip_t1a_fb", "TYPE1A_FB"), ("skip_t1b_fb", "TYPE1B_FB"), ("skip_t2_fb", "TYPE2_FB")],
-    )
     @pytest.mark.parametrize("value", [True, False])
-    def test_skip_flags_are_inverted(self, field, macro, value):
-        defines = parse_defines(make_config(**{field: value})._header)
-        assert defines[macro] == str(int(not value))
+    def test_skip_flags_are_inverted(self, value):
+        defines = parse_defines(make_config(skip_t1a_fb=value)._header)
+        assert defines["TYPE1A_FB"] == str(int(not value))

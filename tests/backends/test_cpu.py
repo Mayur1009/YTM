@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ytm._core.backends.cpu import CPUDevice, read_file
+from ytm._core.backends.cpu import CPUDevice
 from ytm._core.config import BaseTMConfig
 from ytm._core.device_config import DeviceConfig
 
@@ -69,26 +69,14 @@ class TestCompile:
 
 
 class TestPointers:
-    @pytest.mark.parametrize(
-        "pointer",
-        [
-            "p_clause_feat_bounds",
-            "p_clause_position_bounds",
-            "p_bounded_feat_ids",
-            "p_n_bounded_feats",
-            "p_clause_density",
-            "p_is_clause_synced",
-            "p_ta_states",
-            "p_clause_weights",
-            "p_bias",
-            "p_patch_weights",
-            "p_feat_mins",
-            "p_feat_maxs",
-            "p_literal_offsets",
-        ],
+    POINTERS = (
+        "p_clause_feat_bounds", "p_clause_position_bounds", "p_bounded_feat_ids", "p_n_bounded_feats",
+        "p_clause_density", "p_is_clause_synced", "p_ta_states", "p_clause_weights", "p_bias",
+        "p_patch_weights", "p_feat_mins", "p_feat_maxs", "p_literal_offsets",
     )
-    def test_every_array_has_a_pointer(self, dev, pointer):
-        assert getattr(dev, pointer)
+
+    def test_every_array_has_a_pointer(self, dev):
+        assert [n for n in self.POINTERS if not getattr(dev, n, None)] == []
 
     def test_pointers_alias_the_live_arrays(self, dev):
         """C writes through these, so they must not point at a copy."""
@@ -169,9 +157,3 @@ class TestPackClauses:
         assert pc.clause_density[0] == 1
         assert np.all(pc.clause_density[1:] == 0)
 
-
-class TestReadFile:
-    def test_returns_the_file_contents(self, tmp_path):
-        p = tmp_path / "x.h"
-        p.write_text("// hello\n")
-        assert read_file(p) == "// hello\n"
