@@ -16,7 +16,7 @@ INLINE_FN ull mix64(ull x) {
     return x ^ (x >> 31);
 }
 
-INLINE_FN ull hash_combine(ull a, ull b) { return a ^ mix64(b + 0x9e3779b97f4a7c15ULL); }
+INLINE_FN ull hash_combine(ull a, ull b) { return mix64(a ^ mix64(b + 0x9e3779b97f4a7c15ULL)); }
 
 INLINE_FN ull rng_hash(ull seed, ull a, ull b, ull c) {
     ull k = hash_combine(seed, a);
