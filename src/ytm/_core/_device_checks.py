@@ -67,6 +67,7 @@ def resolve_cuda_props(gpu_id: int) -> dict[str, int]:
         "max_threads_per_block": props["maxThreadsPerBlock"],
         "multiprocessor_count": props["multiProcessorCount"],
         "warp_size": props["warpSize"],
+        "max_grid_size": props["maxGridSize"][0],
     }
 
 

@@ -3,15 +3,6 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
-from ._device_checks import (
-    DEFAULT_COMPILE_FLAGS,
-    check_cuda_available,
-    parse_device,
-    resolve_cuda_props,
-    resolve_openmp_flags,
-    select_compiler,
-)
-
 
 @dataclass()
 class BaseTMConfig:
@@ -65,43 +56,11 @@ class BaseTMConfig:
     # Random state
     seed: int | None = None
 
-    # device
-    device: Literal["cpu", "cuda"] | str = "cpu:1"
-    compile_flags: None | list[str] = None
-    grid_size: int | None = None
-    block_size: int = 256
-    warps_per_clause: int = 1
-
     def __post_init__(self):
-        self._check_device()
         self._check_seed()
         self._check_params()
         self._check_feat_bounds()
         self._derive_vars()
-
-    def _check_device(self):
-        """Resolve device, threads and toolchain."""
-        self._device_kind, n = parse_device(self.device)
-
-        if self._device_kind == "cuda":
-            check_cuda_available()
-            self._gpu_id = n
-            self._cuda_props = resolve_cuda_props(n)
-            self._n_threads = 1
-            self._compiler = None
-            self._compiler_flags = []
-            self._omp_flags = []
-            return
-
-        self._gpu_id = -1
-        self._cuda_props = {}
-        self._n_threads = n
-        self._compiler = select_compiler()
-        self._compiler_flags = list(DEFAULT_COMPILE_FLAGS if self.compile_flags is None else self.compile_flags)
-        self._omp_flags = resolve_openmp_flags(self._compiler) if self._n_threads > 1 else []
-
-        if not self._omp_flags:
-            self._n_threads = 1
 
     def _check_seed(self):
         """Set a random seed when seed <= 0 or None, else use the provided seed."""
@@ -114,7 +73,6 @@ class BaseTMConfig:
         """Clamp scalar params and validate the init options."""
         self._n_clauses = max(1, int(self.n_clauses))
         self._s = max(1.0, float(self.s))
-        self._warps_per_clause = max(1, int(self.warps_per_clause))
 
         dim = (self.dim,) if isinstance(self.dim, int) else tuple(self.dim)
         assert 1 <= len(dim) <= 3, f"dim must be an int or a tuple of length 1, 2 or 3, got {self.dim}"
@@ -284,10 +242,3 @@ class _BaseTMConfig_T(TypedDict, total=False):
 
     # Random state
     seed: int | None
-
-    # device
-    device: Literal["cpu", "cuda"] | str
-    compile_flags: None | list[str]
-    grid_size: int | None
-    block_size: int
-    warps_per_clause: int
