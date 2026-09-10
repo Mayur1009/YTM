@@ -44,6 +44,9 @@ class BaseDevice(abc.ABC):
     def fit_sample(self, X, Y, e: int, **kwargs): ...
 
     @abc.abstractmethod
+    def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray: ...
+
+    @abc.abstractmethod
     def infer(self, X: np.ndarray, batch_size: int): ...
 
     @abc.abstractmethod

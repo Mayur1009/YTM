@@ -2,9 +2,22 @@
 #include "common.h"
 #endif
 
-void infer_sample(const float* clause_weights, const float* bias, const int* clause_position_bounds,
-                  const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
-                  const int* clause_density, const int* X, const int e, float* class_sums) {
+void calc_clause_outputs(const int* clause_position_bounds, const int* clause_feat_bounds, const int* bounded_feat_ids,
+                         const int* n_bounded_feats, const int* clause_density, const int* X, const int e,
+                         int8_t* clause_outputs) {
+    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    int8_t* out_e = &clause_outputs[(ull)e * TOTAL_CLAUSES];
+
+#pragma omp parallel for schedule(dynamic)
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        out_e[clause] = (int8_t)clause_output(Xe, clause, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                                              n_bounded_feats, clause_density[clause]);
+    }
+}
+
+void calc_class_sums(const float* clause_weights, const float* bias, const int* clause_position_bounds,
+                     const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
+                     const int* clause_density, const int* X, const int e, float* class_sums) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     float* sums_e = &class_sums[(ull)e * CLASSES];
 
@@ -15,37 +28,10 @@ void infer_sample(const float* clause_weights, const float* bias, const int* cla
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        int cd = clause_density[clause];
-        int clause_output;
+        int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                                n_bounded_feats, clause_density[clause]);
 
-        if (cd < 0) {
-            clause_output = 0;
-        } else if (cd == 0) {
-            clause_output = 1;
-        } else {
-            const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-            const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-            int n_bounded_fids = n_bounded_feats[clause];
-
-#if (N_PATCHES > 1)
-            const int* pos = &clause_position_bounds[clause * 4];
-            int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-            int n_y = pos1 - pos0 + 1;
-            int n_x = pos3 - pos2 + 1;
-
-            clause_output = 0;
-            for (int iy = 0; iy < n_y && !clause_output; iy++) {
-                for (int ix = 0; ix < n_x && !clause_output; ix++) {
-                    if (match_patch(Xe, pos0 + iy, pos2 + ix, cfb, bounded_fids, n_bounded_fids))
-                        clause_output = 1;
-                }
-            }
-#else
-            clause_output = match_patch(Xe, 0, 0, cfb, bounded_fids, n_bounded_fids) ? 1 : 0;
-#endif
-        }
-
-        if (clause_output) {
+        if (out) {
             ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
             ull class_id;
             LOOP_CLASS_ID(class_id, clause) {
@@ -55,9 +41,9 @@ void infer_sample(const float* clause_weights, const float* bias, const int* cla
     }
 }
 
-void eval_sample_patchwise(const int* clause_position_bounds, const int* clause_feat_bounds,
-                           const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                           const int* X, const int e, int8_t* patch_output) {
+void calc_clause_outputs_patchwise(const int* clause_position_bounds, const int* clause_feat_bounds,
+                                   const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
+                                   const int* X, const int e, int8_t* patch_output) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* out_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
 

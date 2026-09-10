@@ -30,6 +30,10 @@ STUB = """
 #define STRIDE_X 1
 #define N_PATCHES_Y 19
 #define N_PATCHES_X 19
+#define N_PATCHES 361
+#define N_RAW_PATCH_FEATS 100
+#define N_PATCHES 361
+#define N_RAW_PATCH_FEATS 100
 """
 
 WRAPPERS = """

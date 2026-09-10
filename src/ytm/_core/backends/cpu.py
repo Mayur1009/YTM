@@ -7,7 +7,7 @@ from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32
 import numpy as np
 
 from .._device_checks import run_compiler
-from .base import BaseDevice
+from .base import BaseDevice, tqdm_bar
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -58,10 +58,10 @@ class CPUDevice(BaseDevice):
         return CDLL(so_file)
 
     def _build_code(self) -> str:
-        """Generated header plus the shared sources. Subclasses append their own via `super()`."""
+        """Generated header plus the shared sources."""
         core = pathlib.Path(__file__).parent
         return self.config._header + "".join(
-            read_file(core / name) for name in ("cpu.h", "common.h", "rng.h", "pack_clauses.c", "inference.c", "interpret.c")
+            read_file(core / name) for name in ("cpu.h", "common.h", "rng.h", "pack_clauses.c", "evaluate.c", "interpret.c")
         )
 
     def _init_lib(self):
@@ -106,3 +106,119 @@ class CPUDevice(BaseDevice):
             self.p_clause_density,
             self.p_is_clause_synced,
         )
+
+    def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        X = np.ascontiguousarray(X, dtype=np.int32)
+        p_X = X.ctypes.data_as(int32_p)
+        class_sums = np.zeros((X.shape[0], cfg.n_classes), dtype=np.float32)
+        self.pack_clauses(force_repack)
+
+        for e in tqdm_bar(range(X.shape[0]), desc="Infer"):
+            self.lib.calc_class_sums(
+                self.p_clause_weights,
+                self.p_bias,
+                self.p_clause_position_bounds,
+                self.p_clause_feat_bounds,
+                self.p_bounded_feat_ids,
+                self.p_n_bounded_feats,
+                self.p_clause_density,
+                p_X,
+                c_int(e),
+                class_sums.ctypes.data_as(float_p),
+            )
+        return class_sums
+
+    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+        """Whether each clause fired on each sample."""
+        cfg = self.config
+        X = np.ascontiguousarray(X, dtype=np.int32)
+        p_X = X.ctypes.data_as(int32_p)
+        out = np.zeros((X.shape[0], cfg._total_clauses), dtype=np.int8)
+        self.pack_clauses(force_repack)
+
+        for e in tqdm_bar(range(X.shape[0]), desc="Transform"):
+            self.lib.calc_clause_outputs(
+                self.p_clause_position_bounds,
+                self.p_clause_feat_bounds,
+                self.p_bounded_feat_ids,
+                self.p_n_bounded_feats,
+                self.p_clause_density,
+                p_X,
+                c_int(e),
+                out.ctypes.data_as(int8_p),
+            )
+        return out.reshape(X.shape[0], cfg._n_clause_banks, cfg._n_clauses)
+
+    def _patch_outputs(self, X: np.ndarray, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
+        cfg = self.config
+        X = np.ascontiguousarray(X, dtype=np.int32)
+        p_X = X.ctypes.data_as(int32_p)
+        out = np.zeros((X.shape[0], cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+        self.pack_clauses(force_repack)
+
+        for e in tqdm_bar(range(X.shape[0]), desc=desc):
+            self.lib.calc_clause_outputs_patchwise(
+                self.p_clause_position_bounds,
+                self.p_clause_feat_bounds,
+                self.p_bounded_feat_ids,
+                self.p_n_bounded_feats,
+                self.p_clause_density,
+                p_X,
+                c_int(e),
+                out.ctypes.data_as(int8_p),
+            )
+        return out
+
+    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        out = self._patch_outputs(X, force_repack)
+        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        self.pack_clauses(force_repack)
+
+        # Per clause max normalisation, on a copy so `patch_weights` is left alone.
+        pw = self._to_host(self.patch_weights).astype(np.float32)
+        pw_norm = np.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
+
+        output = np.zeros(cfg._dim, dtype=np.float32)
+        self.lib.wic(
+            c_int(class_id),
+            c_int(polarity),
+            self.p_clause_weights,
+            self.p_clause_feat_bounds,
+            self.p_clause_position_bounds,
+            self.p_clause_density,
+            pw_norm.ctypes.data_as(float_p),
+            self.p_feat_mins,
+            self.p_feat_maxs,
+            c_float(pw_th),
+            output.ctypes.data_as(float_p),
+        )
+        return output
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+
+        patch_output = self._patch_outputs(X, force_repack, desc="WAC activations")
+        p_patch_output = patch_output.ctypes.data_as(int8_p)
+
+        output = np.zeros((N, *cfg._dim), dtype=np.float32)
+        p_output = output.ctypes.data_as(float_p)
+        for e in tqdm_bar(range(N), desc="WAC"):
+            self.lib.wac_sample(
+                c_int(int(target_classes[e])),
+                c_int(polarity),
+                p_patch_output,
+                c_int(e),
+                self.p_clause_weights,
+                self.p_clause_feat_bounds,
+                self.p_clause_density,
+                self.p_feat_mins,
+                self.p_feat_maxs,
+                p_output,
+            )
+        return output

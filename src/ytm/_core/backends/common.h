@@ -51,7 +51,7 @@ INLINE_FN int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, 
     return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
 }
 
-// True when the patch falls inside every bound the clause constrains.
+// True when the patch matches a clause (strict AND matching).
 INLINE_FN bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* feat_bounds,
                            const int* bounded_feat_ids, int n_bounded_feat_ids) {
     for (int i = 0; i < n_bounded_feat_ids; ++i) {
@@ -61,4 +61,29 @@ INLINE_FN bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const
             return false;
     }
     return true;
+}
+
+// Clause output on this sample.
+INLINE_FN int clause_output(const int* Xe, ull clause, const int* clause_position_bounds,
+                            const int* clause_feat_bounds, const int* bounded_feat_ids,
+                            const int* n_bounded_feats, int clause_density) {
+    if (clause_density < 0)
+        return 0;
+    if (clause_density == 0)
+        return 1;
+
+    const int* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+    const int* fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+    int n_fids = n_bounded_feats[clause];
+
+#if (N_PATCHES > 1)
+    const int* pos = &clause_position_bounds[clause * 4];
+    for (int py = pos[0]; py <= pos[1]; py++)
+        for (int px = pos[2]; px <= pos[3]; px++)
+            if (match_patch(Xe, py, px, feat_bounds, fids, n_fids))
+                return 1;
+    return 0;
+#else
+    return match_patch(Xe, 0, 0, feat_bounds, fids, n_fids) ? 1 : 0;
+#endif
 }
