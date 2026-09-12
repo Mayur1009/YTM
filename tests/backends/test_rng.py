@@ -88,9 +88,9 @@ class TestIndependence:
         assert abs(r) < 0.01
 
     def test_sequential_keys_give_uncorrelated_streams(self):
-        """Keys come from `rng_hash(seed, clause, e, salt)` with small sequential clause and e,
+        """Keys come from `rng_hash(seed, clause, salt)` with a sequential clause,
         so nearby keys are the realistic collision risk."""
-        keys = [rng.rng_hash(1234, clause, 0, 0xDEADBEEF) for clause in range(200)]
+        keys = [rng.rng_hash(1234, clause, 0xDEADBEEF) for clause in range(200)]
         streams = np.stack([rng.uniforms(k, 500) for k in keys])
 
         off_diagonal = np.corrcoef(streams)[~np.eye(len(keys), dtype=bool)]
@@ -102,28 +102,28 @@ class TestIndependence:
 
     def test_first_draw_across_keys_is_uniform(self):
         """The first draw per clause is what the kernels actually consume most of."""
-        firsts = np.array([rng.uniforms(rng.rng_hash(99, c, 0, 0xDEADBEEF), 1)[0] for c in range(20_000)])
+        firsts = np.array([rng.uniforms(rng.rng_hash(99, c, 0xDEADBEEF), 1)[0] for c in range(20_000)])
         assert stats.kstest(firsts, "uniform").pvalue > ALPHA
 
     def test_neighbouring_keys_differ_in_about_half_their_bits(self):
         """Avalanche: one bit of input change should flip ~32 of 64 output bits."""
-        a = np.array([rng.rng_hash(1234, c, 0, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
-        b = np.array([rng.rng_hash(1234, c + 1, 0, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
+        a = np.array([rng.rng_hash(1234, c, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
+        b = np.array([rng.rng_hash(1234, c + 1, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
         flipped = np.array([bin(int(x) ^ int(y)).count("1") for x, y in zip(a, b)])
         assert 28 < flipped.mean() < 36
 
 
 class TestHashCollisions:
     def test_no_collisions_over_the_realistic_key_space(self):
-        keys = {rng.rng_hash(1234, clause, e, 0xDEADBEEF) for clause in range(300) for e in range(300)}
+        """The seed is redrawn per sample and the clause id runs over the bank, so both move."""
+        keys = {rng.rng_hash(seed, clause, 0xDEADBEEF) for seed in range(300) for clause in range(300)}
         assert len(keys) == 300 * 300
 
     def test_each_argument_position_matters(self):
-        base = rng.rng_hash(1, 2, 3, 4)
-        assert rng.rng_hash(9, 2, 3, 4) != base
-        assert rng.rng_hash(1, 9, 3, 4) != base
-        assert rng.rng_hash(1, 2, 9, 4) != base
-        assert rng.rng_hash(1, 2, 3, 9) != base
+        base = rng.rng_hash(1, 2, 3)
+        assert rng.rng_hash(9, 2, 3) != base
+        assert rng.rng_hash(1, 9, 3) != base
+        assert rng.rng_hash(1, 2, 9) != base
 
     def test_mix64_is_a_bijection_on_a_sample(self):
         xs = np.arange(50_000, dtype=np.uint64)

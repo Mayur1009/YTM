@@ -17,8 +17,10 @@ from ytm._core.device_config import DeviceConfig
 
 
 class Device(CPUDevice):
-    def fit_epoch(self, X, Y, clause_drop_p, batch_size, **kwargs): ...
-    def fit_sample(self, X, Y, e, **kwargs): ...
+    def fit_sample(self, buf, e, **kwargs): ...
+    def _fit_decide_fb(self, rng_key, **kwargs): ...
+    def _fit_update_weights(self, **kwargs): ...
+    def _fit_update_bias(self, **kwargs): ...
     def infer(self, X, batch_size): ...
 
 
@@ -376,3 +378,106 @@ class TestTransform:
 
         dev.transform(X, -1)
         assert np.array_equal(dev.patch_weights, before)
+
+
+def run_fit_eval(dev: Device, X: np.ndarray, e: int, seed: int, drop: np.ndarray | None = None):
+    """Drive `_fit_eval` on one sample and hand back the buffers it wrote into."""
+    cfg = dev.config
+    if drop is None:
+        drop = np.zeros(cfg._total_clauses, dtype=np.int8)
+    Y = np.zeros((X.shape[0], cfg.n_classes), dtype=np.float32)
+    buf = dev._fit_allocs(np.ascontiguousarray(X, dtype=np.int32), Y, drop)
+    dev._fit_eval(buf, e, seed)
+    return buf
+
+
+class TestFitEval:
+    @pytest.mark.parametrize("trial", range(3))
+    def test_a_patch_is_selected_exactly_when_the_clause_fires(self, setup, trial):
+        """`selected_patch_ids` is the training time clause output, so it has to agree with the scan."""
+        dev, X = setup(trial)
+        naive = patchwise_naive(dev, X)
+
+        for e in range(X.shape[0]):
+            buf = run_fit_eval(dev, X, e, seed=7 + e)
+            assert np.array_equal(buf.selected_pids != -1, naive[e].any(axis=-1))
+
+    @pytest.mark.parametrize("trial", range(3))
+    def test_the_selected_patch_is_one_that_matches(self, setup, trial):
+        """Feedback is applied to the selected patch, so picking a non matching one corrupts the update."""
+        dev, X = setup(trial)
+        naive = patchwise_naive(dev, X)
+        density = dev.get_packed_clauses().clause_density
+
+        buf = run_fit_eval(dev, X, 0, seed=11)
+        for clause in np.flatnonzero(buf.selected_pids != -1):
+            if density[clause] > 0:  # an unconstrained clause picks any patch, all of them match
+                assert naive[0, clause, buf.selected_pids[clause]] == 1
+
+    def test_dropped_clauses_select_nothing(self, setup):
+        dev, X = setup(0)
+        drop = np.ones(dev.config._total_clauses, dtype=np.int8)
+
+        buf = run_fit_eval(dev, X, 0, seed=3, drop=drop)
+        assert np.all(buf.selected_pids == -1)
+
+    def test_the_seed_decides_which_matching_patch_is_picked(self, setup):
+        """Same seed must reproduce, a different one must actually move the choice."""
+        dev, X = setup(0)
+        a = run_fit_eval(dev, X, 0, seed=1).selected_pids.copy()
+        b = run_fit_eval(dev, X, 0, seed=1).selected_pids
+        assert np.array_equal(a, b)
+
+        c = run_fit_eval(dev, X, 0, seed=2).selected_pids
+        assert not np.array_equal(a, c)
+
+    def test_the_choice_is_uniform_over_the_matching_patches(self, setup):
+        """Reservoir sampling, so a clause matching several patches must train on each equally often."""
+        dev, X = setup(0)
+        naive = patchwise_naive(dev, X)[0]
+        density = dev.get_packed_clauses().clause_density
+
+        clause = max(range(dev.config._total_clauses), key=lambda c: naive[c].sum() if density[c] > 0 else 0)
+        matches = np.flatnonzero(naive[clause])
+        assert len(matches) >= 4, "the fixture must give some clause a real choice"
+
+        draws = 600
+        counts = np.zeros(dev.config._n_patches, dtype=int)
+        for seed in range(draws):
+            counts[run_fit_eval(dev, X, 0, seed=seed).selected_pids[clause]] += 1
+
+        assert np.array_equal(np.flatnonzero(counts), matches)
+        assert counts[matches].min() > 0.5 * draws / len(matches)
+
+
+class TestCountVotes:
+    @pytest.mark.parametrize("coalesced", [False, True])
+    @pytest.mark.parametrize("trial", range(3))
+    def test_votes_are_the_weights_of_the_clauses_that_fired(self, setup, trial, coalesced):
+        dev, X = setup(trial, coalesced=coalesced)
+
+        buf = run_fit_eval(dev, X, 0, seed=5)
+        dev._fit_voting(buf)
+
+        expected = class_sums_naive(dev, (buf.selected_pids != -1)[None])[0]
+        assert np.allclose(buf.votes, expected, atol=1e-4)
+
+    def test_bias_is_the_starting_point(self, setup):
+        dev, X = setup(0, bias=True, bias_init=2.0)
+        drop = np.ones(dev.config._total_clauses, dtype=np.int8)
+
+        buf = run_fit_eval(dev, X, 0, seed=5, drop=drop)
+        dev._fit_voting(buf)
+
+        assert np.allclose(buf.votes, 2.0)
+
+    def test_votes_do_not_accumulate_across_samples(self, setup):
+        """`votes` is reused every sample, so `count_votes` has to overwrite rather than add."""
+        dev, X = setup(0)
+
+        buf = run_fit_eval(dev, X, 0, seed=5)
+        dev._fit_voting(buf)
+        first = buf.votes.copy()
+        dev._fit_voting(buf)
+
+        assert np.array_equal(buf.votes, first)

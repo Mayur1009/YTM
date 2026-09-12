@@ -49,12 +49,12 @@ void w_draw_raw(ull key, uint start, int n, unsigned int* out) {
     }
 }
 
-void w_draw_geom(ull key, uint start, int n, float p, int* out) {
+void w_draw_geom(ull key, uint start, int n, float p, float* out) {
     uint counter = start;
     for (int i = 0; i < n; ++i) out[i] = geom_sample(key, &counter, p);
 }
 
-unsigned long long w_rng_hash(ull seed, ull a, ull b, ull c) { return rng_hash(seed, a, b, c); }
+unsigned long long w_rng_hash(ull seed, ull a, ull b) { return rng_hash(seed, a, b); }
 unsigned long long w_mix64(ull x) { return mix64(x); }
 """
 
@@ -101,15 +101,15 @@ def raw32(key: int, n: int, start: int = 0) -> np.ndarray:
 
 
 def geom(key: int, n: int, p: float, start: int = 0) -> np.ndarray:
-    out = np.empty(n, dtype=np.int32)
+    out = np.empty(n, dtype=np.float32)
     _lib().w_draw_geom(
-        ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), ctypes.c_float(p), out.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+        ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), ctypes.c_float(p), out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     )
     return out
 
 
-def rng_hash(seed: int, a: int, b: int, c: int) -> int:
-    return _lib().w_rng_hash(*(ctypes.c_uint64(v) for v in (seed, a, b, c)))
+def rng_hash(seed: int, a: int, b: int) -> int:
+    return _lib().w_rng_hash(*(ctypes.c_uint64(v) for v in (seed, a, b)))
 
 
 def mix64(x: int) -> int:
