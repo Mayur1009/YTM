@@ -1,9 +1,11 @@
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
 import numpy as np
 from tqdm import tqdm
+
+from .device_config import DeviceConfig
 
 try:
     from rich import box
@@ -15,6 +17,13 @@ try:
     _RICH = True
 except ImportError:
     _RICH = False
+
+
+def split_device_kwargs(opt: dict) -> tuple[dict, dict]:
+    """Split a kwargs dict into the model config fields and the DeviceConfig fields."""
+    names = {f.name for f in fields(DeviceConfig)}
+    dev_kw = {k: opt.pop(k) for k in list(opt) if k in names}
+    return opt, dev_kw
 
 
 def tqdm_bar(iterable, **kwargs):
