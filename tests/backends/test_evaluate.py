@@ -1,9 +1,11 @@
+from typing import ClassVar
+
 import numpy as np
 import pytest
 
 from ytm._core.backends.cpu import CPUFitBuffers
 
-from .conftest import CoreDevice, make_device, sprinkle_includes
+from .conftest import CoreDevice, make_device, sprinkle_includes, thread_pair
 
 CONV = {"dim": (6, 6, 1), "patch_dim": (3, 3), "n_clauses": 16, "n_classes": 3, "feat_maxs": 3}
 FLAT = {"dim": (4, 4, 1), "n_clauses": 16, "n_classes": 3, "feat_maxs": 3}
@@ -221,3 +223,65 @@ class TestCountVotes:
         first = buf.votes.copy()
         dev._fit_voting(buf)
         assert np.array_equal(buf.votes, first)
+
+
+class TestThreadDeterminism:
+    """Every entry point here is `#pragma omp parallel for`, and the default device is one thread.
+
+    A race would look like a different random draw rather than a failure, since the algorithm is
+    stochastic anyway. Identical seeds give identical starting arrays, so a difference is the
+    parallelism and nothing else.
+    """
+
+    BIG: ClassVar[dict] = {"n_clauses": 512, "dim": (8, 8), "patch_dim": (3, 3), "n_classes": 6, "feat_maxs": 3}
+
+    def _pair(self):
+        single, many = thread_pair(**self.BIG)
+        rng = np.random.default_rng(31)
+        states = np.where(
+            rng.random(single.ta_states.shape) < 0.04, single.config._include_state, single.config._include_state - 1
+        ).astype(np.uint32)
+        for dev in (single, many):
+            dev.ta_states[:] = states
+            dev.pack_clauses(force_repack=True)
+        X = np.random.default_rng(32).integers(0, 4, size=(4, *single.config._dim), dtype=np.int32)
+        return single, many, X
+
+    @pytest.mark.parametrize("call", ["transform", "patch_outputs", "class_sums"])
+    def test_inference_paths_agree(self, call):
+        single, many, X = self._pair()
+        run = {
+            "transform": lambda d: d.transform(X, -1),
+            "patch_outputs": lambda d: d._patch_outputs(X),
+            "class_sums": lambda d: d.calc_class_sums(X),
+        }[call]
+
+        expected = run(single).copy()
+        for _ in range(5):  # a race is intermittent, so one agreement proves little
+            assert np.array_equal(run(many), expected)
+
+    def test_evaluate_and_count_votes_agree(self):
+        single, many, X = self._pair()
+
+        buf = buffers(single, X)
+        single._fit_eval(buf, 0, 77)
+        single._fit_voting(buf)
+        pids, votes = buf.selected_pids.copy(), buf.votes.copy()
+
+        for _ in range(5):
+            buf = buffers(many, X)
+            many._fit_eval(buf, 0, 77)
+            many._fit_voting(buf)
+            assert np.array_equal(buf.selected_pids, pids)
+            assert np.array_equal(buf.votes, votes)
+
+    def test_patch_weight_counting_agrees(self):
+        """Read modify write on a shared array, so the most likely place for a lost update."""
+        single, many, X = self._pair()
+
+        for dev in (single, many):
+            dev.patch_weights[:] = 0
+            for seed in range(6):
+                dev._fit_eval(buffers(dev, X), 0, seed)
+
+        assert np.array_equal(many.patch_weights, single.patch_weights)

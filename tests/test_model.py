@@ -174,3 +174,26 @@ def test_binary_and_regression_also_round_trip():
     back = pickle.loads(pickle.dumps(r))
     assert back.config.y_range == r.config.y_range
     assert np.allclose(back.predict(X)[0], r.predict(X)[0])
+
+
+def test_training_is_reproducible_across_thread_counts():
+    """End to end version of the per function checks in tests/backends. Every hot loop is an omp
+    parallel for, and a race would look like a different random draw rather than a failure."""
+    rng = np.random.default_rng(7)
+    X = rng.integers(0, 2, size=(150, 16), dtype=np.int32)
+    Y = ((X[:, :8].sum(1) > X[:, 8:].sum(1)).astype(int) + (X[:, 0] == 1)) % 3
+
+    def trained(device: str):
+        tm = MultiClassTM(128, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=5, device=device)
+        for _ in range(4):
+            tm.fit(X, Y, clause_drop_p=0.1)
+        return tm
+
+    single = trained("cpu:1")
+    many = trained("cpu:8")
+    if many.device_config._n_threads == 1:
+        pytest.skip("no working OpenMP flags on this machine")
+
+    assert np.array_equal(many.get_ta_states(), single.get_ta_states())
+    assert np.array_equal(many.get_weights(), single.get_weights())
+    assert np.array_equal(many.predict(X)[0], single.predict(X)[0])

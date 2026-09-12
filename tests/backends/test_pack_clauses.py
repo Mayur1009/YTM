@@ -6,10 +6,11 @@ import pytest
 from ytm._core.config import BaseTMConfig
 from ytm._core.device_config import DeviceConfig
 
-from .conftest import CoreDevice, sprinkle_includes
+from .conftest import CoreDevice, sprinkle_includes, thread_pair
 from .conftest import make_device as _make
 
 INCLUDE_P = 0.05  # sparse enough that most clauses stay satisfiable
+CONF = {"n_clauses": 256, "dim": (6, 6), "patch_dim": (3, 3), "n_classes": 4, "feat_maxs": 3}
 
 
 def make_device(n_feats: int = 2, feat_max: int = 3, n_clauses: int = 64, **kwargs) -> CoreDevice:
@@ -403,3 +404,29 @@ class TestFullScan:
         assert packed.clause_density[0] == -1
         assert tuple(packed.clause_position_bounds[0][:2]) == (2, 0), "the impossible y window is visible"
         assert tuple(packed.clause_feat_bounds[0, 0]) == (1, int(cfg._feat_maxs[0])), "features scanned anyway"
+
+
+def test_packing_is_the_same_on_one_thread_and_many():
+    """`pack_clauses` parallelises over clauses. Each iteration writes only its own slices, so a
+    difference here means a loop wrote outside its clause."""
+    single, many = thread_pair(factory=lambda device, **kw: _make(device=device, **{**kw, **CONF}))
+    rng = np.random.default_rng(21)
+    states = np.where(rng.random(single.ta_states.shape) < 0.05, single.config._include_state,
+                      single.config._include_state - 1).astype(np.uint32)
+
+    single.ta_states[:] = states
+    single.pack_clauses(force_repack=True, full=True)
+    expected = single.get_packed_clauses()
+
+    for _ in range(5):  # a race is intermittent, so one agreement proves little
+        many.ta_states[:] = states
+        many.pack_clauses(force_repack=True, full=True)
+        got = many.get_packed_clauses()
+        for field in ("clause_feat_bounds", "clause_position_bounds", "n_bounded_feats",
+                      "clause_density", "is_clause_synced"):
+            assert np.array_equal(getattr(got, field), getattr(expected, field)), field
+
+        # only the first n entries of the id list are written, the tail is uninitialised
+        for c in range(single.config._total_clauses):
+            n = expected.n_bounded_feats[c]
+            assert np.array_equal(got.bounded_feat_ids[c, :n], expected.bounded_feat_ids[c, :n]), c

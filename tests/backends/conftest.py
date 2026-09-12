@@ -23,11 +23,24 @@ class CoreDevice(CPUDevice):
     def _fit_update_bias(self, buf): ...
 
 
-def make_device(**kwargs) -> CoreDevice:
+def make_device(device: str = "cpu:1", **kwargs) -> CoreDevice:
     """A device from config options, with the defaults small enough to enumerate."""
     cfg = {"n_clauses": 8, "s": 10.0, "dim": (4, 4, 1), "n_classes": 2, "feat_maxs": 3, "seed": 1}
     cfg.update(kwargs)
-    return CoreDevice(BaseTMConfig(**cfg), DeviceConfig())
+    return CoreDevice(BaseTMConfig(**cfg), DeviceConfig(device=device))
+
+
+THREADS = 8  # every hot loop is `#pragma omp parallel for`, and the default device is single threaded
+
+
+def thread_pair(factory=make_device, **kwargs) -> tuple[CoreDevice, CoreDevice]:
+    """The same model compiled for one thread and for many.
+
+    A race in an omp loop is invisible in normal use: the algorithm is stochastic, so a corrupted
+    result looks like a different random draw. Identical seeds mean identical starting arrays, so
+    any difference in the output is the parallelism and nothing else.
+    """
+    return factory(device="cpu:1", **kwargs), factory(device=f"cpu:{THREADS}", **kwargs)
 
 
 def sprinkle_includes(dev: CoreDevice, rng: np.random.Generator, p: float = 0.05) -> None:
