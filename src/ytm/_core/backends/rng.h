@@ -17,13 +17,7 @@ INLINE_FN ull mix64(ull x) {
 }
 
 INLINE_FN ull hash_combine(ull a, ull b) { return mix64(a ^ mix64(b + 0x9e3779b97f4a7c15ULL)); }
-
-INLINE_FN ull rng_hash(ull seed, ull a, ull b, ull c) {
-    ull k = hash_combine(seed, a);
-    k = hash_combine(k, b);
-    k = hash_combine(k, c);
-    return k;
-}
+INLINE_FN ull rng_hash(ull seed, ull a, ull b) { return hash_combine(hash_combine(seed, a), b); }
 
 INLINE_FN float rand_uniform(ull key, uint* counter) {
     ull x = key ^ (ull)((*counter)++);
@@ -31,13 +25,15 @@ INLINE_FN float rand_uniform(ull key, uint* counter) {
     return (float)(x >> 32) * 0x1p-32f;
 }
 
-// Geometric sampling for getting the next trail number which will result in success, when all the trials have a
-// propability p.
-INLINE_FN int geom_sample(ull rng_key, uint* rng_counter, float p) {
+// Geometric sampling for getting the number of trials after which there will be success.
+INLINE_FN float geom_sample(ull rng_key, uint* rng_counter, float p) {
+    if (p >= 1.0f)
+        return 1.0f;
+    if (!(p > 0.0f))
+        return INFINITY;
     float u = rand_uniform(rng_key, rng_counter);
-    double u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
-    double log_u = log1p(-u_clamp);
-    double log_p = log1p(-p);
-    int sample = (int)(log_u / log_p) + 1;
-    return sample;
+    float u_clamp = clip(u, 1e-7f, 1.0f - 1e-7f);
+    float log_u = log1pf(-u_clamp);
+    float log_p = log1pf(-p);
+    return ceilf(log_u / log_p);
 }
