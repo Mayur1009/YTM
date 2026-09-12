@@ -55,6 +55,13 @@ void w_draw_geom(ull key, uint start, int n, float p, float* out) {
 }
 
 unsigned long long w_rng_hash(ull seed, ull a, ull b) { return rng_hash(seed, a, b); }
+
+// how far one geom_sample call advances the counter
+unsigned int w_geom_counter(ull key, float p) {
+    uint counter = 0;
+    geom_sample(key, &counter, p);
+    return counter;
+}
 unsigned long long w_mix64(ull x) { return mix64(x); }
 """
 
@@ -82,6 +89,7 @@ def _lib() -> ctypes.CDLL:
 
     lib = ctypes.CDLL(so_file)
     lib.w_rng_hash.restype = ctypes.c_uint64
+    lib.w_geom_counter.restype = ctypes.c_uint32
     lib.w_mix64.restype = ctypes.c_uint64
     return lib
 
@@ -114,3 +122,8 @@ def rng_hash(seed: int, a: int, b: int) -> int:
 
 def mix64(x: int) -> int:
     return _lib().w_mix64(ctypes.c_uint64(x))
+
+
+def geom_counter(key: int, p: float) -> int:
+    """How many uniforms one `geom_sample` call consumed."""
+    return _lib().w_geom_counter(ctypes.c_uint64(key), ctypes.c_float(p))

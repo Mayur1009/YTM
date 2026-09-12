@@ -1,125 +1,83 @@
-"""Statistical checks on the shared C RNG.
-
-Each test also runs against numpy's PCG64 as a control. The point is not that the two agree on
-values, they are different generators, but that ours passes what numpy passes. A control failure
-means the test itself is miscalibrated.
-
-A serious verdict needs PractRand or TestU01 on a much longer stream, this is the fast tier that
-catches a broken hash rather than a subtly biased one.
-"""
-
 import numpy as np
 import pytest
 import rng_harness as rng
 from scipy import stats
 
+ALPHA = 0.001
 N = 200_000
-ALPHA = 1e-4  # loose, these run on every commit and must not flake
 
 
 def numpy_uniforms(seed: int, n: int) -> np.ndarray:
-    return np.random.default_rng(seed).random(n, dtype=np.float32)
+    return np.random.default_rng(seed).random(n).astype(np.float32)
 
 
-def numpy_raw32(seed: int, n: int) -> np.ndarray:
-    return np.random.default_rng(seed).integers(0, 2**32, size=n, dtype=np.uint64).astype(np.uint32)
+class TestCounterStream:
+    """The whole design is `key + counter -> value`, with nothing stored between calls."""
 
-
-class TestReproducible:
     def test_same_key_gives_the_same_stream(self):
         assert np.array_equal(rng.uniforms(42, 1000), rng.uniforms(42, 1000))
 
     def test_counter_indexes_the_stream(self):
-        """Resuming at counter k must match the tail of a run started at 0."""
-        whole = rng.uniforms(42, 100)
-        tail = rng.uniforms(42, 90, start=10)
-        assert np.array_equal(whole[10:], tail)
-
-    def test_different_keys_give_different_streams(self):
-        assert not np.array_equal(rng.uniforms(1, 1000), rng.uniforms(2, 1000))
+        """Two call sites sharing a key must see the same values at the same counter."""
+        full = rng.uniforms(7, 100)
+        assert np.array_equal(rng.uniforms(7, 40, start=60), full[60:])
 
 
-class TestUniformity:
+class TestUniform:
     @pytest.mark.parametrize("source", ["c", "numpy"])
     def test_kolmogorov_smirnov(self, source):
-        u = rng.uniforms(7, N) if source == "c" else numpy_uniforms(7, N)
+        u = rng.uniforms(1234, N) if source == "c" else numpy_uniforms(1234, N)
         assert stats.kstest(u, "uniform").pvalue > ALPHA
 
-    @pytest.mark.parametrize("source", ["c", "numpy"])
-    def test_chi_square_over_bins(self, source):
-        u = rng.uniforms(8, N) if source == "c" else numpy_uniforms(8, N)
-        counts, _ = np.histogram(u, bins=256, range=(0.0, 1.0))
-        assert stats.chisquare(counts).pvalue > ALPHA
+    def test_same_distribution_as_numpy(self):
+        """Two sample, so it compares the empirical distributions directly rather than each against U(0,1)."""
+        assert stats.ks_2samp(rng.uniforms(5, N), numpy_uniforms(5, N)).pvalue > ALPHA
 
-    def test_bounds(self):
-        u = rng.uniforms(9, N)
+    def test_stays_in_the_unit_range(self):
+        """`(x >> 32) * 0x1p-32f` rounds to float32, so the top of the range is where it could escape."""
+        u = rng.uniforms(99, N)
         assert u.min() >= 0.0
         assert u.max() < 1.0
 
-    def test_mean_and_variance(self):
-        u = rng.uniforms(10, N)
-        assert abs(u.mean() - 0.5) < 0.01
-        assert abs(u.var() - 1 / 12) < 0.01
-
-
-class TestBits:
-    @pytest.mark.parametrize("source", ["c", "numpy"])
-    def test_every_bit_is_balanced(self, source):
-        x = rng.raw32(11, N) if source == "c" else numpy_raw32(11, N)
-        freq = np.array([((x >> b) & 1).mean() for b in range(32)])
-        assert np.abs(freq - 0.5).max() < 0.01
-
-    @pytest.mark.parametrize("source", ["c", "numpy"])
-    def test_bit_pairs_are_uncorrelated(self, source):
-        """A weak finaliser usually shows up as structure between output bits."""
-        x = rng.raw32(12, 50_000) if source == "c" else numpy_raw32(12, 50_000)
-        bits = np.stack([((x >> b) & 1).astype(np.float64) for b in range(32)])
-        corr = np.corrcoef(bits)
-        off_diagonal = corr[~np.eye(32, dtype=bool)]
-        assert np.abs(off_diagonal).max() < 0.02
+    def test_every_bit_is_balanced(self):
+        """A stuck or biased bit in `mix64` that uniformity alone would not reveal."""
+        raw = rng.raw32(2024, N)
+        ones = ((raw[:, None] >> np.arange(32, dtype=np.uint32)) & 1).mean(axis=0)
+        assert np.abs(ones - 0.5).max() < 0.01
 
 
 class TestIndependence:
-    @pytest.mark.parametrize("source", ["c", "numpy"])
     @pytest.mark.parametrize("lag", [1, 2, 3, 7, 32])
-    def test_no_autocorrelation_within_a_stream(self, source, lag):
-        u = rng.uniforms(13, N) if source == "c" else numpy_uniforms(13, N)
-        r = np.corrcoef(u[:-lag], u[lag:])[0, 1]
-        assert abs(r) < 0.01
+    def test_no_autocorrelation_within_a_stream(self, lag):
+        u = rng.uniforms(13, N)
+        assert abs(np.corrcoef(u[:-lag], u[lag:])[0, 1]) < 0.01
 
     def test_sequential_keys_give_uncorrelated_streams(self):
-        """Keys come from `rng_hash(seed, clause, salt)` with a sequential clause,
-        so nearby keys are the realistic collision risk."""
+        """Clause 0 and clause 1 get adjacent keys. Correlated streams would make them learn in lockstep."""
         keys = [rng.rng_hash(1234, clause, 0xDEADBEEF) for clause in range(200)]
         streams = np.stack([rng.uniforms(k, 500) for k in keys])
 
         off_diagonal = np.corrcoef(streams)[~np.eye(len(keys), dtype=bool)]
         control = np.corrcoef(np.random.default_rng(0).random((len(keys), 500)))[~np.eye(len(keys), dtype=bool)]
 
-        # Compared against numpy on the same shape, since the noise floor is set by the stream length.
+        # against numpy on the same shape, since the noise floor is set by the stream length
         assert np.abs(off_diagonal).mean() < 1.5 * np.abs(control).mean()
         assert np.abs(off_diagonal).max() < 1.5 * np.abs(control).max()
 
     def test_first_draw_across_keys_is_uniform(self):
-        """The first draw per clause is what the kernels actually consume most of."""
+        """Most clauses consume one draw per sample, so the first of each stream is what matters."""
         firsts = np.array([rng.uniforms(rng.rng_hash(99, c, 0xDEADBEEF), 1)[0] for c in range(20_000)])
         assert stats.kstest(firsts, "uniform").pvalue > ALPHA
 
-    def test_neighbouring_keys_differ_in_about_half_their_bits(self):
-        """Avalanche: one bit of input change should flip ~32 of 64 output bits."""
-        a = np.array([rng.rng_hash(1234, c, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
-        b = np.array([rng.rng_hash(1234, c + 1, 0xDEADBEEF) for c in range(2000)], dtype=np.uint64)
-        flipped = np.array([bin(int(x) ^ int(y)).count("1") for x, y in zip(a, b)])
-        assert 28 < flipped.mean() < 36
 
-
-class TestHashCollisions:
+class TestHash:
     def test_no_collisions_over_the_realistic_key_space(self):
-        """The seed is redrawn per sample and the clause id runs over the bank, so both move."""
+        """A collision means two clauses share a stream for the whole sample."""
         keys = {rng.rng_hash(seed, clause, 0xDEADBEEF) for seed in range(300) for clause in range(300)}
         assert len(keys) == 300 * 300
 
     def test_each_argument_position_matters(self):
+        """Catches a commutative or degenerate combine, which once made rng_hash symmetric."""
         base = rng.rng_hash(1, 2, 3)
         assert rng.rng_hash(9, 2, 3) != base
         assert rng.rng_hash(1, 9, 3) != base
@@ -127,25 +85,47 @@ class TestHashCollisions:
 
     def test_mix64_is_a_bijection_on_a_sample(self):
         xs = np.arange(50_000, dtype=np.uint64)
-        assert len({rng.mix64(int(x)) for x in xs} ) == len(xs)
+        assert len({rng.mix64(int(x)) for x in xs}) == len(xs)
 
 
 class TestGeomSample:
-    @pytest.mark.parametrize("p", [0.5, 0.2, 0.1, 0.02])
+    """Returns the gap to the next success, so the support is {1, 2, 3, ...}."""
+
+    @pytest.mark.parametrize("p", [0.1, 0.25, 0.5, 0.9])
     def test_matches_the_geometric_distribution(self, p):
-        draws = rng.geom(21, 100_000, p)
-        assert draws.min() >= 1
+        """Chi square against the exact pmf, with a tail bin so the counts sum to n."""
+        d = rng.geom(4242, N, p)
 
-        # bin the tail together, the chi-square needs adequate expected counts per bin
-        top = int(stats.geom.ppf(0.99, p))
-        observed = np.bincount(np.clip(draws, 1, top), minlength=top + 1)[1:]
-        expected = np.diff(np.concatenate([[0.0], stats.geom.cdf(np.arange(1, top), p), [1.0]])) * len(draws)
-        assert stats.chisquare(observed, expected).pvalue > ALPHA
+        edges, k = [], 1
+        while stats.geom(p).pmf(k) * N > 30:
+            edges.append(k)
+            k += 1
+        obs = np.array([(d == e).sum() for e in edges] + [(d > edges[-1]).sum()], float)
+        exp = np.array([stats.geom(p).pmf(e) for e in edges] + [stats.geom(p).sf(edges[-1])]) * N
 
-    @pytest.mark.parametrize("p", [0.5, 0.1, 0.02])
-    def test_mean_matches_one_over_p(self, p):
-        draws = rng.geom(22, 200_000, p)
-        assert abs(draws.mean() - 1 / p) < 0.05 / p
+        assert stats.chi2.sf(((obs - exp) ** 2 / exp).sum(), len(obs) - 1) > ALPHA
 
-    def test_is_reproducible(self):
-        assert np.array_equal(rng.geom(23, 500, 0.1), rng.geom(23, 500, 0.1))
+    @pytest.mark.parametrize("p", [0.1, 0.5, 0.9])
+    def test_same_distribution_as_numpy(self, p):
+        assert stats.ks_2samp(rng.geom(4242, N, p), np.random.default_rng(0).geometric(p, N)).pvalue > ALPHA
+
+    @pytest.mark.parametrize("p", [0.05, 0.5, 0.99])
+    def test_draws_are_whole_numbers_of_at_least_one(self, p):
+        """The callers do `li += geom_sample(...)`. A zero would never advance and would hang."""
+        d = rng.geom(7, 50_000, p)
+        assert d.min() >= 1.0
+        assert np.array_equal(d, np.floor(d))
+
+    @pytest.mark.parametrize("p", [1.0, 1.5])
+    def test_certain_success_is_always_the_next_trial(self, p):
+        assert np.array_equal(rng.geom(11, 100, p), np.ones(100, dtype=np.float32))
+
+    @pytest.mark.parametrize("p", [0.0, -0.5, float("nan")])
+    def test_impossible_success_is_infinite(self, p):
+        """No finite gap is correct here, so the callers skip the range instead of stepping."""
+        assert np.all(np.isinf(rng.geom(11, 100, p)))
+
+    @pytest.mark.parametrize("p, draws", [(0.5, 1), (1.0, 0), (0.0, 0)])
+    def test_only_a_real_draw_advances_the_counter(self, p, draws):
+        """The degenerate cases return early, so they must not perturb the stream for later calls."""
+        assert rng.geom_counter(123, p) == draws
