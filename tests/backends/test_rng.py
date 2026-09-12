@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
-import rng_harness as rng
 from scipy import stats
+
+from . import rng_harness as rng
 
 ALPHA = 0.001
 N = 200_000
