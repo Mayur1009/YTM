@@ -2,6 +2,9 @@
 #include "cpu.h"
 #define TOTAL_CLAUSES 1000
 #define INCLUDE_STATE 128
+#define MAX_TA_STATE 255
+#define BOOST_TP_INC 1
+#define BOOST_TP_DEC 0
 #define CLASSES 10
 #define COALESCED 0
 #define S 10.0f

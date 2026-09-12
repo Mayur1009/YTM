@@ -9,12 +9,15 @@ struct PositionResult {
     bool valid;
 };
 
-__device__ inline PositionResult scan_position_literals(const warp_t& warp, const uint* ta_state) {
+// `full` keeps scanning after a contradiction, so every bound is real and the clause can be
+// inspected to see where it went wrong. Training passes 0 and takes the early exits.
+__device__ inline PositionResult scan_position_literals(const warp_t& warp, const uint* ta_state, int full) {
 #if POSITION_LITERALS
     int lane = warp.thread_rank();
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
     uint includes = 0;
+    bool valid = true;
 
     for (int base = 0; base < N_POSITION_FEATS_Y; base += WARP_SIZE) {
         int lit = base + lane;
@@ -30,8 +33,11 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
             }
 #endif
         }
-        if (warp.any(pos0 > pos1))
-            return {pos0, pos1, pos2, pos3, includes, false};
+        if (warp.any(pos0 > pos1)) {
+            valid = false;
+            if (!full)
+                return {pos0, pos1, pos2, pos3, includes, false};
+        }
     }
 
     for (int base = 0; base < N_POSITION_FEATS_X; base += WARP_SIZE) {
@@ -48,16 +54,20 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
             }
 #endif
         }
-        if (warp.any(pos2 > pos3))
-            return {pos0, pos1, pos2, pos3, includes, false};
+        if (warp.any(pos2 > pos3)) {
+            valid = false;
+            if (!full)
+                return {pos0, pos1, pos2, pos3, includes, false};
+        }
     }
 
     pos0 = cg::reduce(warp, pos0, cg::greater<int>());
     pos1 = cg::reduce(warp, pos1, cg::less<int>());
     pos2 = cg::reduce(warp, pos2, cg::greater<int>());
     pos3 = cg::reduce(warp, pos3, cg::less<int>());
-    return {pos0, pos1, pos2, pos3, includes, (pos0 <= pos1 && pos2 <= pos3)};
+    return {pos0, pos1, pos2, pos3, includes, (valid && pos0 <= pos1 && pos2 <= pos3)};
 #else
+    (void)full;
     return {0, N_PATCHES_Y - 1, 0, N_PATCHES_X - 1, 0, true};
 #endif
 }
@@ -70,7 +80,7 @@ struct FeatureResult {
 
 __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const uint* ta_state, const int* feat_mins,
                                                       const int* feat_maxs, const int* literal_offsets,
-                                                      int* feat_bounds, int* bounded_feat_id) {
+                                                      int* feat_bounds, int* bounded_feat_id, int full) {
     int lane = warp.thread_rank();
     uint n_includes = 0;
     int write_offset = 0;
@@ -115,8 +125,8 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
         }
         write_offset += __popc(mask);
 
-        all_valid = warp.all(!(in_range && lb > ub));
-        if (!all_valid)
+        all_valid = all_valid && warp.all(!(in_range && lb > ub));
+        if (!all_valid && !full)
             break;
     }
 
@@ -126,7 +136,7 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
 extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int* feat_mins, const int* feat_maxs,
                                         const int* literal_offsets, int* clause_position_bounds,
                                         int* clause_feat_bounds, int* bounded_feat_ids, int* n_bounded_feats,
-                                        int* clause_density, int8_t* is_clause_synced) {
+                                        int* clause_density, int8_t* is_clause_synced, int full) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -140,7 +150,7 @@ extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int*
         const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_position_bounds[clause * 4];
 
-        PositionResult pr = scan_position_literals(warp, ta_state);
+        PositionResult pr = scan_position_literals(warp, ta_state, full);
 
         if (lane == 0) {
             pos[0] = pr.pos0;
@@ -149,7 +159,7 @@ extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int*
             pos[3] = pr.pos3;
         }
 
-        if (!pr.valid) {
+        if (!pr.valid && !full) {
             if (lane == 0) {
                 clause_density[clause] = -1;
                 is_clause_synced[clause] = 1;
@@ -160,12 +170,12 @@ extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int*
         int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         int* cfids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
 
-        FeatureResult fr = scan_feature_literals(warp, ta_state, feat_mins, feat_maxs, literal_offsets, cfb, cfids);
+        FeatureResult fr = scan_feature_literals(warp, ta_state, feat_mins, feat_maxs, literal_offsets, cfb, cfids, full);
         uint total_inc = cg::reduce(warp, pr.includes + fr.includes, cg::plus<uint>());
 
         if (lane == 0) {
             n_bounded_feats[clause] = fr.n_bounded_feats;
-            clause_density[clause] = fr.all_valid ? (int)total_inc : -1;
+            clause_density[clause] = (pr.valid && fr.all_valid) ? (int)total_inc : -1;
             is_clause_synced[clause] = 1;
         }
     }

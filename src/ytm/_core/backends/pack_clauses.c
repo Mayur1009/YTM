@@ -8,11 +8,12 @@ typedef struct {
     bool valid;
 } PositionResult;
 
-static inline PositionResult scan_position_literals(const uint* ta_state) {
+static inline PositionResult scan_position_literals(const uint* ta_state, int full) {
 #if POSITION_LITERALS
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
     uint includes = 0;
+    bool valid = true;
 
     for (int lit = 0; lit < N_POSITION_FEATS_Y; ++lit) {
         if (is_included(ta_state[lit])) {
@@ -27,8 +28,11 @@ static inline PositionResult scan_position_literals(const uint* ta_state) {
             includes++;
         }
 #endif
-        if (pos0 > pos1)
-            return (PositionResult){pos0, pos1, pos2, pos3, includes, false};
+        if (pos0 > pos1) {
+            valid = false;
+            if (!full)
+                return (PositionResult){pos0, pos1, pos2, pos3, includes, false};
+        }
     }
 
     for (int lit = 0; lit < N_POSITION_FEATS_X; ++lit) {
@@ -44,12 +48,16 @@ static inline PositionResult scan_position_literals(const uint* ta_state) {
             includes++;
         }
 #endif
-        if (pos2 > pos3)
-            return (PositionResult){pos0, pos1, pos2, pos3, includes, false};
+        if (pos2 > pos3) {
+            valid = false;
+            if (!full)
+                return (PositionResult){pos0, pos1, pos2, pos3, includes, false};
+        }
     }
 
-    return (PositionResult){pos0, pos1, pos2, pos3, includes, true};
+    return (PositionResult){pos0, pos1, pos2, pos3, includes, valid};
 #else
+    (void)full;
     return (PositionResult){0, N_PATCHES_Y - 1, 0, N_PATCHES_X - 1, 0, true};
 #endif
 }
@@ -61,7 +69,8 @@ typedef struct {
 } FeatureResult;
 
 static inline FeatureResult scan_feature_literals(const uint* ta_state, const int* feat_mins, const int* feat_maxs,
-                                                  const int* literal_offsets, int* feat_bounds, int* bounded_feat_ids) {
+                                                  const int* literal_offsets, int* feat_bounds, int* bounded_feat_ids,
+                                                  int full) {
     uint n_includes = 0;
     int write_offset = 0;
     bool all_valid = true;
@@ -100,7 +109,8 @@ static inline FeatureResult scan_feature_literals(const uint* ta_state, const in
 
         if (lb > ub) {
             all_valid = false;
-            break;
+            if (!full)
+                break;
         }
     }
 
@@ -110,7 +120,7 @@ static inline FeatureResult scan_feature_literals(const uint* ta_state, const in
 void pack_clauses(const uint* restrict global_ta_states, const int* restrict feat_mins, const int* restrict feat_maxs,
                   const int* restrict literal_offsets, int* restrict clause_position_bounds,
                   int* restrict clause_feat_bounds, int* restrict bounded_feat_ids, int* restrict n_bounded_feats,
-                  int32_t* restrict clause_density, int8_t* restrict is_clause_synced) {
+                  int32_t* restrict clause_density, int8_t* restrict is_clause_synced, int full) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (is_clause_synced[clause])
@@ -119,13 +129,13 @@ void pack_clauses(const uint* restrict global_ta_states, const int* restrict fea
         const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_position_bounds[clause * 4];
 
-        PositionResult pr = scan_position_literals(ta_state);
+        PositionResult pr = scan_position_literals(ta_state, full);
         pos[0] = pr.pos0;
         pos[1] = pr.pos1;
         pos[2] = pr.pos2;
         pos[3] = pr.pos3;
 
-        if (!pr.valid) {
+        if (!pr.valid && !full) {
             clause_density[clause] = -1;
             is_clause_synced[clause] = 1;
             continue;
@@ -134,10 +144,10 @@ void pack_clauses(const uint* restrict global_ta_states, const int* restrict fea
         int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
         int* cfids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
 
-        FeatureResult fr = scan_feature_literals(ta_state, feat_mins, feat_maxs, literal_offsets, cfb, cfids);
+        FeatureResult fr = scan_feature_literals(ta_state, feat_mins, feat_maxs, literal_offsets, cfb, cfids, full);
 
         n_bounded_feats[clause] = fr.n_bounded_feats;
-        clause_density[clause] = fr.all_valid ? (int32_t)(pr.includes + fr.includes) : -1;
+        clause_density[clause] = (pr.valid && fr.all_valid) ? (int32_t)(pr.includes + fr.includes) : -1;
         is_clause_synced[clause] = 1;
     }
 }

@@ -2,17 +2,38 @@ import pathlib
 import platform
 import subprocess
 import tempfile
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from .._device_checks import run_compiler
-from .base import BaseDevice, tqdm_bar
+from ..utils import FitBuffers, tqdm_bar
+from .base import BaseDevice
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
+
+
+@dataclass(kw_only=True)
+class CPUFitBuffers(FitBuffers):
+    """Adds the ctypes pointers, derived once per epoch rather than per sample."""
+
+    p_X: Any = field(init=False)
+    p_Y: Any = field(init=False)
+    p_clause_drop_mask: Any = field(init=False)
+    p_selected_pids: Any = field(init=False)
+    p_votes: Any = field(init=False)
+
+    def __post_init__(self):
+        self.p_X = self.X.ctypes.data_as(int32_p)
+        self.p_Y = self.Y.ctypes.data_as(float_p)
+        self.p_clause_drop_mask = self.clause_drop_mask.ctypes.data_as(int8_p)
+        self.p_selected_pids = self.selected_pids.ctypes.data_as(int32_p)
+        self.p_votes = self.votes.ctypes.data_as(float_p)
 
 
 def read_file(path: pathlib.Path) -> str:
@@ -57,12 +78,10 @@ class CPUDevice(BaseDevice):
 
         return CDLL(so_file)
 
-    def _build_code(self) -> str:
-        """Generated header plus the shared sources."""
+    def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        return self.config._header + "".join(
-            read_file(core / name) for name in ("cpu.h", "common.h", "rng.h", "pack_clauses.c", "evaluate.c", "interpret.c")
-        )
+        names = ("cpu.h", "common.h", "rng.h", "feedback.c", "pack_clauses.c", "evaluate.c", "interpret.c")
+        return {name: read_file(core / name) for name in names}
 
     def _init_lib(self):
         self.lib = self._compile_code(self._build_code())
@@ -90,7 +109,7 @@ class CPUDevice(BaseDevice):
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(max(1, n)))
 
-    def pack_clauses(self, force_repack: bool = False):
+    def pack_clauses(self, force_repack: bool = False, full: bool = False):
         if force_repack:
             self.packed_clauses.is_clause_synced.fill(0)
 
@@ -105,6 +124,59 @@ class CPUDevice(BaseDevice):
             self.p_n_bounded_feats,
             self.p_clause_density,
             self.p_is_clause_synced,
+            c_int(full),
+        )
+
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, **kwargs):
+        cfg = self.config
+        X = np.ascontiguousarray(X, dtype=np.int32)
+        Y = np.ascontiguousarray(Y, dtype=np.float32)
+
+        if clause_drop_p > 0.0:
+            drop_mask = (self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8)
+        else:
+            drop_mask = np.zeros(cfg._total_clauses, dtype=np.int8)
+
+        buf = self._fit_allocs(X, Y, drop_mask)
+
+        total, n = 0.0, 0
+        pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
+        for e in pbar:
+            _rng_key = int(self._rng.integers(1, 1 << 63, dtype=np.uint64))
+            loss = self.fit_sample(_rng_key, buf, e, **kwargs)
+            if loss is not None:
+                total, n = total + loss, n + 1
+                pbar.set_postfix(loss=f"{total / n:.4f}")
+
+        return total / n if n else None
+
+    # == fit steps ==
+    def _fit_eval(self, buf: CPUFitBuffers, e: int, rng_key):
+        self.lib.evaluate(
+            c_uint64(rng_key),
+            buf.p_X,
+            c_int(e),
+            buf.p_clause_drop_mask,
+            self.p_clause_position_bounds,
+            self.p_clause_feat_bounds,
+            self.p_bounded_feat_ids,
+            self.p_n_bounded_feats,
+            self.p_clause_density,
+            buf.p_selected_pids,
+            self.p_patch_weights,
+        )
+
+    def _fit_voting(self, buf: CPUFitBuffers):
+        self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, self.p_bias, buf.p_votes)
+
+    def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask: np.ndarray) -> CPUFitBuffers:
+        cfg = self.config
+        return CPUFitBuffers(
+            X=X,
+            Y=Y,
+            clause_drop_mask=clause_drop_mask,
+            selected_pids=np.empty(cfg._total_clauses, dtype=np.int32),
+            votes=np.empty(cfg.n_classes, dtype=np.float32),
         )
 
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:

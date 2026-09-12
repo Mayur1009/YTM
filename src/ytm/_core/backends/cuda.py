@@ -17,17 +17,16 @@ class CUDADevice(BaseDevice):
 
     def dev_init(self): ...
 
-    def _build_code(self) -> str:
-        """Generated header plus the shared sources. Subclasses append their own via `super()`."""
+    def _code_sections(self) -> dict[str, str]:
+        """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        return self.config._header + "".join(read_file(core / name) for name in ("cuda.h", "common.h", "rng.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu"))
+        names = ("cuda.h", "common.h", "rng.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        return {name: read_file(core / name) for name in names}
 
     def _kernel_names(self) -> tuple[str, ...]:
-        """Entry points to pull out of the module. Subclasses append their own via `super()`."""
         return ("pack_clauses", "infer_clauses", "infer_clauses_patchwise", "sum_votes", "wic", "wac")
 
     def _init_kernels(self):
-        """One module for the whole model, so nvrtc runs once instead of per source group."""
         with self.cuda_dev:
             self.module = cp.RawModule(code=self._build_code(), backend="nvrtc", options=())
             for name in self._kernel_names():
@@ -50,7 +49,7 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             return arr.get()
 
-    def pack_clauses(self, force_repack: bool = False):
+    def pack_clauses(self, force_repack: bool = False, full: bool = False):
         with self.cuda_dev:
             if force_repack:
                 self.packed_clauses.is_clause_synced.fill(0)
@@ -68,5 +67,6 @@ class CUDADevice(BaseDevice):
                     self.packed_clauses.n_bounded_feats,
                     self.packed_clauses.clause_density,
                     self.packed_clauses.is_clause_synced,
+                    np.int32(full),
                 ),
             )

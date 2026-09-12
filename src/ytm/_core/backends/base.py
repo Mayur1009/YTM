@@ -2,21 +2,10 @@ import abc
 import types
 
 import numpy as np
-from tqdm import tqdm
 
 from ..config import BaseTMConfig
 from ..device_config import DeviceConfig
-from .types import PackedClauses
-
-
-def tqdm_bar(iterable, **kwargs):
-    args = {
-        "leave": False,
-        "dynamic_ncols": True,
-        "bar_format": "{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
-    }
-    args.update(kwargs)
-    return tqdm(iterable, **args)
+from ..utils import PackedClauses
 
 
 class BaseDevice(abc.ABC):
@@ -35,13 +24,34 @@ class BaseDevice(abc.ABC):
     def _to_host(self, arr) -> np.ndarray: ...
 
     @abc.abstractmethod
-    def pack_clauses(self, force_repack: bool = False): ...
+    def _code_sections(self) -> dict[str, str]: ...
+
+    @abc.abstractmethod
+    def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
     @abc.abstractmethod
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, **kwargs): ...
 
     @abc.abstractmethod
-    def fit_sample(self, X, Y, e: int, **kwargs): ...
+    def fit_sample(self, rng_key: int, buf, e: int, **kwargs): ...
+
+    @abc.abstractmethod
+    def _fit_eval(self, buf, e: int, rng_key): ...
+
+    @abc.abstractmethod
+    def _fit_voting(self, buf): ...
+
+    @abc.abstractmethod
+    def _fit_decide_fb(self, rng_key, **kwargs): ...
+
+    @abc.abstractmethod
+    def _fit_apply_fb(self, buf, e: int, rng_key): ...
+
+    @abc.abstractmethod
+    def _fit_update_weights(self, **kwargs): ...
+
+    @abc.abstractmethod
+    def _fit_update_bias(self, **kwargs): ...
 
     @abc.abstractmethod
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray: ...
@@ -63,6 +73,14 @@ class BaseDevice(abc.ABC):
 
     def set_threads(self, n: int):
         raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")
+
+    @staticmethod
+    def make_device(config: BaseTMConfig, device_config: DeviceConfig) -> "BaseDevice":
+        """Build the device for `device_config`. Each backends package sets this on its classes."""
+        raise NotImplementedError("the backends package must set `make_device` on its device classes.")
+
+    def _build_code(self) -> str:
+        return self.config._header + "\n".join(self._code_sections().values())
 
     # == initializations ==
     def _init_clauses(self):
@@ -154,7 +172,6 @@ class BaseDevice(abc.ABC):
         return self._to_host(self.patch_weights).reshape(cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
     def get_packed_clauses(self) -> PackedClauses:
-        """Host copy of the packed form. Call `pack_clauses` first if it may be stale."""
         pc = self.packed_clauses
         return PackedClauses(
             clause_feat_bounds=self._to_host(pc.clause_feat_bounds),
@@ -164,3 +181,37 @@ class BaseDevice(abc.ABC):
             clause_density=self._to_host(pc.clause_density),
             is_clause_synced=self._to_host(pc.is_clause_synced),
         )
+
+    # == serialization ==
+    def get_state_dict(self) -> dict:
+        return {
+            "ta_states": self._to_host(self.ta_states),
+            "clause_weights": self._to_host(self.clause_weights),
+            "patch_weights": self._to_host(self.patch_weights),
+            "bias": self._to_host(self.bias),
+            "rng": self._rng.bit_generator.state,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.ta_states = self.xp.asarray(state["ta_states"])
+        self.clause_weights = self.xp.asarray(state["clause_weights"])
+        self.patch_weights = self.xp.asarray(state["patch_weights"])
+        self.bias = self.xp.asarray(state["bias"])
+        self._rng.bit_generator.state = state["rng"]
+        self.packed_clauses.is_clause_synced.fill(0)
+
+    def __getstate__(self) -> dict:
+        return {
+            "config": self.config,
+            "params": self.get_state_dict(),
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        self.__init__(state["config"], DeviceConfig())
+        self.load_state_dict(state["params"])
+
+    def to(self, device_config: DeviceConfig) -> "BaseDevice":
+        """The same model on a different backend. Returns a new device, `self` is left alone."""
+        new = type(self).make_device(self.config, device_config)
+        new.load_state_dict(self.get_state_dict())
+        return new
