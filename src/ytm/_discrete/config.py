@@ -12,6 +12,8 @@ class TMConfig(BaseTMConfig):
     def _derive_vars(self):
         super()._derive_vars()
 
+        assert not self.bias, "`bias` is not supported by the discrete update, it must stay False."
+
         if isinstance(self.T, (tuple, list)):
             self._T_min, self._T_max = (float(v) for v in self.T)
         else:

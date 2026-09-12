@@ -20,8 +20,11 @@
 #define N_RAW_PATCH_FEATS 100
 #define N_POSITION_FEATS 36
 #define N_LITERALS 272
+#define MAX_INCLUDED_LITERALS 272
 #define NEGATED_LITERALS 1
 #define POSITION_LITERALS 1
+#define BIAS 0
+#define TRACK_PATCH_WEIGHTS 1
 #endif
 
 // Derived macros and patch helpers, shared by the C and CUDA builds.

@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
+from enum import IntEnum
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,19 @@ try:
     _RICH = True
 except ImportError:
     _RICH = False
+
+
+class Feedback(IntEnum):
+    """Feedback codes shared by the C side and the python side. The header is generated from this."""
+
+    NONE = 0
+    T1A = 1
+    T1B = 2
+    T2 = 3
+
+    @classmethod
+    def defines(cls) -> str:
+        return "".join(f"#define FB_{f.name} {f.value}\n" for f in cls)
 
 
 def split_device_kwargs(opt: dict) -> tuple[dict, dict]:

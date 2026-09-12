@@ -3,6 +3,8 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
+from .utils import Feedback
+
 
 @dataclass()
 class BaseTMConfig:
@@ -239,6 +241,8 @@ class BaseTMConfig:
 #define BOOST_TP_DEC {int(self.boost_tp_dec)}
 
 #define TRACK_PATCH_WEIGHTS {int(self.track_patch_weights)}
+
+{Feedback.defines()}
 """
 
 

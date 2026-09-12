@@ -26,7 +26,7 @@ class BaseTM(abc.ABC):
         self.dev = self.dev.to(DeviceConfig(device=device, **device_kwargs))
 
     @abc.abstractmethod
-    def _fit(self, X: np.ndarray, Y: np.ndarray, **kwargs): ...
+    def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
 
     def score(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(np.ascontiguousarray(X), force_repack)

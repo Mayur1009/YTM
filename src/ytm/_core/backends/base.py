@@ -1,5 +1,6 @@
 import abc
 import types
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -30,10 +31,10 @@ class BaseDevice(abc.ABC):
     def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
     @abc.abstractmethod
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, **kwargs): ...
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, *args, **kwargs): ...
 
     @abc.abstractmethod
-    def fit_sample(self, rng_key: int, buf, e: int, **kwargs): ...
+    def fit_sample(self, rng_key: int, buf, e: int): ...
 
     @abc.abstractmethod
     def _fit_eval(self, buf, e: int, rng_key): ...
@@ -42,22 +43,19 @@ class BaseDevice(abc.ABC):
     def _fit_voting(self, buf): ...
 
     @abc.abstractmethod
-    def _fit_decide_fb(self, rng_key, **kwargs): ...
+    def _fit_decide_fb(self, buf, e: int, rng_key: int): ...
 
     @abc.abstractmethod
     def _fit_apply_fb(self, buf, e: int, rng_key): ...
 
     @abc.abstractmethod
-    def _fit_update_weights(self, **kwargs): ...
+    def _fit_update_weights(self, buf): ...
 
     @abc.abstractmethod
-    def _fit_update_bias(self, **kwargs): ...
+    def _fit_update_bias(self, buf): ...
 
     @abc.abstractmethod
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray: ...
-
-    @abc.abstractmethod
-    def infer(self, X: np.ndarray, batch_size: int): ...
 
     @abc.abstractmethod
     def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False): ...
@@ -81,6 +79,16 @@ class BaseDevice(abc.ABC):
 
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
+
+    def _fit_samples(self, pbar) -> Iterator[tuple[int, int]]:
+        for e in pbar:
+            yield e, int(self._rng.integers(1, 1 << 62, dtype=np.uint64))
+
+    def _fit_drop_mask(self, clause_drop_p: float):
+        cfg = self.config
+        if clause_drop_p <= 0.0:
+            return self.xp.zeros(cfg._total_clauses, dtype=np.int8)
+        return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
 
     # == initializations ==
     def _init_clauses(self):
@@ -193,10 +201,11 @@ class BaseDevice(abc.ABC):
         }
 
     def load_state_dict(self, state: dict) -> None:
-        self.ta_states = self.xp.asarray(state["ta_states"])
-        self.clause_weights = self.xp.asarray(state["clause_weights"])
-        self.patch_weights = self.xp.asarray(state["patch_weights"])
-        self.bias = self.xp.asarray(state["bias"])
+        """Written in place, so anything already pointing at these arrays stays valid."""
+        self.ta_states[:] = self.xp.asarray(state["ta_states"])
+        self.clause_weights[:] = self.xp.asarray(state["clause_weights"])
+        self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
+        self.bias[:] = self.xp.asarray(state["bias"])
         self._rng.bit_generator.state = state["rng"]
         self.packed_clauses.is_clause_synced.fill(0)
 

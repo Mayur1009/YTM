@@ -41,12 +41,12 @@ class BaseTM(CoreBaseTM):
         )
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
-        X = np.ascontiguousarray(X)[iota]
+        X = np.asarray(X, dtype=np.int32, order="C")[iota]
 
-        encoded_Y = self._encode_Y(Y[iota])
-        label_probs = self._label_sampler(encoded_Y, label_sampling)
+        encoded_Y = np.asarray(self._encode_Y(Y[iota]), dtype=np.float32, order="C")
+        label_probs = np.asarray(self._label_sampler(encoded_Y, label_sampling), dtype=np.float32, order="C")
 
-        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs=label_probs)
+        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
 
     def score(self, X: np.ndarray, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
         class_sums = super().score(X, force_repack)

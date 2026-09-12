@@ -127,29 +127,6 @@ class CPUDevice(BaseDevice):
             c_int(full),
         )
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, **kwargs):
-        cfg = self.config
-        X = np.ascontiguousarray(X, dtype=np.int32)
-        Y = np.ascontiguousarray(Y, dtype=np.float32)
-
-        if clause_drop_p > 0.0:
-            drop_mask = (self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8)
-        else:
-            drop_mask = np.zeros(cfg._total_clauses, dtype=np.int8)
-
-        buf = self._fit_allocs(X, Y, drop_mask)
-
-        total, n = 0.0, 0
-        pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
-        for e in pbar:
-            _rng_key = int(self._rng.integers(1, 1 << 63, dtype=np.uint64))
-            loss = self.fit_sample(_rng_key, buf, e, **kwargs)
-            if loss is not None:
-                total, n = total + loss, n + 1
-                pbar.set_postfix(loss=f"{total / n:.4f}")
-
-        return total / n if n else None
-
     # == fit steps ==
     def _fit_eval(self, buf: CPUFitBuffers, e: int, rng_key):
         self.lib.evaluate(
@@ -168,16 +145,6 @@ class CPUDevice(BaseDevice):
 
     def _fit_voting(self, buf: CPUFitBuffers):
         self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, self.p_bias, buf.p_votes)
-
-    def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask: np.ndarray) -> CPUFitBuffers:
-        cfg = self.config
-        return CPUFitBuffers(
-            X=X,
-            Y=Y,
-            clause_drop_mask=clause_drop_mask,
-            selected_pids=np.empty(cfg._total_clauses, dtype=np.int32),
-            votes=np.empty(cfg.n_classes, dtype=np.float32),
-        )
 
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
