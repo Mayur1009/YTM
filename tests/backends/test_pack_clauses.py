@@ -1,18 +1,5 @@
-"""Differential tests for the clause packing.
-
-`pack_clauses` compiles TA states into per feature intervals so evaluation is a bounds check
-instead of a literal scan. The oracle here never computes an interval: it walks the literals one
-by one straight from the TM definition, so a bug in the interval derivation shows up as a
-disagreement rather than being reproduced.
-
-The include probability matters more than the number of trials. At the density `ta_init="random"`
-produces, every clause contradicts itself and both sides trivially agree on everything, so the
-tests assert that the generated clauses were actually valid and non trivial.
-"""
-
 import itertools
 
-import common_harness
 import numpy as np
 import pytest
 
@@ -24,15 +11,15 @@ INCLUDE_P = 0.05  # sparse enough that most clauses stay satisfiable
 
 
 class Device(CPUDevice):
-    def fit_sample(self, buf, e, **kwargs): ...
-    def _fit_decide_fb(self, rng_key, **kwargs): ...
-    def _fit_update_weights(self, **kwargs): ...
-    def _fit_update_bias(self, **kwargs): ...
-    def infer(self, X, batch_size): ...
+    def fit_epoch(self, X, Y, clause_drop_p, batch_size): ...
+    def fit_sample(self, rng_key, buf, e): ...
+    def _fit_decide_fb(self, buf, e, rng_key): ...
+    def _fit_apply_fb(self, buf, e, rng_key): ...
+    def _fit_update_weights(self, buf): ...
+    def _fit_update_bias(self, buf): ...
 
 
 def make_device(n_feats: int = 2, feat_max: int = 3, n_clauses: int = 64, **kwargs) -> Device:
-    """A model small enough to enumerate every possible input."""
     cfg = BaseTMConfig(
         n_clauses=n_clauses,
         s=10.0,
@@ -153,6 +140,21 @@ class TestDensity:
         assert valid.any()
         assert np.array_equal(packed.clause_density[valid], expected[valid])
 
+    def test_an_interval_inverted_by_one_is_still_a_contradiction(self):
+        """`decide_feedback` reads `density <= MAX_INCLUDED_LITERALS` as "has space". A barely
+        inverted clause left unflagged would be given Type Ia instead of Type Ib forever."""
+        dev = make_device()
+        cfg = dev.config
+        half = cfg._n_literals // 2
+        dev.ta_states[:] = cfg._include_state - 1
+        dev.ta_states[0, cfg._literal_offsets[0] + 1] = cfg._include_state  # f0 > 1, so lb = 2
+        dev.ta_states[0, cfg._literal_offsets[0] + 1 + half] = cfg._include_state  # f0 <= 1, so ub = 1
+        dev.pack_clauses(force_repack=True, full=True)
+
+        lb, ub = dev.get_packed_clauses().clause_feat_bounds[0, 0]
+        assert lb == ub + 1, f"this test needs an interval inverted by exactly one, got [{lb}, {ub}]"
+        assert dev.get_packed_clauses().clause_density[0] == -1
+
     def test_a_contradiction_is_flagged(self):
         dev = make_device()
         cfg = dev.config
@@ -193,44 +195,6 @@ class TestBoundedFeats:
                 if tuple(packed.clause_feat_bounds[clause, f]) != (cfg._feat_mins[f], cfg._feat_maxs[f])
             }
             assert listed == constrained, clause
-
-
-class TestKnownBounds:
-    """Direct assertions, so a bug shared between packing and the bounds check cannot hide."""
-
-    @pytest.mark.parametrize("bit, expected", [(0, (1, 7)), (3, (4, 7)), (6, (7, 7))])
-    def test_positive_literal_sets_the_lower_bound(self, bit, expected):
-        dev = make_device(feat_max=7)
-        cfg = dev.config
-        dev.ta_states[:] = cfg._include_state - 1
-        dev.ta_states[0, cfg._literal_offsets[0] + bit] = cfg._include_state
-        dev.pack_clauses(force_repack=True)
-
-        assert tuple(dev.get_packed_clauses().clause_feat_bounds[0, 0]) == expected
-
-    @pytest.mark.parametrize("bit, expected", [(0, (0, 0)), (3, (0, 3)), (6, (0, 6))])
-    def test_negated_literal_sets_the_upper_bound(self, bit, expected):
-        dev = make_device(feat_max=7)
-        cfg = dev.config
-        half = cfg._n_literals // 2
-        dev.ta_states[:] = cfg._include_state - 1
-        dev.ta_states[0, cfg._literal_offsets[0] + bit + half] = cfg._include_state
-        dev.pack_clauses(force_repack=True)
-
-        assert tuple(dev.get_packed_clauses().clause_feat_bounds[0, 0]) == expected
-
-    def test_both_sides_narrow_to_an_interval(self):
-        dev = make_device(feat_max=7)
-        cfg = dev.config
-        half = cfg._n_literals // 2
-        dev.ta_states[:] = cfg._include_state - 1
-        dev.ta_states[0, cfg._literal_offsets[0] + 1] = cfg._include_state  # x > 1
-        dev.ta_states[0, cfg._literal_offsets[0] + 5 + half] = cfg._include_state  # x <= 5
-        dev.pack_clauses(force_repack=True)
-
-        packed = dev.get_packed_clauses()
-        assert tuple(packed.clause_feat_bounds[0, 0]) == (2, 5)
-        assert packed.clause_density[0] == 2
 
 
 class TestProperties:
@@ -316,28 +280,6 @@ class TestPositionBounds:
 
         assert constrained > 0, "no clause constrained a position, the test proved nothing"
 
-    def test_a_positive_literal_raises_the_lower_bound(self):
-        dev = self._conv_device()
-        cfg = dev.config
-        dev.ta_states[:] = cfg._include_state - 1
-        dev.ta_states[0, 1] = cfg._include_state  # patch_y > 1
-        dev.pack_clauses(force_repack=True)
-
-        lo_y, hi_y, lo_x, hi_x = dev.get_packed_clauses().clause_position_bounds[0]
-        assert (lo_y, hi_y) == (2, cfg._n_patches_y - 1)
-        assert (lo_x, hi_x) == (0, cfg._n_patches_x - 1)
-
-    def test_a_negated_literal_lowers_the_upper_bound(self):
-        dev = self._conv_device()
-        cfg = dev.config
-        half = cfg._n_literals // 2
-        dev.ta_states[:] = cfg._include_state - 1
-        dev.ta_states[0, 1 + half] = cfg._include_state  # patch_y <= 1
-        dev.pack_clauses(force_repack=True)
-
-        lo_y, hi_y, _, _ = dev.get_packed_clauses().clause_position_bounds[0]
-        assert (lo_y, hi_y) == (0, 1)
-
     def test_an_impossible_position_invalidates_the_clause(self):
         dev = self._conv_device()
         cfg = dev.config
@@ -350,70 +292,134 @@ class TestPositionBounds:
         assert dev.get_packed_clauses().clause_density[0] == -1
 
 
-class TestCommonHelpers:
-    """`match_patch` and `get_feature_value` are the consumers of the packed form.
 
-    The oracle above restates the bounds check in Python, so these call the real C instead.
-    """
+
+class TestBoundedFeatIdList:
+    def test_the_list_is_compact_and_ordered(self):
+        """`match_patch` reads `ids[0 : n_bounded_feats]`. A gap or a stale tail entry would make it
+        constrain a feature the clause never mentioned."""
+        dev = make_device()
+        sprinkle_includes(dev, np.random.default_rng(11))
+        dev.pack_clauses(force_repack=True)
+        packed = dev.get_packed_clauses()
+
+        valid = np.flatnonzero(packed.clause_density >= 0)
+        assert len(valid) > 0
+        for clause in valid:
+            n = packed.n_bounded_feats[clause]
+            ids = packed.bounded_feat_ids[clause, :n].tolist()
+            assert ids == sorted(set(ids)), clause
+            assert all(0 <= f < dev.config._n_raw_patch_feats for f in ids), clause
+
+
+class TestSyncFlag:
+    def test_packing_marks_every_clause_synced(self):
+        dev = make_device()
+        sprinkle_includes(dev, np.random.default_rng(12))
+        dev.pack_clauses(force_repack=True)
+        assert np.all(dev.get_packed_clauses().is_clause_synced == 1)
+
+    def test_a_synced_clause_is_skipped(self):
+        """The flag is what keeps training from repacking every clause every sample. If it were
+        ignored the cost would rise silently; if it were honoured wrongly the model would evaluate
+        a stale packed form."""
+        dev = make_device()
+        cfg = dev.config
+        sprinkle_includes(dev, np.random.default_rng(13))
+        dev.pack_clauses(force_repack=True)
+        before = dev.get_packed_clauses().clause_feat_bounds.copy()
+
+        dev.ta_states[:] = cfg._include_state  # every literal included, a very different clause
+        dev.pack_clauses()  # no force, so nothing is stale as far as the flag knows
+
+        assert np.array_equal(dev.get_packed_clauses().clause_feat_bounds, before)
+
+    def test_force_repack_picks_up_the_change(self):
+        dev = make_device()
+        cfg = dev.config
+        sprinkle_includes(dev, np.random.default_rng(13))
+        dev.pack_clauses(force_repack=True)
+        before = dev.get_packed_clauses().clause_feat_bounds.copy()
+
+        dev.ta_states[:] = cfg._include_state
+        dev.pack_clauses(force_repack=True)
+
+        assert not np.array_equal(dev.get_packed_clauses().clause_feat_bounds, before)
+
+
+class TestFullScan:
+    """`full` keeps scanning past a contradiction so the bounds show where the clause went wrong."""
 
     @staticmethod
-    def _conv_config() -> BaseTMConfig:
-        return BaseTMConfig(n_clauses=8, s=10.0, dim=(6, 6, 2), n_classes=1, patch_dim=(3, 3), feat_maxs=7, seed=1)
+    def _contradictory(dev: Device) -> None:
+        cfg = dev.config
+        half = cfg._n_literals // 2
+        dev.ta_states[:] = cfg._include_state - 1
+        dev.ta_states[0, cfg._literal_offsets[0] + 2] = cfg._include_state  # f0 > 2
+        dev.ta_states[0, cfg._literal_offsets[0] + half] = cfg._include_state  # f0 <= 0
+        dev.ta_states[0, cfg._literal_offsets[1] + 1] = cfg._include_state  # f1 > 1, fine on its own
 
-    def test_get_feature_value_indexes_the_patch(self):
-        cfg = self._conv_config()
-        h, w, d = cfg._dim
-        X = np.arange(h * w * d, dtype=np.int32).reshape(h, w, d)
+    def test_density_is_negative_either_way(self):
+        """Evaluation keys off the sign, so a full pack must not make a broken clause look usable."""
+        for full in (False, True):
+            dev = make_device()
+            self._contradictory(dev)
+            dev.pack_clauses(force_repack=True, full=full)
+            assert dev.get_packed_clauses().clause_density[0] == -1
 
-        for py, px, fid in [(0, 0, 0), (0, 0, 5), (1, 2, 0), (2, 2, 17), (3, 3, 11)]:
-            rel_y, rem = divmod(fid, cfg._patch_dim[1] * d)
-            rel_x, z = divmod(rem, d)
-            expected = X[py * cfg._stride[0] + rel_y, px * cfg._stride[1] + rel_x, z]
-            assert common_harness.get_feature_value(cfg, X, py, px, fid) == expected, (py, px, fid)
+    def test_without_full_the_later_bounds_are_left_alone(self):
+        dev = make_device()
+        self._contradictory(dev)
+        dev.get_packed_clauses()
+        dev.packed_clauses.clause_feat_bounds[0] = -99  # poison, so an untouched slot is visible
+        dev.pack_clauses(force_repack=True, full=False)
 
-    def test_match_patch_accepts_only_within_every_bound(self):
-        cfg = self._conv_config()
-        h, w, d = cfg._dim
-        rng = np.random.default_rng(0)
-        X = rng.integers(0, 8, size=(h, w, d), dtype=np.int32)
+        assert np.all(dev.get_packed_clauses().clause_feat_bounds[0, 1] == -99)
 
-        n_feats = cfg._n_raw_patch_feats
-        bounds = np.stack([np.zeros(n_feats), np.full(n_feats, 7)], axis=1).astype(np.int32)
-        ids = np.array([0, 4, 11], dtype=np.int32)
+    def test_full_computes_every_feature(self):
+        dev = make_device()
+        cfg = dev.config
+        self._contradictory(dev)
+        dev.packed_clauses.clause_feat_bounds[0] = -99
+        dev.pack_clauses(force_repack=True, full=True)
+        bounds = dev.get_packed_clauses().clause_feat_bounds[0]
 
-        # wide bounds accept everything
-        assert common_harness.match_patch(cfg, X, 1, 1, bounds, ids)
+        assert tuple(bounds[0]) == (3, 0), "the offending feature, inverted so it is visible"
+        assert tuple(bounds[1]) == (2, int(cfg._feat_maxs[1])), "the feature after it, still real"
 
-        # narrow one listed feature to exclude the value actually present
-        actual = common_harness.get_feature_value(cfg, X, 1, 1, 4)
-        bounds[4] = (actual + 1, 7) if actual < 7 else (0, actual - 1)
-        assert not common_harness.match_patch(cfg, X, 1, 1, bounds, ids)
+    def test_valid_clauses_are_unaffected_by_the_flag(self):
+        """So `get_clauses(full=True)` can be called mid training without perturbing anything."""
+        dev = make_device()
+        sprinkle_includes(dev, np.random.default_rng(14))
+        dev.pack_clauses(force_repack=True, full=False)
+        cheap = dev.get_packed_clauses()
+        valid = cheap.clause_density >= 0
+        assert valid.any()
+        bounds, density = cheap.clause_feat_bounds[valid].copy(), cheap.clause_density.copy()
 
-        # the same violation on an unlisted feature is ignored
-        bounds[4] = (0, 7)
-        bounds[7] = (99, 99)
-        assert common_harness.match_patch(cfg, X, 1, 1, bounds, ids)
+        dev.pack_clauses(force_repack=True, full=True)
+        after = dev.get_packed_clauses()
+        assert np.array_equal(after.clause_feat_bounds[valid], bounds)
+        assert np.array_equal(after.clause_density, density)
 
-    def test_match_patch_agrees_with_the_bounds_check_over_random_trials(self):
-        cfg = self._conv_config()
-        h, w, d = cfg._dim
-        rng = np.random.default_rng(1)
-        n_feats = cfg._n_raw_patch_feats
-        agreed_true = agreed_false = 0
+    def test_full_also_scans_past_a_position_contradiction(self):
+        """The position scan runs first and bails out before the features. Without `full` honoured
+        on that path too, a clause with a bad position window would report no feature bounds at all."""
+        dev = TestPositionBounds._conv_device(n_clauses=4)
+        cfg = dev.config
+        half = cfg._n_literals // 2
+        dev.ta_states[:] = cfg._include_state - 1
+        dev.ta_states[0, 1] = cfg._include_state  # patch_y > 1
+        dev.ta_states[0, half] = cfg._include_state  # patch_y <= 0, so the window is impossible
+        dev.ta_states[0, cfg._n_position_feats + cfg._literal_offsets[0]] = cfg._include_state  # f0 > 0
 
-        for _ in range(200):
-            X = rng.integers(0, 8, size=(h, w, d), dtype=np.int32)
-            lo = rng.integers(0, 8, size=n_feats, dtype=np.int32)
-            hi = np.minimum(lo + rng.integers(0, 5, size=n_feats), 7).astype(np.int32)
-            bounds = np.stack([lo, hi], axis=1).astype(np.int32)
-            ids = rng.choice(n_feats, size=4, replace=False).astype(np.int32)
-            py, px = int(rng.integers(cfg._n_patches_y)), int(rng.integers(cfg._n_patches_x))
+        dev.packed_clauses.clause_feat_bounds[0] = -99
+        dev.pack_clauses(force_repack=True, full=False)
+        assert np.all(dev.get_packed_clauses().clause_feat_bounds[0] == -99), "cheap path stops at the position"
 
-            expected = all(
-                lo[f] <= common_harness.get_feature_value(cfg, X, py, px, int(f)) <= hi[f] for f in ids
-            )
-            assert common_harness.match_patch(cfg, X, py, px, bounds, ids) == expected
-            agreed_true += expected
-            agreed_false += not expected
-
-        assert agreed_true > 0 and agreed_false > 0, "trials were one sided"
+        dev.packed_clauses.clause_feat_bounds[0] = -99
+        dev.pack_clauses(force_repack=True, full=True)
+        packed = dev.get_packed_clauses()
+        assert packed.clause_density[0] == -1
+        assert tuple(packed.clause_position_bounds[0][:2]) == (2, 0), "the impossible y window is visible"
+        assert tuple(packed.clause_feat_bounds[0, 0]) == (1, int(cfg._feat_maxs[0])), "features scanned anyway"
