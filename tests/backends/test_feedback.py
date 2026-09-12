@@ -7,7 +7,7 @@ from . import feedback_harness as fh
 
 # At S = 1 every geometric draw is 1, so the feedbacks touch every literal in range and the result
 # is exact. That is what lets the range boundaries be asserted rather than sampled.
-BASE = dict(n_clauses=4, n_classes=2, feat_maxs=3, seed=1)
+BASE = {"n_clauses": 4, "n_classes": 2, "feat_maxs": 3, "seed": 1}
 DET = BaseTMConfig(**BASE, s=1.0, dim=(4, 3, 1), patch_dim=(2, 2), stride=(1, 1))
 DET_NO_POS = BaseTMConfig(**BASE, s=1.0, dim=(2, 2, 1), position_literals=False)
 DET_NO_NEG = BaseTMConfig(**BASE, s=1.0, dim=(2, 2, 1), negated_literals=False, position_literals=False)
@@ -40,7 +40,7 @@ def satisfied_mask(cfg: BaseTMConfig, X: np.ndarray, py: int, px: int) -> np.nda
     for fid in range(cfg._n_raw_patch_feats):
         lo = cfg._n_position_feats + cfg._literal_offsets[fid]
         n_bits = cfg._literal_offsets[fid + 1] - cfg._literal_offsets[fid]
-        ph, pw = cfg._patch_dim
+        pw = cfg._patch_dim[1]
         depth = cfg._dim[2]
         rel_y, rem = divmod(fid, pw * depth)
         rel_x, z = divmod(rem, depth)

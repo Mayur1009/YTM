@@ -46,7 +46,7 @@ class TestGetFeatureValue:
     @pytest.mark.parametrize("cfg", [CONV, FLAT], ids=["conv", "flat"])
     def test_matches_a_numpy_index_for_every_feature_and_patch(self, cfg):
         X = sample(cfg)
-        ph, pw = cfg._patch_dim
+        pw = cfg._patch_dim[1]
         sy, sx = cfg._stride
         depth = cfg._dim[2]
 

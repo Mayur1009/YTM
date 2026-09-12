@@ -81,7 +81,7 @@ def test_every_macro_used_in_an_if_is_emitted():
     for src in C_SOURCES:
         body = src.read_text()
         body = body[body.index("#endif") :] if "IS_NEOVIM_CLANGD_ENV" in body else body  # skip the lsp stubs
-        for line in re.findall(r"^\s*#(?:el)?if\s+(.+)$", body, re.M):
+        for line in re.findall(r"^\s*#(?:el)?if\s+(.+)$", body, re.MULTILINE):
             used |= set(re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", line))
 
     emitted = set(re.findall(r"#define (\w+)", BaseTMConfig(**DEFAULTS)._header))

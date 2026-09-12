@@ -3,43 +3,23 @@ import itertools
 import numpy as np
 import pytest
 
-from ytm._core.backends.cpu import CPUDevice
 from ytm._core.config import BaseTMConfig
 from ytm._core.device_config import DeviceConfig
+
+from .conftest import CoreDevice, sprinkle_includes
+from .conftest import make_device as _make
 
 INCLUDE_P = 0.05  # sparse enough that most clauses stay satisfiable
 
 
-class Device(CPUDevice):
-    def fit_epoch(self, X, Y, clause_drop_p, batch_size): ...
-    def fit_sample(self, rng_key, buf, e): ...
-    def _fit_decide_fb(self, buf, e, rng_key): ...
-    def _fit_apply_fb(self, buf, e, rng_key): ...
-    def _fit_update_weights(self, buf): ...
-    def _fit_update_bias(self, buf): ...
-
-
-def make_device(n_feats: int = 2, feat_max: int = 3, n_clauses: int = 64, **kwargs) -> Device:
-    cfg = BaseTMConfig(
-        n_clauses=n_clauses,
-        s=10.0,
-        dim=(n_feats, 1, 1),
-        n_classes=1,
-        feat_maxs=feat_max,
-        position_literals=False,
-        seed=1,
-        **kwargs,
+def make_device(n_feats: int = 2, feat_max: int = 3, n_clauses: int = 64, **kwargs) -> CoreDevice:
+    """A model small enough to enumerate every possible input."""
+    return _make(
+        n_clauses=n_clauses, dim=(n_feats, 1, 1), n_classes=1, feat_maxs=feat_max, position_literals=False, **kwargs
     )
-    return Device(cfg, DeviceConfig())
 
 
-def sprinkle_includes(dev: Device, rng: np.random.Generator, p: float = INCLUDE_P) -> None:
-    cfg = dev.config
-    dev.ta_states[:] = cfg._include_state - 1
-    dev.ta_states[rng.random(dev.ta_states.shape) < p] = cfg._include_state
-
-
-def clause_accepts(dev: Device, clause: int, x: np.ndarray) -> bool:
+def clause_accepts(dev: CoreDevice, clause: int, x: np.ndarray) -> bool:
     """The TM definition: a clause is a conjunction of its included literals.
 
     Thermometer literal `b` of feature `f` asserts `x[f] > feat_mins[f] + b`, its negation asserts
@@ -60,7 +40,7 @@ def clause_accepts(dev: Device, clause: int, x: np.ndarray) -> bool:
     return True
 
 
-def packed_accepts(dev: Device, packed, clause: int, x: np.ndarray) -> bool:
+def packed_accepts(dev: CoreDevice, packed, clause: int, x: np.ndarray) -> bool:
     """What the packed form accepts, mirroring the bounds check the kernels do."""
     if packed.clause_density[clause] < 0:
         return False
@@ -237,14 +217,14 @@ class TestPositionBounds:
     """
 
     @staticmethod
-    def _conv_device(n_clauses: int = 32) -> Device:
+    def _conv_device(n_clauses: int = 32) -> CoreDevice:
         cfg = BaseTMConfig(
             n_clauses=n_clauses, s=10.0, dim=(6, 6), n_classes=1, patch_dim=(3, 3), feat_maxs=1, seed=1
         )
-        return Device(cfg, DeviceConfig())
+        return CoreDevice(cfg, DeviceConfig())
 
     @staticmethod
-    def _position_bounds_naive(dev: Device, clause: int) -> tuple[int, int, int, int]:
+    def _position_bounds_naive(dev: CoreDevice, clause: int) -> tuple[int, int, int, int]:
         cfg = dev.config
         half = cfg._n_literals // 2
         included = dev.ta_states[clause] >= cfg._include_state
@@ -351,7 +331,7 @@ class TestFullScan:
     """`full` keeps scanning past a contradiction so the bounds show where the clause went wrong."""
 
     @staticmethod
-    def _contradictory(dev: Device) -> None:
+    def _contradictory(dev: CoreDevice) -> None:
         cfg = dev.config
         half = cfg._n_literals // 2
         dev.ta_states[:] = cfg._include_state - 1
