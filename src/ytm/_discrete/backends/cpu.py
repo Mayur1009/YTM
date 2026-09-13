@@ -64,8 +64,8 @@ class CPUDevice(CoreCPUDevice):
         self._fit_eval(buf, e, rng_key)
         self._fit_voting(buf)
         self._fit_decide_fb(buf, e, rng_key)
-        self._fit_update_weights(buf)
         self._fit_apply_fb(buf, e, rng_key)
+        self._fit_update_weights(buf)
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         """Turn the votes into a per class update probability, then pick a feedback type per clause."""

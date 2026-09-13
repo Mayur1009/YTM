@@ -46,3 +46,6 @@ class BaseTM(CoreBaseTM):
         Y = np.asarray(Y, dtype=np.float32, order="C")[iota]
 
         return self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr, lambda_)
+
+    def raw_votes(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+        return self.dev.raw_votes(np.ascontiguousarray(X), force_repack)

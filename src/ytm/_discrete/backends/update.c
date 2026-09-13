@@ -73,20 +73,7 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X,
             if (fb == FB_NONE)
                 continue;
 
-            if (fb == FB_T1A) {
-#if TYPE1A_FB
-                type1a_fb(rng_k, &rng_counter, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
-#endif
-            } else if (fb == FB_T1B) {
-#if TYPE1B_FB
-                type1b_fb(rng_k, &rng_counter, ta_states);
-#endif
-            } else {
-#if TYPE2_FB
-                type2_fb(Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
-#endif
-            }
-
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
             is_clause_synced[clause] = 0;
         }
     }
