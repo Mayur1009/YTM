@@ -3,7 +3,7 @@ from typing import Unpack
 import numpy as np
 
 from .base import BaseTM
-from .config import T_args
+from .config import T_Config
 
 
 class MultiClassTM(BaseTM):
@@ -83,7 +83,7 @@ class BinaryTM(BaseTM):
         T: float | tuple[float, float],
         s: float,
         dim: int | tuple[int, ...],
-        **opt: Unpack[T_args],
+        **opt: Unpack[T_Config],
     ):
         super().__init__(n_clauses, T, s, dim, 1, **opt)
 

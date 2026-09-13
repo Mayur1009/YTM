@@ -20,6 +20,10 @@ except ImportError:
     _RICH = False
 
 
+def enum_to_header(prefix: str, enum_cls: type[IntEnum]) -> str:
+    return "".join(f"#define {prefix}_{m.name} {m.value}\n" for m in enum_cls)
+
+
 class Feedback(IntEnum):
     """Feedback codes shared by the C side and the python side. The header is generated from this."""
 
@@ -27,10 +31,6 @@ class Feedback(IntEnum):
     T1A = 1
     T1B = 2
     T2 = 3
-
-    @classmethod
-    def defines(cls) -> str:
-        return "".join(f"#define FB_{f.name} {f.value}\n" for f in cls)
 
 
 def split_device_kwargs(opt: dict) -> tuple[dict, dict]:

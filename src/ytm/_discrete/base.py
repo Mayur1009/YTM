@@ -6,7 +6,7 @@ from .._core.base import BaseTM as CoreBaseTM
 from .._core.device_config import DeviceConfig
 from .._core.utils import split_device_kwargs
 from .backends import make_device
-from .config import T_args, TMConfig
+from .config import T_Config, TMConfig
 
 
 class BaseTM(CoreBaseTM):
@@ -20,7 +20,7 @@ class BaseTM(CoreBaseTM):
         s: float,
         dim: int | tuple[int, ...],
         n_classes: int,
-        **opt: Unpack[T_args],
+        **opt: Unpack[T_Config],
     ):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
         config = self.config_cls(n_clauses=n_clauses, T=T, s=s, dim=dim, n_classes=n_classes, **cfg_kw)

@@ -65,7 +65,7 @@ class DeviceConfig:
         self._warps_per_clause = 0
 
 
-class _DeviceConfig_T(TypedDict, total=False):
+class T_DeviceConfig(TypedDict, total=False):
     device: Literal["cpu", "cuda"] | str
 
     # cpu

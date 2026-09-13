@@ -3,7 +3,7 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
-from .utils import Feedback
+from .utils import Feedback, enum_to_header
 
 
 @dataclass()
@@ -242,11 +242,11 @@ class BaseTMConfig:
 
 #define TRACK_PATCH_WEIGHTS {int(self.track_patch_weights)}
 
-{Feedback.defines()}
+{enum_to_header("FB", Feedback)}
 """
 
 
-class _BaseTMConfig_T(TypedDict, total=False):
+class T_BaseTMConfig(TypedDict, total=False):
     # discrete input
     feat_mins: int | np.ndarray
     feat_maxs: int | np.ndarray

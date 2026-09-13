@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from .._core.config import BaseTMConfig, _BaseTMConfig_T
-from .._core.device_config import _DeviceConfig_T
+from .._core.config import BaseTMConfig, T_BaseTMConfig
+from .._core.device_config import T_DeviceConfig
 
 
 @dataclass(kw_only=True)
@@ -38,5 +38,5 @@ class RegressionConfig(TMConfig):
         assert self.y_range[0] < self.y_range[1], f"`y_range[0]` must be < `y_range[1]`, got {self.y_range}"
 
 
-class T_args(_BaseTMConfig_T, _DeviceConfig_T, total=False):
+class T_Config(T_BaseTMConfig, T_DeviceConfig, total=False):
     q: float

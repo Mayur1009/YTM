@@ -3,7 +3,7 @@ from typing import Unpack
 import numpy as np
 
 from .base import BaseTM
-from .config import RegressionConfig, T_args
+from .config import RegressionConfig, T_Config
 
 
 class RegressionTM(BaseTM):
@@ -17,7 +17,7 @@ class RegressionTM(BaseTM):
         s: float,
         dim: int | tuple[int, ...],
         y_range: tuple[float, float],
-        **opt: Unpack[T_args],
+        **opt: Unpack[T_Config],
     ):
         opt["negative_clauses"] = False
         super().__init__(n_clauses, (0.0, float(T)), s, dim, 1, y_range=y_range, **opt)
