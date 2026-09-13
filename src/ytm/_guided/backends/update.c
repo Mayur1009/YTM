@@ -82,44 +82,37 @@ void decide_feedback_grad(const ull seed, const float* grad, const float* clause
                           const int* selected_patch_ids, const int8_t* clause_drop_mask, const float lambda_,
                           uint8_t* feedback_type) {
 #pragma omp parallel for schedule(dynamic)
-    for (ull clause_class = 0; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class++) {
-        ull clause_id = clause_class / (ull)CLASSES;
-        ull class_id = clause_class % (ull)CLASSES;
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+        int ck = (selected_patch_ids[clause] >= 0) ? 1 : 0;
+        bool has_space = (clause_density[clause] <= (int)MAX_INCLUDED_LITERALS);
+        bool dropped = (clause_drop_mask[clause] == 1);
 
-#if COALESCED == 0
-        if (class_id != clause_id / (ull)CLAUSES_PER_CLASS)
-            continue;
-#endif
-
-        if (clause_drop_mask[clause_id] == 1) {
-            feedback_type[clause_class] = FB_NONE;
-            continue;
-        }
-
-        int ck = (selected_patch_ids[clause_id] >= 0) ? 1 : 0;
-        bool has_space = (clause_density[clause_id] <= (int)MAX_INCLUDED_LITERALS);
-        ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
-        float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
-        float g = grad[class_id];
-
-        int polarity = (w >= 0) - (w < 0);
-        int sign_grad = (g >= 0) - (g < 0);
-        int dir = polarity * sign_grad;
-        float update_prob = 1.0f - expf(-lambda_ * fabsf(g));
-
-        ull rng_k = rng_hash(seed, clause_class, 0xFEEDFACEULL);
+        ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
 
-        uint8_t fb;
-        if (rand_uniform(rng_k, &rng_counter) > update_prob) {
-            fb = FB_NONE;
-        } else {
-            bool t1a = (ck == 1 && dir > 0 && has_space);
-            bool t1b = ((ck == 0 && dir > 0) || (ck == 1 && dir > 0 && !has_space));
-            bool t2 = (ck == 1 && dir < 0);
-            fb = t1a ? FB_T1A : (t1b ? FB_T1B : (t2 ? FB_T2 : FB_NONE));
+        ull class_id;
+        LOOP_CLASS_ID(class_id, clause) {
+            uint8_t fb = FB_NONE;
+
+            if (!dropped) {
+                float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+                float g = grad[class_id];
+
+                int polarity = (w >= 0) - (w < 0);
+                int sign_grad = (g >= 0) - (g < 0);
+                int dir = polarity * sign_grad;
+                float update_prob = 1.0f - expf(-lambda_ * fabsf(g));
+
+                if (rand_uniform(rng_k, &rng_counter) <= update_prob) {
+                    bool t1a = (ck == 1 && dir > 0 && has_space);
+                    bool t1b = ((ck == 0 && dir > 0) || (ck == 1 && dir > 0 && !has_space));
+                    bool t2 = (ck == 1 && dir < 0);
+                    fb = t1a ? FB_T1A : (t1b ? FB_T1B : (t2 ? FB_T2 : FB_NONE));
+                }
+            }
+            feedback_type[rel_clause * (ull)CLASSES + class_id] = fb;
         }
-        feedback_type[clause_class] = fb;
     }
 }
 
@@ -168,6 +161,7 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X,
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         uint* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
         int patch_id = selected_patch_ids[clause];
@@ -180,7 +174,7 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X,
 #if FB_SIGNAL == FB_SIGNAL_GRAD
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
             if (fb == FB_NONE)
                 continue;
             apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);

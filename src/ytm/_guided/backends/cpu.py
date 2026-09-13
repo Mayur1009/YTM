@@ -76,7 +76,7 @@ class CPUDevice(CoreCPUDevice):
             extra["y_hat_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["loss_neg_ck"] = np.empty(cfg._total_clauses, dtype=np.float32)
         else:
-            feedback_type = np.zeros((cfg._total_clauses, cfg.n_classes), dtype=np.uint8)
+            feedback_type = np.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8)
 
         return GuidedFitBuffers(
             X=X,
