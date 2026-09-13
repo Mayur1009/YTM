@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +17,14 @@ OMP_FLAG_CANDIDATES = {
 }
 
 DEFAULT_COMPILE_FLAGS = ["-shared", "-fPIC", "-lm", "-O3", "-march=native", "-mtune=native"]
+
+# Tried in order, first one that links the probe below wins.
+LINK_FLAG_CANDIDATES = {
+    "clang": [[], ["-fuse-ld=/usr/bin/ld"]] if platform.system() == "Darwin" else [[]],
+    "gcc": [[]],
+}
+
+_LINK_PROBE = "int main(void) { return 0; }\n"
 
 _OMP_PROBE = """
 #include <omp.h>
@@ -88,9 +97,40 @@ def run_compiler(cmd: list[str]) -> None:
     subprocess.run(cmd, capture_output=True, check=True)
 
 
-def resolve_openmp_flags(compiler: str) -> list[str]:
-    """Return the first candidate flag set that compiles the OpenMP probe, or [] if none do."""
+def resolve_link_flags(compiler: str) -> list[str]:
+    """Return the first candidate flag set that links the probe below, or [] if none do."""
+    candidates = LINK_FLAG_CANDIDATES.get(compiler, [[]])
+    failures = []
+
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w") as f:
+        f.write(_LINK_PROBE)
+        f.flush()
+        out_file = f.name.replace(".c", ".out")
+
+        for flags in candidates:
+            try:
+                run_compiler([compiler] + flags + [f.name, "-o", out_file])
+            except subprocess.CalledProcessError as e:
+                failures.append(f"  {' '.join(flags) or '(no extra flags)'}\n{e.stderr.decode().strip()}")
+                continue
+
+            os.unlink(out_file)
+            return flags
+
+    warnings.warn(
+        f"Link check failed for compiler '{compiler}'. Tried:\n" + "\n".join(failures) + "\nProceeding without a linker override."
+    )
+    return []
+
+
+def resolve_openmp_flags(compiler: str, link_flags: list[str] | None = None) -> list[str]:
+    """Return the first candidate flag set that compiles the OpenMP probe, or [] if none do.
+
+    `link_flags` is whatever `resolve_link_flags` already found for this compiler, so the probe
+    doesn't fail for the same linker reason `resolve_link_flags` exists to work around.
+    """
     candidates = OMP_FLAG_CANDIDATES.get(compiler, [])
+    link_flags = link_flags or []
     failures = []
 
     with tempfile.NamedTemporaryFile(suffix=".c", mode="w") as f:
@@ -100,7 +140,7 @@ def resolve_openmp_flags(compiler: str) -> list[str]:
 
         for flags in candidates:
             try:
-                run_compiler([compiler, "-Werror=unknown-pragmas"] + flags + [f.name, "-o", out_file])
+                run_compiler([compiler, "-Werror=unknown-pragmas"] + link_flags + flags + [f.name, "-o", out_file])
             except subprocess.CalledProcessError as e:
                 failures.append(f"  {' '.join(flags)}\n{e.stderr.decode().strip()}")
                 continue

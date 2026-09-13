@@ -6,6 +6,7 @@ from ._device_checks import (
     check_cuda_available,
     parse_device,
     resolve_cuda_props,
+    resolve_link_flags,
     resolve_openmp_flags,
     select_compiler,
 )
@@ -51,8 +52,12 @@ class DeviceConfig:
 
         self._n_threads = n
         self._compiler = select_compiler()
-        self._compiler_flags = list(DEFAULT_COMPILE_FLAGS if self.compile_flags is None else self.compile_flags)
-        self._omp_flags = resolve_openmp_flags(self._compiler) if self._n_threads > 1 else []
+        link_flags = resolve_link_flags(self._compiler)
+        if self.compile_flags is None:
+            self._compiler_flags = list(DEFAULT_COMPILE_FLAGS) + link_flags
+        else:
+            self._compiler_flags = list(self.compile_flags)
+        self._omp_flags = resolve_openmp_flags(self._compiler, link_flags) if self._n_threads > 1 else []
 
         if not self._omp_flags:
             self._n_threads = 1
