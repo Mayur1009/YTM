@@ -4,9 +4,9 @@
 
 #include <math.h>
 
-void wic(int class_id, int polarity, const float* clause_weights, const int* clause_feat_bounds,
-         const int* clause_position_bounds, const int* clause_density, const float* patch_weights_norm,
-         const int* feat_min, const int* feat_max, float pw_th, float* output) {
+void wic(int class_id, int polarity, const float* restrict clause_weights, const int* restrict clause_feat_bounds,
+         const int* restrict clause_position_bounds, const int* restrict clause_density, const float* restrict patch_weights_norm,
+         const int* restrict feat_min, const int* restrict feat_max, float pw_th, float* restrict output) {
 #pragma omp parallel for schedule(dynamic) reduction(+ : output[ : HEIGHT * WIDTH * DEPTH])
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
 #if COALESCED == 0
@@ -55,9 +55,9 @@ void wic(int class_id, int polarity, const float* clause_weights, const int* cla
     }
 }
 
-void wac_sample(int class_id, int polarity, const int8_t* patch_output, const int e, const float* clause_weights,
-                const int* clause_feat_bounds, const int* clause_density, const int* feat_min, const int* feat_max,
-                float* output) {
+void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output, const int e, const float* restrict clause_weights,
+                const int* restrict clause_feat_bounds, const int* restrict clause_density, const int* restrict feat_min, const int* restrict feat_max,
+                float* restrict output) {
     const int8_t* patch_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
     float* out_e = &output[(ull)e * HEIGHT * WIDTH * DEPTH];
 

@@ -11,20 +11,20 @@
 
 #pragma once
 
-static inline void inc_lits(int start, int end, int offset, uint* ta_states) {
+static inline void inc_lits(int start, int end, int offset, TA_STATE_T* ta_states) {
     for (int li = start; li < end; ++li)
         if (ta_states[li + offset] < MAX_TA_STATE)
             ta_states[li + offset] += 1;
 }
 
-static inline void dec_lits(int start, int end, int offset, uint* ta_states) {
+static inline void dec_lits(int start, int end, int offset, TA_STATE_T* ta_states) {
     for (int li = start; li < end; ++li)
         if (ta_states[li + offset] > 0)
             ta_states[li + offset] -= 1;
 }
 
-static inline void prob_inc_lits(ull rng_key, uint* rng_counter, float prob, int start, int end, int offset,
-                             uint* ta_states) {
+static inline void prob_inc_lits(ull rng_key, uint* restrict rng_counter, float prob, int start, int end, int offset,
+                             TA_STATE_T* restrict ta_states) {
     float li = (float)start + geom_sample(rng_key, rng_counter, prob) - 1.0f;
     while (li < (float)end) {
         int idx = (int)li + offset;
@@ -34,8 +34,8 @@ static inline void prob_inc_lits(ull rng_key, uint* rng_counter, float prob, int
     }
 }
 
-static inline void prob_dec_lits(ull rng_key, uint* rng_counter, float prob, int start, int end, int offset,
-                             uint* ta_states) {
+static inline void prob_dec_lits(ull rng_key, uint* restrict rng_counter, float prob, int start, int end, int offset,
+                             TA_STATE_T* restrict ta_states) {
     float li = (float)start + geom_sample(rng_key, rng_counter, prob) - 1.0f;
     while (li < (float)end) {
         int idx = (int)li + offset;
@@ -45,7 +45,7 @@ static inline void prob_dec_lits(ull rng_key, uint* rng_counter, float prob, int
     }
 }
 
-static inline void t1a_incs(ull rng_key, uint* rng_counter, int start, int end, int offset, uint* ta_states) {
+static inline void t1a_incs(ull rng_key, uint* restrict rng_counter, int start, int end, int offset, TA_STATE_T* restrict ta_states) {
 #if BOOST_TP_INC
     (void)rng_key;
     (void)rng_counter;
@@ -55,7 +55,7 @@ static inline void t1a_incs(ull rng_key, uint* rng_counter, int start, int end, 
 #endif
 }
 
-static inline void t1a_decs(ull rng_key, uint* rng_counter, int start, int end, int offset, uint* ta_states) {
+static inline void t1a_decs(ull rng_key, uint* restrict rng_counter, int start, int end, int offset, TA_STATE_T* restrict ta_states) {
 #if BOOST_TP_DEC
     (void)rng_key;
     (void)rng_counter;
@@ -65,8 +65,8 @@ static inline void t1a_decs(ull rng_key, uint* rng_counter, int start, int end, 
 #endif
 }
 
-static inline void type1a_fb(ull rng_key, uint* rng_counter, const int* Xe, int patch_idx_y, int patch_idx_x,
-                         const int* feat_mins, const int* literal_offsets, uint* ta_states) {
+static inline void type1a_fb(ull rng_key, uint* restrict rng_counter, const int* restrict Xe, int patch_idx_y, int patch_idx_x,
+                         const int* restrict feat_mins, const int* restrict literal_offsets, TA_STATE_T* restrict ta_states) {
 #if TYPE1A_FB
 #if POSITION_LITERALS
     t1a_incs(rng_key, rng_counter, 0, patch_idx_y, 0, ta_states);
@@ -98,14 +98,14 @@ static inline void type1a_fb(ull rng_key, uint* rng_counter, const int* Xe, int 
 #endif
 }
 
-static inline void type1b_fb(ull rng_key, uint* rng_counter, uint* ta_states) {
+static inline void type1b_fb(ull rng_key, uint* restrict rng_counter, TA_STATE_T* restrict ta_states) {
 #if TYPE1B_FB
     prob_dec_lits(rng_key, rng_counter, S_INV, 0, N_LITERALS, 0, ta_states);
 #endif
 }
 
-static inline void type2_fb(const int* Xe, int patch_idx_y, int patch_idx_x, const int* feat_mins,
-                        const int* literal_offsets, uint* ta_states) {
+static inline void type2_fb(const int* restrict Xe, int patch_idx_y, int patch_idx_x, const int* restrict feat_mins,
+                        const int* restrict literal_offsets, TA_STATE_T* restrict ta_states) {
 #if TYPE2_FB
 #if POSITION_LITERALS
     inc_lits(patch_idx_y, N_POSITION_FEATS_Y, 0, ta_states);
@@ -130,9 +130,9 @@ static inline void type2_fb(const int* Xe, int patch_idx_y, int patch_idx_x, con
 #endif
 }
 
-static inline void apply_feedback(ull rng_key, uint* rng_counter, uint8_t fb, const int* Xe, int patch_idx_y,
-                                  int patch_idx_x, const int* feat_mins, const int* literal_offsets,
-                                  uint* ta_states) {
+static inline void apply_feedback(ull rng_key, uint* restrict rng_counter, uint8_t fb, const int* restrict Xe, int patch_idx_y,
+                                  int patch_idx_x, const int* restrict feat_mins, const int* restrict literal_offsets,
+                                  TA_STATE_T* restrict ta_states) {
     if (fb == FB_T1A) {
         type1a_fb(rng_key, rng_counter, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
     } else if (fb == FB_T1B) {

@@ -15,7 +15,7 @@
 #define FB_SIGNAL FB_SIGNAL_DELTA_L
 #endif
 
-void votes_activation(const float* votes, float* y_hat) {
+void votes_activation(const float* restrict votes, float* restrict y_hat) {
 #if ACT_FN == ACT_SOFTMAX
     _softmax(votes, y_hat);
 #elif ACT_FN == ACT_SIGMOID
@@ -27,7 +27,7 @@ void votes_activation(const float* votes, float* y_hat) {
 #endif
 }
 
-void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
+void votes_activation_batch(const float* restrict votes, int n_samples, float* restrict y_hat) {
 #if ACT_FN == ACT_SOFTMAX
 #pragma omp parallel for schedule(static)
     for (int e = 0; e < n_samples; e++)
@@ -44,12 +44,12 @@ void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
 #endif
 }
 
-void loss_gradient(const float* y_hat, const float* y, const float* class_weights, float* grad, float* loss) {
+void loss_gradient(const float* restrict y_hat, const float* restrict y, const float* restrict class_weights, float* restrict grad, float* restrict loss) {
     loss_gradient_impl(y_hat, y, class_weights, grad, loss);
 }
 
-void compute_votes_neg_ck(const float* votes, const float* clause_weights, const int* selected_patch_ids,
-                          float* votes_neg_ck) {
+void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights, const int* restrict selected_patch_ids,
+                          float* restrict votes_neg_ck) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_class = 0; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class++) {
         ull clause_id = clause_class / (ull)CLASSES;
@@ -68,8 +68,8 @@ void compute_votes_neg_ck(const float* votes, const float* clause_weights, const
     }
 }
 
-void compute_loss_neg_ck(const float* y_hat_neg_ck, const float* y, const float* loss_class_weights,
-                         float* loss_neg_ck) {
+void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, const float* restrict loss_class_weights,
+                         float* restrict loss_neg_ck) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         float loss = 0.0f;
@@ -78,9 +78,9 @@ void compute_loss_neg_ck(const float* y_hat_neg_ck, const float* y, const float*
     }
 }
 
-void decide_feedback_grad(const ull seed, const float* grad, const float* clause_weights, const int* clause_density,
-                          const int* selected_patch_ids, const int8_t* clause_drop_mask, const float lambda_,
-                          uint8_t* feedback_type) {
+void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights, const int* restrict clause_density,
+                          const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask, const float lambda_,
+                          uint8_t* restrict feedback_type) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
@@ -136,9 +136,9 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
     return fb;
 }
 
-void decide_feedback_delta_l(const ull seed, const float* loss, const float* loss_neg_ck, const int* clause_density,
-                             const int* selected_patch_ids, const int8_t* clause_drop_mask, const float lambda_,
-                             uint8_t* feedback_type) {
+void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck, const int* restrict clause_density,
+                             const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask, const float lambda_,
+                             uint8_t* restrict feedback_type) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         if (clause_drop_mask[clause_id] == 1) {
@@ -154,15 +154,15 @@ void decide_feedback_delta_l(const ull seed, const float* loss, const float* los
     }
 }
 
-void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e, const int* feat_mins,
-                    const int* literal_offsets, const uint8_t* feedback_type, uint* global_ta_states,
-                    int8_t* is_clause_synced) {
+void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e, const int* restrict feat_mins,
+                    const int* restrict literal_offsets, const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
+                    int8_t* restrict is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        uint* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
+        TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
         int patch_id = selected_patch_ids[clause];
         int patch_idx_y = (patch_id >= 0) ? patch_id / N_PATCHES_X : -1;
@@ -190,8 +190,8 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X,
     }
 }
 
-void update_weights(const float* grad, const float lr, const int* selected_patch_ids, const int8_t* clause_drop_mask,
-                    float* clause_weights) {
+void update_weights(const float* restrict grad, const float lr, const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask,
+                    float* restrict clause_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || selected_patch_ids[clause] < 0)
@@ -206,7 +206,7 @@ void update_weights(const float* grad, const float lr, const int* selected_patch
     }
 }
 
-void update_bias(const float* grad, const float lr, float* bias) {
+void update_bias(const float* restrict grad, const float lr, float* restrict bias) {
 #if BIAS
 #pragma omp parallel for schedule(static)
     for (int c = 0; c < CLASSES; c++)

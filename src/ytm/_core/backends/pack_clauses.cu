@@ -11,7 +11,7 @@ struct PositionResult {
 
 // `full` keeps scanning after a contradiction, so every bound is real and the clause can be
 // inspected to see where it went wrong. Training passes 0 and takes the early exits.
-__device__ inline PositionResult scan_position_literals(const warp_t& warp, const uint* ta_state, int full) {
+__device__ inline PositionResult scan_position_literals(const warp_t& warp, const TA_STATE_T* ta_state, int full) {
 #if POSITION_LITERALS
     int lane = warp.thread_rank();
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
@@ -78,7 +78,7 @@ struct FeatureResult {
     bool all_valid;
 };
 
-__device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const uint* ta_state, const int* feat_mins,
+__device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const TA_STATE_T* ta_state, const int* feat_mins,
                                                       const int* feat_maxs, const int* literal_offsets,
                                                       int* feat_bounds, int* bounded_feat_id, int full) {
     int lane = warp.thread_rank();
@@ -133,7 +133,7 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
     return {write_offset, n_includes, all_valid};
 }
 
-extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int* feat_mins, const int* feat_maxs,
+extern "C" __global__ void pack_clauses(const TA_STATE_T* global_ta_states, const int* feat_mins, const int* feat_maxs,
                                         const int* literal_offsets, int* clause_position_bounds,
                                         int* clause_feat_bounds, int* bounded_feat_ids, int* n_bounded_feats,
                                         int* clause_density, int8_t* is_clause_synced, int full) {
@@ -147,7 +147,7 @@ extern "C" __global__ void pack_clauses(const uint* global_ta_states, const int*
         if (is_clause_synced[clause])
             continue;
 
-        const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
+        const TA_STATE_T* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_position_bounds[clause * 4];
 
         PositionResult pr = scan_position_literals(warp, ta_state, full);

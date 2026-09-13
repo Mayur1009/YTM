@@ -20,30 +20,30 @@ from ytm._core.device_config import DeviceConfig
 CORE = pathlib.Path(__file__).parents[2] / "src" / "ytm" / "_core" / "backends"
 
 WRAPPERS = """
-void w_inc_lits(int s, int e, int o, uint* ta) { inc_lits(s, e, o, ta); }
-void w_dec_lits(int s, int e, int o, uint* ta) { dec_lits(s, e, o, ta); }
+void w_inc_lits(int s, int e, int o, TA_STATE_T* ta) { inc_lits(s, e, o, ta); }
+void w_dec_lits(int s, int e, int o, TA_STATE_T* ta) { dec_lits(s, e, o, ta); }
 
-void w_prob_inc_lits(ull k, float p, int s, int e, int o, uint* ta) {
+void w_prob_inc_lits(ull k, float p, int s, int e, int o, TA_STATE_T* ta) {
     uint c = 0;
     prob_inc_lits(k, &c, p, s, e, o, ta);
 }
 
-void w_prob_dec_lits(ull k, float p, int s, int e, int o, uint* ta) {
+void w_prob_dec_lits(ull k, float p, int s, int e, int o, TA_STATE_T* ta) {
     uint c = 0;
     prob_dec_lits(k, &c, p, s, e, o, ta);
 }
 
-void w_t1a_incs(ull k, int s, int e, int o, uint* ta) { uint c = 0; t1a_incs(k, &c, s, e, o, ta); }
-void w_t1a_decs(ull k, int s, int e, int o, uint* ta) { uint c = 0; t1a_decs(k, &c, s, e, o, ta); }
+void w_t1a_incs(ull k, int s, int e, int o, TA_STATE_T* ta) { uint c = 0; t1a_incs(k, &c, s, e, o, ta); }
+void w_t1a_decs(ull k, int s, int e, int o, TA_STATE_T* ta) { uint c = 0; t1a_decs(k, &c, s, e, o, ta); }
 
-void w_type1a_fb(ull k, const int* Xe, int py, int px, const int* fmins, const int* loffsets, uint* ta) {
+void w_type1a_fb(ull k, const int* Xe, int py, int px, const int* fmins, const int* loffsets, TA_STATE_T* ta) {
     uint c = 0;
     type1a_fb(k, &c, Xe, py, px, fmins, loffsets, ta);
 }
 
-void w_type1b_fb(ull k, uint* ta) { uint c = 0; type1b_fb(k, &c, ta); }
+void w_type1b_fb(ull k, TA_STATE_T* ta) { uint c = 0; type1b_fb(k, &c, ta); }
 
-void w_type2_fb(const int* Xe, int py, int px, const int* fmins, const int* loffsets, uint* ta) {
+void w_type2_fb(const int* Xe, int py, int px, const int* fmins, const int* loffsets, TA_STATE_T* ta) {
     type2_fb(Xe, py, px, fmins, loffsets, ta);
 }
 """
@@ -72,12 +72,15 @@ def lib_for(cfg: BaseTMConfig) -> ctypes.CDLL:
 
 
 _int_p = ctypes.POINTER(ctypes.c_int32)
-_uint_p = ctypes.POINTER(ctypes.c_uint32)
+
+
+def _ta_p(cfg: BaseTMConfig):
+    return ctypes.POINTER(np.ctypeslib.as_ctypes_type(cfg._ta_dtype))
 
 
 def states(cfg: BaseTMConfig, fill: int) -> np.ndarray:
     """One clause worth of TA states."""
-    return np.full(cfg._n_literals, fill, dtype=np.uint32)
+    return np.full(cfg._n_literals, fill, dtype=cfg._ta_dtype)
 
 
 def _range_call(name, cfg, ta, start, end, offset, key=None, prob=None):
@@ -86,7 +89,7 @@ def _range_call(name, cfg, ta, start, end, offset, key=None, prob=None):
     args = [ctypes.c_uint64(key)] if key is not None else []
     if prob is not None:
         args.append(ctypes.c_float(prob))
-    args += [ctypes.c_int(start), ctypes.c_int(end), ctypes.c_int(offset), ta.ctypes.data_as(_uint_p)]
+    args += [ctypes.c_int(start), ctypes.c_int(end), ctypes.c_int(offset), ta.ctypes.data_as(_ta_p(cfg))]
     fn(*args)
     return ta
 
@@ -126,17 +129,17 @@ def _patch_args(cfg, X):
 def type1a_fb(cfg, ta, X, py, px, key=1):
     p_X, p_fmins, p_loff = _patch_args(cfg, X)
     lib_for(cfg).w_type1a_fb(
-        ctypes.c_uint64(key), p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_uint_p)
+        ctypes.c_uint64(key), p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_ta_p(cfg))
     )
     return ta
 
 
 def type1b_fb(cfg, ta, key=1):
-    lib_for(cfg).w_type1b_fb(ctypes.c_uint64(key), ta.ctypes.data_as(_uint_p))
+    lib_for(cfg).w_type1b_fb(ctypes.c_uint64(key), ta.ctypes.data_as(_ta_p(cfg)))
     return ta
 
 
 def type2_fb(cfg, ta, X, py, px):
     p_X, p_fmins, p_loff = _patch_args(cfg, X)
-    lib_for(cfg).w_type2_fb(p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_uint_p))
+    lib_for(cfg).w_type2_fb(p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_ta_p(cfg)))
     return ta

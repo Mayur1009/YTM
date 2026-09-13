@@ -199,6 +199,14 @@ class BaseTMConfig:
         else:
             self._max_includes = self.max_includes
 
+        # TA state storage
+        if self.n_states <= (1 << 8):
+            self._ta_dtype, self._ta_ctype = np.uint8, "uint8_t"
+        elif self.n_states <= (1 << 16):
+            self._ta_dtype, self._ta_ctype = np.uint16, "uint16_t"
+        else:
+            self._ta_dtype, self._ta_ctype = np.uint32, "uint32_t"
+
     def _build_header(self):
         self._header = f"""
 #define TOTAL_CLAUSES {self._total_clauses}
@@ -226,6 +234,7 @@ class BaseTMConfig:
 
 #define INCLUDE_STATE {self._include_state}
 #define MAX_TA_STATE {self.n_states - 1}
+#define TA_STATE_T {self._ta_ctype}
 
 #define COALESCED {int(self.coalesced)}
 #define NEGATIVE_CLAUSES {int(self.negative_clauses)}

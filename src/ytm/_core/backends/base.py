@@ -108,7 +108,7 @@ class BaseDevice(abc.ABC):
         else:
             states = np.full(shape, int(cfg.ta_init))
 
-        self.ta_states = self.xp.asarray(states, dtype=np.uint32)
+        self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
 
     def _init_weights(self):
         cfg = self.config

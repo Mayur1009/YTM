@@ -2,7 +2,7 @@ import pathlib
 import platform
 import subprocess
 import tempfile
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint64
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,7 +14,6 @@ from .base import BaseDevice
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
-uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
 
@@ -97,7 +96,8 @@ class CPUDevice(BaseDevice):
         self.p_clause_density = pc.clause_density.ctypes.data_as(int32_p)
         self.p_is_clause_synced = pc.is_clause_synced.ctypes.data_as(int8_p)
 
-        self.p_ta_states = self.ta_states.ctypes.data_as(uint32_p)
+        ta_state_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._ta_dtype))
+        self.p_ta_states = self.ta_states.ctypes.data_as(ta_state_p)
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
         self.p_bias = self.bias.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)

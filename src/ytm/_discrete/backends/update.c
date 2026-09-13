@@ -12,9 +12,9 @@
 #define FB_T2 3
 #endif
 
-void decide_feedback(const ull seed, const int* selected_patch_ids, const int* clause_density,
-                     const int8_t* clause_drop_mask, const float* prob, const float* label_probs, const int e,
-                     const float* clause_weights, uint8_t* feedback_type) {
+void decide_feedback(const ull seed, const int* restrict selected_patch_ids, const int* restrict clause_density,
+                     const int8_t* restrict clause_drop_mask, const float* restrict prob, const float* restrict label_probs, const int e,
+                     const float* restrict clause_weights, uint8_t* restrict feedback_type) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic)
@@ -50,15 +50,15 @@ void decide_feedback(const ull seed, const int* selected_patch_ids, const int* c
     }
 }
 
-void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e, const int* feat_mins,
-                    const int* literal_offsets, const uint8_t* feedback_type, uint* global_ta_states,
-                    int8_t* is_clause_synced) {
+void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e, const int* restrict feat_mins,
+                    const int* restrict literal_offsets, const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
+                    int8_t* restrict is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        uint* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
+        TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
         int patch_id = selected_patch_ids[clause];
         int patch_idx_y = (patch_id >= 0) ? patch_id / N_PATCHES_X : -1;
@@ -79,7 +79,7 @@ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X,
     }
 }
 
-void update_weights(const uint8_t* feedback_type, float* clause_weights) {
+void update_weights(const uint8_t* restrict feedback_type, float* restrict clause_weights) {
 #if WEIGHTED
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -121,7 +121,7 @@ void update_weights(const uint8_t* feedback_type, float* clause_weights) {
 #endif
 }
 
-void calc_update_prob(const float* votes, const float* encoded_Y, const int e, float* prob) {
+void calc_update_prob(const float* restrict votes, const float* restrict encoded_Y, const int e, float* restrict prob) {
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(static)

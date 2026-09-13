@@ -8,7 +8,7 @@ typedef struct {
     bool valid;
 } PositionResult;
 
-static inline PositionResult scan_position_literals(const uint* ta_state, int full) {
+static inline PositionResult scan_position_literals(const TA_STATE_T* ta_state, int full) {
 #if POSITION_LITERALS
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
@@ -68,8 +68,8 @@ typedef struct {
     bool all_valid;
 } FeatureResult;
 
-static inline FeatureResult scan_feature_literals(const uint* ta_state, const int* feat_mins, const int* feat_maxs,
-                                                  const int* literal_offsets, int* feat_bounds, int* bounded_feat_ids,
+static inline FeatureResult scan_feature_literals(const TA_STATE_T* restrict ta_state, const int* restrict feat_mins, const int* restrict feat_maxs,
+                                                  const int* restrict literal_offsets, int* restrict feat_bounds, int* restrict bounded_feat_ids,
                                                   int full) {
     uint n_includes = 0;
     int write_offset = 0;
@@ -117,7 +117,7 @@ static inline FeatureResult scan_feature_literals(const uint* ta_state, const in
     return (FeatureResult){write_offset, n_includes, all_valid};
 }
 
-void pack_clauses(const uint* restrict global_ta_states, const int* restrict feat_mins, const int* restrict feat_maxs,
+void pack_clauses(const TA_STATE_T* restrict global_ta_states, const int* restrict feat_mins, const int* restrict feat_maxs,
                   const int* restrict literal_offsets, int* restrict clause_position_bounds,
                   int* restrict clause_feat_bounds, int* restrict bounded_feat_ids, int* restrict n_bounded_feats,
                   int32_t* restrict clause_density, int8_t* restrict is_clause_synced, int full) {
@@ -126,7 +126,7 @@ void pack_clauses(const uint* restrict global_ta_states, const int* restrict fea
         if (is_clause_synced[clause])
             continue;
 
-        const uint* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
+        const TA_STATE_T* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
         int* pos = &clause_position_bounds[clause * 4];
 
         PositionResult pr = scan_position_literals(ta_state, full);

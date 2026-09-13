@@ -3,9 +3,9 @@
 #include "rng.h"
 #endif
 
-void calc_clause_outputs(const int* clause_position_bounds, const int* clause_feat_bounds, const int* bounded_feat_ids,
-                         const int* n_bounded_feats, const int* clause_density, const int* X, const int e,
-                         int8_t* clause_outputs) {
+void calc_clause_outputs(const int* restrict clause_position_bounds, const int* restrict clause_feat_bounds, const int* restrict bounded_feat_ids,
+                         const int* restrict n_bounded_feats, const int* restrict clause_density, const int* restrict X, const int e,
+                         int8_t* restrict clause_outputs) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* out_e = &clause_outputs[(ull)e * TOTAL_CLAUSES];
 
@@ -16,9 +16,9 @@ void calc_clause_outputs(const int* clause_position_bounds, const int* clause_fe
     }
 }
 
-void calc_class_sums(const float* clause_weights, const float* bias, const int* clause_position_bounds,
-                     const int* clause_feat_bounds, const int* bounded_feat_ids, const int* n_bounded_feats,
-                     const int* clause_density, const int* X, const int e, float* class_sums) {
+void calc_class_sums(const float* restrict clause_weights, const float* restrict bias, const int* restrict clause_position_bounds,
+                     const int* restrict clause_feat_bounds, const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats,
+                     const int* restrict clause_density, const int* restrict X, const int e, float* restrict class_sums) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     float* sums_e = &class_sums[(ull)e * CLASSES];
 
@@ -42,9 +42,9 @@ void calc_class_sums(const float* clause_weights, const float* bias, const int* 
     }
 }
 
-void calc_clause_outputs_patchwise(const int* clause_position_bounds, const int* clause_feat_bounds,
-                                   const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                                   const int* X, const int e, int8_t* patch_output) {
+void calc_clause_outputs_patchwise(const int* restrict clause_position_bounds, const int* restrict clause_feat_bounds,
+                                   const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats, const int* restrict clause_density,
+                                   const int* restrict X, const int e, int8_t* restrict patch_output) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* out_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
 
@@ -84,9 +84,9 @@ void calc_clause_outputs_patchwise(const int* clause_position_bounds, const int*
     }
 }
 
-INLINE_FN void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask, const int* clause_feat_bounds,
-                                   const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                                   int* selected_patch_ids) {
+INLINE_FN void evaluate_noconv(const int* restrict Xe, const int8_t* restrict clause_drop_mask, const int* restrict clause_feat_bounds,
+                                   const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats, const int* restrict clause_density,
+                                   int* restrict selected_patch_ids) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int cd = clause_density[clause];
@@ -109,10 +109,10 @@ INLINE_FN void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask, co
     }
 }
 
-INLINE_FN void evaluate_conv(const ull seed, const int* Xe, const int8_t* clause_drop_mask,
-                                 const int* clause_position_bounds, const int* clause_feat_bounds,
-                                 const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                                 int* selected_patch_ids, int* patch_weights) {
+INLINE_FN void evaluate_conv(const ull seed, const int* restrict Xe, const int8_t* restrict clause_drop_mask,
+                                 const int* restrict clause_position_bounds, const int* restrict clause_feat_bounds,
+                                 const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats, const int* restrict clause_density,
+                                 int* restrict selected_patch_ids, int* restrict patch_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int cd = clause_density[clause];
@@ -164,9 +164,9 @@ INLINE_FN void evaluate_conv(const ull seed, const int* Xe, const int8_t* clause
     }
 }
 
-void evaluate(const ull seed, const int* X, const int e, const int8_t* clause_drop_mask,
-              const int* clause_position_bounds, const int* clause_feat_bounds, const int* bounded_feat_ids,
-              const int* n_bounded_feats, const int* clause_density, int* selected_patch_ids, int* patch_weights) {
+void evaluate(const ull seed, const int* restrict X, const int e, const int8_t* restrict clause_drop_mask,
+              const int* restrict clause_position_bounds, const int* restrict clause_feat_bounds, const int* restrict bounded_feat_ids,
+              const int* restrict n_bounded_feats, const int* restrict clause_density, int* restrict selected_patch_ids, int* restrict patch_weights) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 #if (N_PATCHES > 1)
     evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
@@ -177,7 +177,7 @@ void evaluate(const ull seed, const int* X, const int e, const int8_t* clause_dr
 #endif
 }
 
-void count_votes(const int* selected_patch_ids, const float* clause_weights, const float* bias, float* votes) {
+void count_votes(const int* restrict selected_patch_ids, const float* restrict clause_weights, const float* restrict bias, float* restrict votes) {
     for (int c = 0; c < CLASSES; c++)
 #if BIAS
         votes[c] = bias[c];
