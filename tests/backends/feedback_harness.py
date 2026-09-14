@@ -128,9 +128,7 @@ def _patch_args(cfg, X):
 
 def type1a_fb(cfg, ta, X, py, px, key=1):
     p_X, p_fmins, p_loff = _patch_args(cfg, X)
-    lib_for(cfg).w_type1a_fb(
-        ctypes.c_uint64(key), p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_ta_p(cfg))
-    )
+    lib_for(cfg).w_type1a_fb(ctypes.c_uint64(key), p_X, ctypes.c_int(py), ctypes.c_int(px), p_fmins, p_loff, ta.ctypes.data_as(_ta_p(cfg)))
     return ta
 
 

@@ -223,9 +223,9 @@ class TestThreadDeterminism:
     def _pair(self):
         single, many = thread_pair(**self.BIG)
         rng = np.random.default_rng(31)
-        states = np.where(
-            rng.random(single.ta_states.shape) < 0.04, single.config._include_state, single.config._include_state - 1
-        ).astype(np.uint32)
+        states = np.where(rng.random(single.ta_states.shape) < 0.04, single.config._include_state, single.config._include_state - 1).astype(
+            np.uint32
+        )
         for dev in (single, many):
             dev.ta_states[:] = states
             dev.pack_clauses(force_repack=True)

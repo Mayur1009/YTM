@@ -112,9 +112,9 @@ class TestThreadDeterminism:
         assert many.device_config._n_threads > 1, "this machine resolved no working OpenMP flags"
 
         rng = np.random.default_rng(41)
-        states = np.where(
-            rng.random(single.ta_states.shape) < 0.04, single.config._include_state, single.config._include_state - 1
-        ).astype(np.uint32)
+        states = np.where(rng.random(single.ta_states.shape) < 0.04, single.config._include_state, single.config._include_state - 1).astype(
+            np.uint32
+        )
         for dev in (single, many):
             dev.ta_states[:] = states
             dev.pack_clauses(force_repack=True)
@@ -136,9 +136,7 @@ class TestThreadDeterminism:
         fb = np.random.default_rng(42).integers(0, 4, size=(cfg._n_clauses, cfg.n_classes)).astype(np.uint8)
 
         for dev in (single, many):
-            dev.clause_weights[:] = np.arange(dev.clause_weights.size, dtype=np.float32).reshape(
-                dev.clause_weights.shape
-            ) % 7 - 3
+            dev.clause_weights[:] = np.arange(dev.clause_weights.size, dtype=np.float32).reshape(dev.clause_weights.shape) % 7 - 3
             dev.lib.update_weights(fb.ctypes.data_as(_uint8_p), dev.clause_weights.ctypes.data_as(_float_p))
 
         assert np.array_equal(many.clause_weights, single.clause_weights)

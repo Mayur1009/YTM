@@ -145,9 +145,7 @@ class TestGetClauses:
 
         assert info.clause_density.shape == (cfg._n_clause_banks, cfg._n_clauses)
         assert np.array_equal(info.clause_density.reshape(-1), flat.clause_density)
-        assert np.array_equal(
-            info.feature_bounds.reshape(cfg._total_clauses, -1), flat.clause_feat_bounds.reshape(cfg._total_clauses, -1)
-        )
+        assert np.array_equal(info.feature_bounds.reshape(cfg._total_clauses, -1), flat.clause_feat_bounds.reshape(cfg._total_clauses, -1))
 
     def test_position_bounds_are_absent_without_patches(self):
         flat = MultiClassTM(6, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1, position_literals=False)

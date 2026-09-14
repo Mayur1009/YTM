@@ -77,8 +77,11 @@ def _pipeline_loss(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weigh
     loss = np.empty(1, dtype=np.float32)
     dev.lib.votes_activation(votes.ctypes.data_as(_float_p), y_hat.ctypes.data_as(_float_p))
     dev.lib.loss_gradient(
-        y_hat.ctypes.data_as(_float_p), y.ctypes.data_as(_float_p), class_weights.ctypes.data_as(_float_p),
-        None, loss.ctypes.data_as(_float_p),
+        y_hat.ctypes.data_as(_float_p),
+        y.ctypes.data_as(_float_p),
+        class_weights.ctypes.data_as(_float_p),
+        None,
+        loss.ctypes.data_as(_float_p),
     )
     return float(loss[0])
 
@@ -89,8 +92,11 @@ def _pipeline_grad(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weigh
     grad = np.empty(n, dtype=np.float32)
     dev.lib.votes_activation(votes.ctypes.data_as(_float_p), y_hat.ctypes.data_as(_float_p))
     dev.lib.loss_gradient(
-        y_hat.ctypes.data_as(_float_p), y.ctypes.data_as(_float_p), class_weights.ctypes.data_as(_float_p),
-        grad.ctypes.data_as(_float_p), None,
+        y_hat.ctypes.data_as(_float_p),
+        y.ctypes.data_as(_float_p),
+        class_weights.ctypes.data_as(_float_p),
+        grad.ctypes.data_as(_float_p),
+        None,
     )
     return grad
 
@@ -160,9 +166,15 @@ class TestUpdateClauses:
 
         before = dev.ta_states.copy()
         dev.lib.update_clauses(
-            ctypes.c_uint64(1), pids.ctypes.data_as(_int_p), X.ctypes.data_as(_int_p), ctypes.c_int(0),
-            cfg._feat_mins.ctypes.data_as(_int_p), cfg._literal_offsets.ctypes.data_as(_int_p),
-            fb.ctypes.data_as(_uint8_p), dev.p_ta_states, dev.p_is_clause_synced,
+            ctypes.c_uint64(1),
+            pids.ctypes.data_as(_int_p),
+            X.ctypes.data_as(_int_p),
+            ctypes.c_int(0),
+            cfg._feat_mins.ctypes.data_as(_int_p),
+            cfg._literal_offsets.ctypes.data_as(_int_p),
+            fb.ctypes.data_as(_uint8_p),
+            dev.p_ta_states,
+            dev.p_is_clause_synced,
         )
 
         expected_clause = 1 * cfg._n_clauses + 0  # bank 1 (class 1), rel_clause 0
@@ -182,9 +194,15 @@ class TestUpdateClauses:
 
         before = dev.ta_states.copy()
         dev.lib.update_clauses(
-            ctypes.c_uint64(1), pids.ctypes.data_as(_int_p), X.ctypes.data_as(_int_p), ctypes.c_int(0),
-            cfg._feat_mins.ctypes.data_as(_int_p), cfg._literal_offsets.ctypes.data_as(_int_p),
-            fb.ctypes.data_as(_uint8_p), dev.p_ta_states, dev.p_is_clause_synced,
+            ctypes.c_uint64(1),
+            pids.ctypes.data_as(_int_p),
+            X.ctypes.data_as(_int_p),
+            ctypes.c_int(0),
+            cfg._feat_mins.ctypes.data_as(_int_p),
+            cfg._literal_offsets.ctypes.data_as(_int_p),
+            fb.ctypes.data_as(_uint8_p),
+            dev.p_ta_states,
+            dev.p_is_clause_synced,
         )
         # T1B decrements every literal in every clause bank, for every clause: every clause must have moved
         assert np.all(dev.ta_states <= before)
@@ -199,9 +217,15 @@ class TestUpdateClauses:
 
         before = dev.ta_states.copy()
         dev.lib.update_clauses(
-            ctypes.c_uint64(1), pids.ctypes.data_as(_int_p), X.ctypes.data_as(_int_p), ctypes.c_int(0),
-            cfg._feat_mins.ctypes.data_as(_int_p), cfg._literal_offsets.ctypes.data_as(_int_p),
-            fb.ctypes.data_as(_uint8_p), dev.p_ta_states, dev.p_is_clause_synced,
+            ctypes.c_uint64(1),
+            pids.ctypes.data_as(_int_p),
+            X.ctypes.data_as(_int_p),
+            ctypes.c_int(0),
+            cfg._feat_mins.ctypes.data_as(_int_p),
+            cfg._literal_offsets.ctypes.data_as(_int_p),
+            fb.ctypes.data_as(_uint8_p),
+            dev.p_ta_states,
+            dev.p_is_clause_synced,
         )
         assert np.all(dev.ta_states <= before)
         assert np.any(dev.ta_states < before)
@@ -217,8 +241,11 @@ class TestUpdateWeights:
         mask = np.zeros(cfg._total_clauses, dtype=np.int8)
 
         dev.lib.update_weights(
-            grad.ctypes.data_as(_float_p), ctypes.c_float(1.0), pids.ctypes.data_as(_int_p),
-            mask.ctypes.data_as(_int8_p), dev.p_clause_weights,
+            grad.ctypes.data_as(_float_p),
+            ctypes.c_float(1.0),
+            pids.ctypes.data_as(_int_p),
+            mask.ctypes.data_as(_int8_p),
+            dev.p_clause_weights,
         )
         assert np.all(dev.clause_weights <= 5.0)
 
@@ -232,8 +259,11 @@ class TestUpdateWeights:
         mask = np.ones(cfg._total_clauses, dtype=np.int8)  # every clause dropped
 
         dev.lib.update_weights(
-            grad.ctypes.data_as(_float_p), ctypes.c_float(1.0), pids.ctypes.data_as(_int_p),
-            mask.ctypes.data_as(_int8_p), dev.p_clause_weights,
+            grad.ctypes.data_as(_float_p),
+            ctypes.c_float(1.0),
+            pids.ctypes.data_as(_int_p),
+            mask.ctypes.data_as(_int8_p),
+            dev.p_clause_weights,
         )
         assert np.array_equal(dev.clause_weights, before)
 
@@ -247,8 +277,11 @@ class TestUpdateWeights:
         mask = np.zeros(cfg._total_clauses, dtype=np.int8)
 
         dev.lib.update_weights(
-            grad.ctypes.data_as(_float_p), ctypes.c_float(1.0), pids.ctypes.data_as(_int_p),
-            mask.ctypes.data_as(_int8_p), dev.p_clause_weights,
+            grad.ctypes.data_as(_float_p),
+            ctypes.c_float(1.0),
+            pids.ctypes.data_as(_int_p),
+            mask.ctypes.data_as(_int8_p),
+            dev.p_clause_weights,
         )
         assert np.array_equal(dev.clause_weights, before)
 
@@ -265,9 +298,9 @@ class TestThreadDeterminism:
         assert many.device_config._n_threads > 1, "this machine resolved no working OpenMP flags"
 
         rng = np.random.default_rng(11)
-        states = np.where(
-            rng.random(single.ta_states.shape) < 0.05, single.config._include_state, single.config._include_state - 1
-        ).astype(single.ta_states.dtype)
+        states = np.where(rng.random(single.ta_states.shape) < 0.05, single.config._include_state, single.config._include_state - 1).astype(
+            single.ta_states.dtype
+        )
         for dev in (single, many):
             dev.ta_states[:] = states
             dev.pack_clauses(force_repack=True)
@@ -289,9 +322,15 @@ class TestThreadDeterminism:
         for dev in (single, many):
             dev.packed_clauses.is_clause_synced[:] = 1
             dev.lib.update_clauses(
-                ctypes.c_uint64(9), pids.ctypes.data_as(_int_p), X.ctypes.data_as(_int_p), ctypes.c_int(0),
-                cfg._feat_mins.ctypes.data_as(_int_p), cfg._literal_offsets.ctypes.data_as(_int_p),
-                fb.ctypes.data_as(_uint8_p), dev.p_ta_states, dev.p_is_clause_synced,
+                ctypes.c_uint64(9),
+                pids.ctypes.data_as(_int_p),
+                X.ctypes.data_as(_int_p),
+                ctypes.c_int(0),
+                cfg._feat_mins.ctypes.data_as(_int_p),
+                cfg._literal_offsets.ctypes.data_as(_int_p),
+                fb.ctypes.data_as(_uint8_p),
+                dev.p_ta_states,
+                dev.p_is_clause_synced,
             )
         assert np.array_equal(single.ta_states, many.ta_states)
 
@@ -307,8 +346,11 @@ class TestThreadDeterminism:
         for dev in (single, many):
             dev.clause_weights[:] = weights
             dev.lib.update_weights(
-                grad.ctypes.data_as(_float_p), ctypes.c_float(0.1), pids.ctypes.data_as(_int_p),
-                mask.ctypes.data_as(_int8_p), dev.p_clause_weights,
+                grad.ctypes.data_as(_float_p),
+                ctypes.c_float(0.1),
+                pids.ctypes.data_as(_int_p),
+                mask.ctypes.data_as(_int8_p),
+                dev.p_clause_weights,
             )
         assert np.array_equal(single.clause_weights, many.clause_weights)
 
@@ -328,16 +370,26 @@ class TestThreadDeterminism:
             if fb_signal == "grad":
                 fb = np.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8)
                 dev.lib.decide_feedback_grad(
-                    ctypes.c_uint64(5), grad.ctypes.data_as(_float_p), dev.p_clause_weights,
-                    dev.p_clause_density, pids.ctypes.data_as(_int_p), mask.ctypes.data_as(_int8_p),
-                    ctypes.c_float(1.0), fb.ctypes.data_as(_uint8_p),
+                    ctypes.c_uint64(5),
+                    grad.ctypes.data_as(_float_p),
+                    dev.p_clause_weights,
+                    dev.p_clause_density,
+                    pids.ctypes.data_as(_int_p),
+                    mask.ctypes.data_as(_int8_p),
+                    ctypes.c_float(1.0),
+                    fb.ctypes.data_as(_uint8_p),
                 )
             else:
                 fb = np.zeros(cfg._total_clauses, dtype=np.uint8)
                 dev.lib.decide_feedback_delta_l(
-                    ctypes.c_uint64(5), loss.ctypes.data_as(_float_p), loss_neg_ck.ctypes.data_as(_float_p),
-                    dev.p_clause_density, pids.ctypes.data_as(_int_p), mask.ctypes.data_as(_int8_p),
-                    ctypes.c_float(1.0), fb.ctypes.data_as(_uint8_p),
+                    ctypes.c_uint64(5),
+                    loss.ctypes.data_as(_float_p),
+                    loss_neg_ck.ctypes.data_as(_float_p),
+                    dev.p_clause_density,
+                    pids.ctypes.data_as(_int_p),
+                    mask.ctypes.data_as(_int8_p),
+                    ctypes.c_float(1.0),
+                    fb.ctypes.data_as(_uint8_p),
                 )
             results.append(fb)
         assert np.array_equal(results[0], results[1])

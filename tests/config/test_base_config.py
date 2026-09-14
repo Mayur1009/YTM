@@ -9,9 +9,7 @@ from ytm._discrete.config import RegressionConfig, TMConfig
 
 DEFAULTS: dict = {"n_clauses": 8, "s": 10.0, "dim": (6, 6, 1), "n_classes": 3, "feat_maxs": 3, "seed": 7}
 
-C_SOURCES = list(pathlib.Path("src/ytm/_core/backends").glob("*.[ch]")) + list(
-    pathlib.Path("src/ytm/_discrete/backends").glob("*.c")
-)
+C_SOURCES = list(pathlib.Path("src/ytm/_core/backends").glob("*.[ch]")) + list(pathlib.Path("src/ytm/_discrete/backends").glob("*.c"))
 
 
 def config_variants():
