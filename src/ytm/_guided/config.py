@@ -32,6 +32,7 @@ class LossFn(IntEnum):
 class TMConfig(BaseTMConfig):
     lr: float = 1.0
     lambda_: float = 1.0
+    weight_init: Literal["random"] | float | str = "random"
     act_fn: Literal["softmax", "sigmoid", "identity"] = "softmax"
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"] = "ce"
     loss_fn_kwargs: dict = field(default_factory=dict)
@@ -39,6 +40,18 @@ class TMConfig(BaseTMConfig):
 
     def _derive_vars(self):
         super()._derive_vars()
+
+        if isinstance(self.weight_init, str) and self.weight_init.startswith("random:"):
+            try:
+                n = float(self.weight_init[len("random:") :])
+                if n <= 0:
+                    raise ValueError
+            except ValueError:
+                raise ValueError(f"weight_init 'random:N' needs a positive float N, got {self.weight_init!r}") from None
+        else:
+            assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init > 0), (
+                f"weight_init must be 'random', 'random:N', or a positive number, got {self.weight_init!r}"
+            )
 
         assert self.act_fn.upper() in ActFn.__members__, f"act_fn must be one of {[m.lower() for m in ActFn.__members__]}, got {self.act_fn!r}"
         assert self.loss_fn.upper() in LossFn.__members__, f"loss_fn must be one of {[m.lower() for m in LossFn.__members__]}, got {self.loss_fn!r}"
@@ -84,6 +97,7 @@ class TMConfig(BaseTMConfig):
 class T_Config(T_BaseTMConfig, T_DeviceConfig, total=False):
     lr: float
     lambda_: float
+    weight_init: Literal["random"] | float | str
     act_fn: Literal["softmax", "sigmoid", "identity"]
     loss_fn: Literal["ce", "sce", "mse", "mae", "huber", "tversky", "asl"]
     loss_fn_kwargs: dict

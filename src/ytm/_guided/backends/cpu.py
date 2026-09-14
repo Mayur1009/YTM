@@ -8,7 +8,8 @@ import numpy as np
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.backends.cpu import CPUFitBuffers, float_p, read_file
 from ..._core.utils import tqdm_bar
-from ..config import FbSignal, TMConfig
+from ..config import FbSignal
+from .base import BaseDevice as GuidedBaseDevice
 
 uint8_p = POINTER(c_uint8)
 
@@ -46,9 +47,7 @@ class GuidedFitBuffers(CPUFitBuffers):
             self.p_loss_neg_ck = self.loss_neg_ck.ctypes.data_as(float_p)
 
 
-class CPUDevice(CoreCPUDevice):
-    config: TMConfig
-
+class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
     def dev_init(self):
         super().dev_init()
         cfg = self.config

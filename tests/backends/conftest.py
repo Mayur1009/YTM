@@ -21,6 +21,12 @@ class CoreDevice(CPUDevice):
     def _fit_apply_fb(self, buf, e, rng_key): ...
     def _fit_update_weights(self, buf): ...
 
+    def _init_weights(self):
+        """`weight_init` lives in `_discrete`/`_guided` now, not `_core` — tests that care about
+        specific weight values overwrite `dev.clause_weights` directly, so any starting value is fine."""
+        cfg = self.config
+        self.clause_weights = self.xp.ones((cfg.n_classes, cfg._n_clauses), dtype=np.float32)
+
 
 def make_device(device: str = "cpu:1", **kwargs) -> CoreDevice:
     """A device from config options, with the defaults small enough to enumerate."""

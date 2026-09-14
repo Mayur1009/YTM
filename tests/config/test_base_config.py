@@ -84,7 +84,9 @@ def test_every_macro_used_in_an_if_is_emitted():
         for line in re.findall(r"^\s*#(?:el)?if\s+(.+)$", body, re.MULTILINE):
             used |= set(re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", line))
 
-    emitted = set(re.findall(r"#define (\w+)", BaseTMConfig(**DEFAULTS)._header))
+    emitted = set(re.findall(r"#define (\w+)", BaseTMConfig(**DEFAULTS)._header)) | set(
+        re.findall(r"#define (\w+)", TMConfig(**DEFAULTS, T=50.0)._header)
+    )
     derived_in_c = {"N_PATCHES"}  # common.h derives this one itself
 
     assert used - emitted - derived_in_c == set(), "macro read by the C but never defined"

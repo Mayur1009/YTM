@@ -40,9 +40,7 @@ class BaseTMConfig:
 
     # clause weights
     weighted: bool = True
-    weight_init: Literal["random"] | float | str = 1.0
     max_weight: float = float(1<<30)
-    allow_polarity_change: bool = True
 
     # feedback
     skip_t1a_fb: bool = False
@@ -119,18 +117,6 @@ class BaseTMConfig:
             ), (
                 f"ta_init must be 'middle', 'random', 'random_include', 'random:N', "
                 f"or an int within 0 and n_states - 1 ({self.n_states - 1}), got {self.ta_init}"
-            )
-
-        # Clause weight init
-        if isinstance(self.weight_init, str) and self.weight_init.startswith("random:"):
-            try:
-                high = float(self.weight_init[len("random:") :])
-            except ValueError:
-                high = 0.0
-            assert high > 0, f"weight_init 'random:N' needs a positive float N, got {self.weight_init!r}"
-        else:
-            assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init > 0), (
-                f"weight_init must be 'random', 'random:N', or a positive number, got {self.weight_init!r}"
             )
 
     def _check_feat_bounds(self):
@@ -231,7 +217,6 @@ class BaseTMConfig:
 #define NEGATIVE_CLAUSES {int(self.negative_clauses)}
 #define WEIGHTED {int(self.weighted)}
 #define MAX_WEIGHT {float(self.max_weight)}f
-#define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
 
 #define TYPE1A_FB {int(not self.skip_t1a_fb)}
 #define TYPE1B_FB {int(not self.skip_t1b_fb)}
@@ -273,9 +258,7 @@ class T_BaseTMConfig(TypedDict, total=False):
 
     # clause weights
     weighted: bool
-    weight_init: Literal["random"] | float | str
     max_weight: float
-    allow_polarity_change: bool
 
     # feedback
     skip_t1a_fb: bool

@@ -8,9 +8,15 @@ from .._core.device_config import T_DeviceConfig
 class TMConfig(BaseTMConfig):
     T: float | tuple[float, float]
     q: float = 1.0
+    weight_init: int = 1
+    allow_polarity_change: bool = True
 
     def _derive_vars(self):
         super()._derive_vars()
+
+        assert isinstance(self.weight_init, int) and not isinstance(self.weight_init, bool) and self.weight_init > 0, (
+            f"`weight_init` must be a positive int, got {self.weight_init!r}"
+        )
 
         if isinstance(self.T, (tuple, list)):
             self._T_min, self._T_max = (float(v) for v in self.T)
@@ -24,6 +30,7 @@ class TMConfig(BaseTMConfig):
         self._header += f"""
 #define T_MIN {self._T_min}f
 #define T_MAX {self._T_max}f
+#define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
 """
 
 
@@ -38,3 +45,5 @@ class RegressionConfig(TMConfig):
 
 class T_Config(T_BaseTMConfig, T_DeviceConfig, total=False):
     q: float
+    weight_init: int
+    allow_polarity_change: bool

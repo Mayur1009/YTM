@@ -8,6 +8,7 @@ import numpy as np
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.backends.cpu import CPUFitBuffers, float_p, read_file
 from ..._core.utils import tqdm_bar
+from .base import BaseDevice as DiscreteBaseDevice
 
 uint8_p = POINTER(c_uint8)
 
@@ -29,7 +30,7 @@ class DiscreteFitBuffers(CPUFitBuffers):
         self.p_label_probs = self.label_probs.ctypes.data_as(float_p)
 
 
-class CPUDevice(CoreCPUDevice):
+class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.c"] = read_file(pathlib.Path(__file__).parent / "update.c")
