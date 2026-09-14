@@ -48,7 +48,6 @@ class CPUDevice(BaseDevice):
 
         self._init_clauses()
         self._init_weights()
-        self._init_bias()
         self._init_patch_weights()
         self._init_packed_clauses()
 
@@ -99,7 +98,6 @@ class CPUDevice(BaseDevice):
         ta_state_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._ta_dtype))
         self.p_ta_states = self.ta_states.ctypes.data_as(ta_state_p)
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
-        self.p_bias = self.bias.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
 
         self.p_feat_mins = cfg._feat_mins.ctypes.data_as(int32_p)
@@ -144,7 +142,7 @@ class CPUDevice(BaseDevice):
         )
 
     def _fit_voting(self, buf: CPUFitBuffers):
-        self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, self.p_bias, buf.p_votes)
+        self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, buf.p_votes)
 
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -156,7 +154,6 @@ class CPUDevice(BaseDevice):
         for e in tqdm_bar(range(X.shape[0]), desc="Infer"):
             self.lib.calc_class_sums(
                 self.p_clause_weights,
-                self.p_bias,
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
                 self.p_bounded_feat_ids,

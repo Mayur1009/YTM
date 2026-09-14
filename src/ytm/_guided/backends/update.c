@@ -205,11 +205,3 @@ void update_weights(const float* restrict grad, const float lr, const int* restr
         }
     }
 }
-
-void update_bias(const float* restrict grad, const float lr, float* restrict bias) {
-#if BIAS
-#pragma omp parallel for schedule(static)
-    for (int c = 0; c < CLASSES; c++)
-        bias[c] += lr * grad[c];
-#endif
-}

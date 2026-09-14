@@ -52,9 +52,6 @@ class BaseTM(abc.ABC):
     def get_weights(self) -> np.ndarray:
         return self.dev.get_weights()
 
-    def get_bias(self) -> np.ndarray:
-        return self.dev.get_bias()
-
     def get_ta_states(self) -> np.ndarray:
         return self.dev.get_ta_states()
 

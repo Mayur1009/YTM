@@ -52,9 +52,6 @@ class BaseDevice(abc.ABC):
     def _fit_update_weights(self, buf): ...
 
     @abc.abstractmethod
-    def _fit_update_bias(self, buf): ...
-
-    @abc.abstractmethod
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray: ...
 
     @abc.abstractmethod
@@ -135,15 +132,6 @@ class BaseDevice(abc.ABC):
 
         self.clause_weights = self.xp.asarray(mag, dtype=np.float32)
 
-    def _init_bias(self):
-        cfg = self.config
-        if not cfg.bias:
-            self.bias = self.xp.zeros(1, dtype=np.float32)
-        elif cfg.bias_init == "random":
-            self.bias = self.xp.asarray(self._rng.uniform(0.0, 1.0, size=cfg.n_classes), dtype=np.float32)
-        else:
-            self.bias = self.xp.full(cfg.n_classes, float(cfg.bias_init), dtype=np.float32)
-
     def _init_patch_weights(self):
         cfg = self.config
         shape = (cfg._total_clauses, cfg._n_patches) if cfg.track_patch_weights else (1, 1)
@@ -168,11 +156,6 @@ class BaseDevice(abc.ABC):
     def get_weights(self) -> np.ndarray:
         return self._to_host(self.clause_weights)
 
-    def get_bias(self) -> np.ndarray:
-        if not self.config.bias:
-            raise RuntimeError("`bias` must be True to get the bias.")
-        return self._to_host(self.bias)
-
     def get_patch_weights(self) -> np.ndarray:
         cfg = self.config
         if not cfg.track_patch_weights:
@@ -196,7 +179,6 @@ class BaseDevice(abc.ABC):
             "ta_states": self._to_host(self.ta_states),
             "clause_weights": self._to_host(self.clause_weights),
             "patch_weights": self._to_host(self.patch_weights),
-            "bias": self._to_host(self.bias),
             "rng": self._rng.bit_generator.state,
         }
 
@@ -205,7 +187,6 @@ class BaseDevice(abc.ABC):
         self.ta_states[:] = self.xp.asarray(state["ta_states"])
         self.clause_weights[:] = self.xp.asarray(state["clause_weights"])
         self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
-        self.bias[:] = self.xp.asarray(state["bias"])
         self._rng.bit_generator.state = state["rng"]
         self.packed_clauses.is_clause_synced.fill(0)
 

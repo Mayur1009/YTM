@@ -128,8 +128,6 @@ class CPUDevice(CoreCPUDevice):
         self._fit_apply_fb(buf, e, rng_key)
         if self.config.weighted:
             self._fit_update_weights(buf)
-        if self.config.bias:
-            self._fit_update_bias(buf)
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
@@ -179,9 +177,6 @@ class CPUDevice(CoreCPUDevice):
 
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
         self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_selected_pids, buf.p_clause_drop_mask, self.p_clause_weights)
-
-    def _fit_update_bias(self, buf: GuidedFitBuffers) -> None:
-        self.lib.update_bias(buf.p_grad, c_float(buf.lr), self.p_bias)
 
     def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         votes = super().calc_class_sums(X, force_repack)

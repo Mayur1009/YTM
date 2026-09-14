@@ -111,7 +111,7 @@ extern "C" __global__ void infer_clauses(const int* X, int8_t* clause_outputs, c
 #endif
 }
 
-extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, const float* bias,
+extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights,
                                      float* class_sums, const int N) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
@@ -142,11 +142,7 @@ extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* 
         partial = cg::reduce(warp, partial, cg::plus<float>());
 
         if (lane == 0)
-#if BIAS
-            class_sums[e * (ull)CLASSES + class_id] = partial + bias[class_id];
-#else
             class_sums[e * (ull)CLASSES + class_id] = partial;
-#endif
     }
 }
 

@@ -40,8 +40,6 @@ def weighted_sum(dev: CoreDevice, fired: np.ndarray) -> np.ndarray:
     cfg = dev.config
     per_class = cfg._total_clauses if cfg.coalesced else cfg._total_clauses // cfg.n_classes
     sums = np.zeros((fired.shape[0], cfg.n_classes), dtype=np.float64)
-    if cfg.bias:
-        sums += dev.bias
 
     for e in range(fired.shape[0]):
         for clause in np.flatnonzero(fired[e]):
@@ -92,12 +90,6 @@ class TestInferencePaths:
         dev, X = prepared()
         first = dev.calc_class_sums(X).copy()
         assert np.array_equal(dev.calc_class_sums(X), first)
-
-    def test_bias_is_the_starting_point(self):
-        dev, X = prepared(bias=True, bias_init=2.0)
-        dev.ta_states[:] = dev.config._include_state  # contradictory, so nothing fires
-        dev.pack_clauses(force_repack=True)
-        assert np.allclose(dev.calc_class_sums(X), 2.0)
 
 
 class TestEvaluate:
@@ -206,13 +198,6 @@ class TestCountVotes:
 
         expected = weighted_sum(dev, (buf.selected_pids >= 0)[None])[0]
         assert np.allclose(buf.votes, expected, atol=1e-4)
-
-    def test_bias_is_the_starting_point(self):
-        dev, X = prepared(bias=True, bias_init=2.0)
-        buf = buffers(dev, X, drop=np.ones(dev.config._total_clauses, dtype=np.int8))
-        dev._fit_eval(buf, 0, 5)
-        dev._fit_voting(buf)
-        assert np.allclose(buf.votes, 2.0)
 
     def test_votes_do_not_accumulate_across_samples(self):
         """`votes` is reused every sample, so count_votes has to overwrite rather than add."""

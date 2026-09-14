@@ -54,7 +54,7 @@ class TestRoundTrip:
         """Comparing python arrays is not enough: they were correct even when the pointers were stale."""
         tm, _ = trained
         back = pickle.loads(pickle.dumps(tm))
-        for name in ("ta_states", "clause_weights", "patch_weights", "bias"):
+        for name in ("ta_states", "clause_weights", "patch_weights"):
             arr = getattr(back.dev, name)
             ptr = getattr(back.dev, f"p_{name}")
             assert arr.ctypes.data == ctypes.cast(ptr, ctypes.c_void_p).value, name

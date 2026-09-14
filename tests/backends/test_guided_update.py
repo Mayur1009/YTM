@@ -1,11 +1,11 @@
-"""guided's `act_loss.h` + `update.c`: activations, loss gradients, clause/weight/bias updates.
+"""guided's `act_loss.h` + `update.c`: activations, loss gradients, clause/weight updates.
 
 Activations and losses are checked against independent references (numpy, finite differences),
 not against a restatement of the C formulas. `update_clauses`'s per-`fb_signal` layout is checked
 by coverage (every (clause, class) slot written exactly once, no collisions), not by re-deriving
-the index formula. `update_weights`/`update_bias` are checked against their documented contract
-(clip bound, drop skips learning, bias no-op when disabled). Thread tests compare `cpu:1` against
-`cpu:8` bit-for-bit, since a race is invisible any other way (the algorithm is already stochastic).
+the index formula. `update_weights` is checked against its documented contract (clip bound, drop
+skips learning). Thread tests compare `cpu:1` against `cpu:8` bit-for-bit, since a race is
+invisible any other way (the algorithm is already stochastic).
 """
 
 import ctypes
@@ -251,22 +251,6 @@ class TestUpdateWeights:
             mask.ctypes.data_as(_int8_p), dev.p_clause_weights,
         )
         assert np.array_equal(dev.clause_weights, before)
-
-
-class TestUpdateBias:
-    def test_no_op_when_bias_disabled(self):
-        dev = make_device(bias=False, n_classes=2)
-        before = dev.bias.copy()
-        grad = np.ones(2, dtype=np.float32)
-        dev.lib.update_bias(grad.ctypes.data_as(_float_p), ctypes.c_float(1.0), dev.p_bias)
-        assert np.array_equal(dev.bias, before)
-
-    def test_moves_by_lr_times_grad_when_enabled(self):
-        dev = make_device(bias=True, n_classes=2)
-        dev.bias[:] = 0.0
-        grad = np.array([2.0, -1.0], dtype=np.float32)
-        dev.lib.update_bias(grad.ctypes.data_as(_float_p), ctypes.c_float(0.5), dev.p_bias)
-        assert np.allclose(dev.bias, [1.0, -0.5])
 
 
 THREADS = 8

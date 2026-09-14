@@ -44,10 +44,6 @@ class BaseTMConfig:
     max_weight: float = float(1<<30)
     allow_polarity_change: bool = True
 
-    # bias
-    bias: bool = False
-    bias_init: Literal["random"] | float = "random"
-
     # feedback
     skip_t1a_fb: bool = False
     skip_t1b_fb: bool = False
@@ -136,11 +132,6 @@ class BaseTMConfig:
             assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init > 0), (
                 f"weight_init must be 'random', 'random:N', or a positive number, got {self.weight_init!r}"
             )
-
-        # Bias init
-        assert self.bias_init == "random" or isinstance(self.bias_init, (int, float)), (
-            f"bias_init must be 'random' or a float, got {self.bias_init!r}"
-        )
 
     def _check_feat_bounds(self):
         """Broadcast feat bounds to one int32 entry per raw patch feature."""
@@ -241,7 +232,6 @@ class BaseTMConfig:
 #define WEIGHTED {int(self.weighted)}
 #define MAX_WEIGHT {float(self.max_weight)}f
 #define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
-#define BIAS {int(self.bias)}
 
 #define TYPE1A_FB {int(not self.skip_t1a_fb)}
 #define TYPE1B_FB {int(not self.skip_t1b_fb)}
@@ -286,10 +276,6 @@ class T_BaseTMConfig(TypedDict, total=False):
     weight_init: Literal["random"] | float | str
     max_weight: float
     allow_polarity_change: bool
-
-    # bias
-    bias: bool
-    bias_init: Literal["random"] | float
 
     # feedback
     skip_t1a_fb: bool

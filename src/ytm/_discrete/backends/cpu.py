@@ -97,6 +97,3 @@ class CPUDevice(CoreCPUDevice):
             self.p_ta_states,
             self.p_is_clause_synced,
         )
-
-    def _fit_update_bias(self, buf: DiscreteFitBuffers) -> None:
-        pass

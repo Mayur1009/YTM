@@ -16,16 +16,11 @@ void calc_clause_outputs(const int* restrict clause_position_bounds, const int* 
     }
 }
 
-void calc_class_sums(const float* restrict clause_weights, const float* restrict bias, const int* restrict clause_position_bounds,
+void calc_class_sums(const float* restrict clause_weights, const int* restrict clause_position_bounds,
                      const int* restrict clause_feat_bounds, const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats,
                      const int* restrict clause_density, const int* restrict X, const int e, float* restrict class_sums) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     float* sums_e = &class_sums[(ull)e * CLASSES];
-
-#if BIAS
-    for (int c = 0; c < CLASSES; c++)
-        sums_e[c] = bias[c];
-#endif
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -177,13 +172,9 @@ void evaluate(const ull seed, const int* restrict X, const int e, const int8_t* 
 #endif
 }
 
-void count_votes(const int* restrict selected_patch_ids, const float* restrict clause_weights, const float* restrict bias, float* restrict votes) {
+void count_votes(const int* restrict selected_patch_ids, const float* restrict clause_weights, float* restrict votes) {
     for (int c = 0; c < CLASSES; c++)
-#if BIAS
-        votes[c] = bias[c];
-#else
         votes[c] = 0.0f;
-#endif
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES])
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {

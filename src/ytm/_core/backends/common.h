@@ -23,7 +23,6 @@
 #define MAX_INCLUDED_LITERALS 272
 #define NEGATED_LITERALS 1
 #define POSITION_LITERALS 1
-#define BIAS 0
 #define TRACK_PATCH_WEIGHTS 1
 #define TA_STATE_T uint32_t
 #endif
