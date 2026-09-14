@@ -13,8 +13,9 @@
 #endif
 
 void decide_feedback(const ull seed, const int* restrict selected_patch_ids, const int* restrict clause_density,
-                     const int8_t* restrict clause_drop_mask, const float* restrict prob, const float* restrict label_probs, const int e,
-                     const float* restrict clause_weights, uint8_t* restrict feedback_type) {
+                     const int8_t* restrict clause_drop_mask, const float* restrict prob,
+                     const float* restrict label_probs, const int e, const float* restrict clause_weights,
+                     uint8_t* restrict feedback_type) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic)
@@ -50,8 +51,9 @@ void decide_feedback(const ull seed, const int* restrict selected_patch_ids, con
     }
 }
 
-void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e, const int* restrict feat_mins,
-                    const int* restrict literal_offsets, const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
+void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e,
+                    const int* restrict feat_mins, const int* restrict literal_offsets,
+                    const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
@@ -73,7 +75,8 @@ void update_clauses(const ull seed, const int* restrict selected_patch_ids, cons
             if (fb == FB_NONE)
                 continue;
 
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
+                           ta_states);
             is_clause_synced[clause] = 0;
         }
     }
@@ -88,7 +91,7 @@ void update_weights(const uint8_t* restrict feedback_type, float* restrict claus
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
             uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
-            if (fb != FB_T1A && fb != FB_T2)
+            if (fb == FB_T1B)
                 continue;
 
             float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
@@ -96,23 +99,30 @@ void update_weights(const uint8_t* restrict feedback_type, float* restrict claus
 
             if (fb == FB_T1A) {
 #if TYPE1A_FB
-                if (fabsf(*weight) < MAX_WEIGHT)
-                    *weight += sign * 1.0f;
+                float nw = *weight + sign * 1.0f;
+                if (fabsf(nw) < MAX_WEIGHT)
+                    *weight = nw;
 #endif
-            } else {
+            }
+
+            else if (fb == FB_T2) {
 #if TYPE2_FB
-                if (fabsf(*weight) < MAX_WEIGHT)
-                    *weight -= sign * 1.0f;
-#if ALLOW_POLARITY_CHANGE == 0
-                if (sign == 1 && *weight < 0)
-                    *weight = 1;
-                if (sign == -1 && *weight >= 0)
-                    *weight = -1;
-#endif
+                float nw = *weight - sign * 1.0f;
+
 #if NEGATIVE_CLAUSES == 0
-                if (*weight < 1)
-                    *weight = 1;
+                *weight = clip(nw, 1, MAX_WEIGHT);
+#else
+
+                if (fabsf(nw) < 1.0f) {
+#if ALLOW_POLARITY_CHANGE
+                    nw = -sign * 1.0f;
+#else
+                    nw = sign * 1.0f;
 #endif
+                }
+                *weight = nw;
+#endif
+
 #endif
             }
         }

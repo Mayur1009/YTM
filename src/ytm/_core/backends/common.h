@@ -25,6 +25,7 @@
 #define POSITION_LITERALS 1
 #define BIAS 0
 #define TRACK_PATCH_WEIGHTS 1
+#define TA_STATE_T uint32_t
 #endif
 
 // Derived macros and patch helpers, shared by the C and CUDA builds.

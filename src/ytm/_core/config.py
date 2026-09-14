@@ -41,7 +41,7 @@ class BaseTMConfig:
     # clause weights
     weighted: bool = True
     weight_init: Literal["random"] | float | str = 1.0
-    max_weight: float = float(np.finfo(np.float32).max)
+    max_weight: float = float(1<<30)
     allow_polarity_change: bool = True
 
     # bias
