@@ -1,3 +1,4 @@
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from enum import IntEnum
@@ -40,13 +41,26 @@ def split_device_kwargs(opt: dict) -> tuple[dict, dict]:
     return opt, dev_kw
 
 
+TQDM_KWARGS: dict = {
+    "leave": False,
+    "dynamic_ncols": True,
+    "bar_format": "{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+    "disable": os.environ.get("TQDM_DISABLE", "0") not in ("0", "", "false", "False"),
+}
+
+
+def tqdm_config(**kwargs) -> None:
+    """Change the progress bar's tqdm options, e.g. `tqdm_config(bar_format="...")`."""
+    TQDM_KWARGS.update(kwargs)
+
+
+def tqdm_disable() -> None:
+    """Turn the progress bar off entirely."""
+    TQDM_KWARGS["disable"] = True
+
+
 def tqdm_bar(iterable, **kwargs):
-    args = {
-        "leave": False,
-        "dynamic_ncols": True,
-        "bar_format": "{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
-    }
-    args.update(kwargs)
+    args = {**TQDM_KWARGS, **kwargs}
     return tqdm(iterable, **args)
 
 
