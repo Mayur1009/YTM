@@ -95,6 +95,8 @@ class BinaryTM(Classifier):
         dim: int | tuple[int, ...],
         **opt: Unpack[T_Config],
     ):
+        opt.setdefault("coalesced", False)
+        opt.setdefault("allow_polarity_change", False)
         super().__init__(n_clauses, T, s, dim, 1, **opt)
 
     def fit(

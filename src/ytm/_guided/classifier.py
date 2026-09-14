@@ -79,6 +79,7 @@ class BinaryTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: int | tuple[int, ...], **opt: Unpack[T_Config]):
         opt.setdefault("act_fn", "sigmoid")
         opt.setdefault("loss_fn", "ce")
+        opt.setdefault("coalesced", False)
         super().__init__(n_clauses, s, dim, 1, **opt)
 
     def fit(
