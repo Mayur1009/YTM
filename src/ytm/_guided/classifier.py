@@ -71,7 +71,7 @@ class MultiOutputTM(Classifier):
     def predict(self, X: np.ndarray, force_repack: bool = False):
         class_sums = self.score(X, force_repack)
         threshold = self.decision_threshold
-        preds = class_sums if threshold is None else (class_sums >= threshold).astype(np.uint32)
+        preds = class_sums if threshold is None else (class_sums > threshold).astype(np.uint32)
         return preds, class_sums
 
 
@@ -98,5 +98,5 @@ class BinaryTM(Classifier):
     def predict(self, X: np.ndarray, force_repack: bool = False):
         class_sums = self.score(X, force_repack)
         threshold = self.decision_threshold
-        preds = class_sums[:, 0] if threshold is None else (class_sums[:, 0] >= threshold).astype(np.uint32)
+        preds = class_sums[:, 0] if threshold is None else (class_sums[:, 0] > threshold).astype(np.uint32)
         return preds, class_sums

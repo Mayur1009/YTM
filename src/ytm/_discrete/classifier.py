@@ -6,7 +6,17 @@ from .base import BaseTM
 from .config import T_Config
 
 
-class MultiClassTM(BaseTM):
+class Classifier(BaseTM):
+    @property
+    def decision_threshold(self) -> float:
+        return getattr(self, "_decision_threshold", 0.0)
+
+    @decision_threshold.setter
+    def decision_threshold(self, value: float) -> None:
+        self._decision_threshold = value
+
+
+class MultiClassTM(Classifier):
     def fit(
         self,
         X: np.ndarray,
@@ -45,7 +55,7 @@ class MultiClassTM(BaseTM):
         return label_probs
 
 
-class MultiOutputTM(BaseTM):
+class MultiOutputTM(Classifier):
     def fit(
         self,
         X: np.ndarray,
@@ -61,7 +71,7 @@ class MultiOutputTM(BaseTM):
 
     def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
         class_sums = self.score(X, force_repack, clip_class_sums)
-        return (class_sums >= 0).astype(np.uint32), class_sums
+        return (class_sums > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
         cfg = self.config
@@ -76,7 +86,7 @@ class MultiOutputTM(BaseTM):
         return label_probs
 
 
-class BinaryTM(BaseTM):
+class BinaryTM(Classifier):
     def __init__(
         self,
         n_clauses: int,
@@ -102,7 +112,7 @@ class BinaryTM(BaseTM):
 
     def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
         class_sums = self.score(X, force_repack, clip_class_sums)
-        return (class_sums[:, 0] >= 0).astype(np.uint32), class_sums
+        return (class_sums[:, 0] > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
         cfg = self.config
