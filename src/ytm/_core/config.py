@@ -40,7 +40,7 @@ class BaseTMConfig:
 
     # clause weights
     weighted: bool = True
-    max_weight: float = float(1<<30)
+    max_weight: float = float(1 << 30)
 
     # feedback
     skip_t1a_fb: bool = False

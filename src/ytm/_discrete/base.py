@@ -36,9 +36,7 @@ class BaseTM(CoreBaseTM):
         label_sampling: bool = False,
     ) -> None:
         cfg = self.config
-        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), (
-            f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
-        )
+        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
         X = np.asarray(X, dtype=np.int32, order="C")[iota]

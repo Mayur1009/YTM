@@ -49,12 +49,16 @@ class TMConfig(BaseTMConfig):
             except ValueError:
                 raise ValueError(f"weight_init 'random:N' needs a positive float N, got {self.weight_init!r}") from None
         else:
-            assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init > 0), (
+            assert self.weight_init == "random" or (isinstance(self.weight_init, (int, float)) and self.weight_init >= 0), (
                 f"weight_init must be 'random', 'random:N', or a positive number, got {self.weight_init!r}"
             )
 
-        assert self.act_fn.upper() in ActFn.__members__, f"act_fn must be one of {[m.lower() for m in ActFn.__members__]}, got {self.act_fn!r}"
-        assert self.loss_fn.upper() in LossFn.__members__, f"loss_fn must be one of {[m.lower() for m in LossFn.__members__]}, got {self.loss_fn!r}"
+        assert self.act_fn.upper() in ActFn.__members__, (
+            f"act_fn must be one of {[m.lower() for m in ActFn.__members__]}, got {self.act_fn!r}"
+        )
+        assert self.loss_fn.upper() in LossFn.__members__, (
+            f"loss_fn must be one of {[m.lower() for m in LossFn.__members__]}, got {self.loss_fn!r}"
+        )
         assert self.fb_signal.upper() in FbSignal.__members__, (
             f"fb_signal must be one of {[m.lower() for m in FbSignal.__members__]}, got {self.fb_signal!r}"
         )

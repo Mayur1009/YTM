@@ -36,9 +36,7 @@ class BaseTM(CoreBaseTM):
         lambda_: float | None = None,
     ) -> float:
         cfg = self.config
-        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), (
-            f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
-        )
+        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
