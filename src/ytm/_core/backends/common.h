@@ -7,10 +7,12 @@
 #define BOOST_TP_DEC 0
 #define CLASSES 10
 #define COALESCED 0
+#define NEGATIVE_CLAUSES 1
 #define S 10.0f
 #define HEIGHT 28
 #define WIDTH 28
 #define DEPTH 1
+#define PATCH_HEIGHT 10
 #define PATCH_WIDTH 10
 #define STRIDE_Y 1
 #define STRIDE_X 1
@@ -18,11 +20,17 @@
 #define N_PATCHES_X 19
 #define N_PATCHES 361
 #define N_RAW_PATCH_FEATS 100
+#define N_PATCH_FEATS 100
 #define N_POSITION_FEATS 36
 #define N_LITERALS 272
 #define MAX_INCLUDED_LITERALS 272
 #define NEGATED_LITERALS 1
 #define POSITION_LITERALS 1
+#define WEIGHTED 1
+#define MAX_WEIGHT 1073741824.0f
+#define TYPE1A_FB 1
+#define TYPE1B_FB 1
+#define TYPE2_FB 1
 #define TRACK_PATCH_WEIGHTS 1
 #define TA_STATE_T uint32_t
 #endif
