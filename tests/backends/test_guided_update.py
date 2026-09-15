@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from ytm._core.device_config import DeviceConfig
+from ytm._guided.backends.act_loss import ASL, MAE, MSE, SCE, Huber, SigmoidBCE, SoftmaxCE, Tversky
 from ytm._guided.backends.cpu import CPUDevice
 from ytm._guided.config import TMConfig
 
@@ -37,27 +38,27 @@ def _norm(dev: CPUDevice) -> float:
 
 
 class TestActivations:
-    @pytest.mark.parametrize("act_fn", ["softmax", "sigmoid", "identity"])
-    def test_matches_an_independent_reference(self, act_fn):
-        dev = make_device(act_fn=act_fn, n_classes=4)
+    @pytest.mark.parametrize("act_loss", [SoftmaxCE(), SigmoidBCE(), MSE()], ids=["softmax", "sigmoid", "identity"])
+    def test_matches_an_independent_reference(self, act_loss):
+        dev = make_device(act_loss=act_loss, n_classes=4)
         votes = np.array([-2.0, 0.5, 3.0, 1.0], dtype=np.float32)
         y_hat = np.empty(4, dtype=np.float32)
         dev.lib.votes_activation(votes.ctypes.data_as(_float_p), y_hat.ctypes.data_as(_float_p))
 
         scaled = votes / _norm(dev)
-        if act_fn == "softmax":
+        if act_loss.act == "softmax":
             e = np.exp(scaled - np.max(scaled))
             expected = e / e.sum()
-        elif act_fn == "sigmoid":
+        elif act_loss.act == "sigmoid":
             expected = 1.0 / (1.0 + np.exp(-scaled))
         else:
-            expected = votes  # identity does not normalize at all
+            expected = scaled
 
         assert np.allclose(y_hat, expected, atol=1e-5)
 
-    @pytest.mark.parametrize("act_fn", ["softmax", "sigmoid", "identity"])
-    def test_batch_matches_looping_the_single_version(self, act_fn):
-        dev = make_device(act_fn=act_fn, n_classes=4)
+    @pytest.mark.parametrize("act_loss", [SoftmaxCE(), SigmoidBCE(), MSE()], ids=["softmax", "sigmoid", "identity"])
+    def test_batch_matches_looping_the_single_version(self, act_loss):
+        dev = make_device(act_loss=act_loss, n_classes=4)
         rng = np.random.default_rng(0)
         votes = rng.uniform(-3, 3, size=(5, 4)).astype(np.float32)
 
@@ -108,30 +109,23 @@ class TestLossGradient:
     """
 
     @pytest.mark.parametrize(
-        "loss_fn, act_fn",
-        [
-            ("ce", "softmax"),
-            ("sce", "softmax"),
-            ("asl", "sigmoid"),
-            ("mse", "identity"),
-            ("mae", "identity"),
-            ("huber", "identity"),
-            ("tversky", "sigmoid"),
-        ],
+        "act_loss",
+        [SoftmaxCE(), SCE(), ASL(), MSE(), MAE(), Huber(), Tversky()],
+        ids=["ce-softmax", "sce-softmax", "asl-sigmoid", "mse-identity", "mae-identity", "huber-identity", "tversky-sigmoid"],
     )
-    def test_matches_finite_differences(self, loss_fn, act_fn):
-        dev = make_device(loss_fn=loss_fn, act_fn=act_fn, n_classes=3)
+    def test_matches_finite_differences(self, act_loss):
+        dev = make_device(act_loss=act_loss, n_classes=3)
         rng = np.random.default_rng(7)
         votes = rng.uniform(-2, 2, size=3).astype(np.float32)
         y = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
         analytic = _pipeline_grad(dev, votes, y)
 
-        # softmax/sigmoid divide by NORM before activating, and the closed-form grad is w.r.t. that
-        # scaled logit (z = votes / NORM), not raw votes; identity applies no such scaling. Stepping
-        # votes by `eps * scale` moves z by exactly `eps`, so the quotient below is d(loss)/dz.
+        # every activation divides by NORM before activating, and the closed-form grad is w.r.t.
+        # that scaled logit (z = votes / NORM), not raw votes. Stepping votes by `eps * scale` moves
+        # z by exactly `eps`, so the quotient below is d(loss)/dz.
         eps = 1e-2
-        scale = _norm(dev) if act_fn in ("softmax", "sigmoid") else 1.0
+        scale = _norm(dev)
         numeric = np.empty(3, dtype=np.float64)
         for i in range(3):
             plus, minus = votes.copy(), votes.copy()

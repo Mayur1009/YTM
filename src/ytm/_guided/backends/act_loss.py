@@ -73,19 +73,34 @@ static const float _weights[CLASSES] = {{{weights_init}}};
 class SigmoidBCE(ActLoss):
     act = "sigmoid"
 
-    def __init__(self, eps: float = 1e-7, weights: list[float] | np.ndarray | None = None):
+    def __init__(
+        self,
+        eps: float = 1e-7,
+        pos_weights: list[float] | np.ndarray | None = None,
+        neg_weights: list[float] | np.ndarray | None = None,
+    ):
         self.eps = eps
-        self.weights = None if weights is None else np.asarray(weights, dtype=np.float32)
-        if self.weights is None:
+        self.pos_weights = None if pos_weights is None else np.asarray(pos_weights, dtype=np.float32)
+        self.neg_weights = None if neg_weights is None else np.asarray(neg_weights, dtype=np.float32)
+
+        if self.pos_weights is None and self.neg_weights is None:
             self.src = _elementwise_body(
                 loss_expr=f"-(y[c] * logf(y_hat[c] + {eps}f) + (1.0f - y[c]) * logf(1.0f - y_hat[c] + {eps}f))",
                 grad_expr="y[c] - y_hat[c]",
             )
         else:
-            weights_init = ", ".join(f"{w}f" for w in self.weights)
-            self.src = f"static const float _weights[CLASSES] = {{{weights_init}}};\n\n" + _elementwise_body(
-                loss_expr=f"-_weights[c] * (y[c] * logf(y_hat[c] + {eps}f) + (1.0f - y[c]) * logf(1.0f - y_hat[c] + {eps}f))",
-                grad_expr="_weights[c] * (y[c] - y_hat[c])",
+            pos_weights = np.ones_like(self.neg_weights) if self.pos_weights is None else self.pos_weights
+            neg_weights = np.ones_like(self.pos_weights) if self.neg_weights is None else self.neg_weights
+            pos_weights_init = ", ".join(f"{w}f" for w in pos_weights)
+            neg_weights_init = ", ".join(f"{w}f" for w in neg_weights)
+            decls = f"""\
+static const float _pos_weights[CLASSES] = {{{pos_weights_init}}};
+static const float _neg_weights[CLASSES] = {{{neg_weights_init}}};
+
+"""
+            self.src = decls + _elementwise_body(
+                loss_expr=f"-(_pos_weights[c] * y[c] * logf(y_hat[c] + {eps}f) + _neg_weights[c] * (1.0f - y[c]) * logf(1.0f - y_hat[c] + {eps}f))",
+                grad_expr="_pos_weights[c] * y[c] * (1.0f - y_hat[c]) - _neg_weights[c] * (1.0f - y[c]) * y_hat[c]",
             )
 
 

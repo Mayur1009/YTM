@@ -2,14 +2,14 @@ from typing import Unpack
 
 import numpy as np
 
+from .backends.act_loss import MSE
 from .base import BaseTM
 from .config import T_Config
 
 
 class RegressionTM(BaseTM):
     def __init__(self, n_clauses: int, s: float, dim: int | tuple[int, ...], **opt: Unpack[T_Config]):
-        opt.setdefault("act_fn", "identity")
-        opt.setdefault("loss_fn", "mse")
+        opt.setdefault("act_loss", MSE())
         super().__init__(n_clauses, s, dim, 1, **opt)
 
     def fit(

@@ -51,7 +51,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
-        sections["act_loss.h"] = read_file(here / "act_loss.h")
+        sections["act.h"] = read_file(here / "act.h")
+        sections["loss"] = self.config.act_loss.src
         sections["update.c"] = read_file(here / "update.c")
         return sections
 

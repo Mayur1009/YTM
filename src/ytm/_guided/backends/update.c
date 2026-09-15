@@ -3,7 +3,7 @@
 #include "../../_core/backends/cpu.h"
 #include "../../_core/backends/feedback.c"
 #include "../../_core/backends/rng.h"
-#include "act_loss.h"
+#include "act.h"
 
 #define FB_NONE 0
 #define FB_T1A 1
@@ -13,43 +13,25 @@
 #define FB_SIGNAL_GRAD 0
 #define FB_SIGNAL_DELTA_L 1
 #define FB_SIGNAL FB_SIGNAL_DELTA_L
+
+INLINE_FN void compute_loss(const float* restrict y, const float* restrict y_hat, float* restrict grad,
+                            float* restrict loss) {}
 #endif
 
-void votes_activation(const float* restrict votes, float* restrict y_hat) {
-#if ACT_FN == ACT_SOFTMAX
-    _softmax(votes, y_hat);
-#elif ACT_FN == ACT_SIGMOID
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = _sigmoid(votes[c]);
-#else
-    for (int c = 0; c < CLASSES; c++)
-        y_hat[c] = _identity(votes[c]);
-#endif
-}
+void votes_activation(const float* restrict votes, float* restrict y_hat) { compute_act(votes, y_hat); }
 
 void votes_activation_batch(const float* restrict votes, int n_samples, float* restrict y_hat) {
-#if ACT_FN == ACT_SOFTMAX
 #pragma omp parallel for schedule(static)
     for (int e = 0; e < n_samples; e++)
-        _softmax(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
-#else
-    ull total = (ull)n_samples * (ull)CLASSES;
-#pragma omp parallel for schedule(static)
-    for (ull idx = 0; idx < total; idx++)
-#if ACT_FN == ACT_SIGMOID
-        y_hat[idx] = _sigmoid(votes[idx]);
-#else
-        y_hat[idx] = _identity(votes[idx]);
-#endif
-#endif
+        compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
 }
 
 void loss_gradient(const float* restrict y_hat, const float* restrict y, float* restrict grad, float* restrict loss) {
-    loss_gradient_impl(y_hat, y, grad, loss);
+    compute_loss(y, y_hat, grad, loss);
 }
 
-void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights, const int* restrict selected_patch_ids,
-                          float* restrict votes_neg_ck) {
+void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights,
+                          const int* restrict selected_patch_ids, float* restrict votes_neg_ck) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_class = 0; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class++) {
         ull clause_id = clause_class / (ull)CLASSES;
@@ -72,13 +54,14 @@ void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restri
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         float loss = 0.0f;
-        loss_gradient_impl(&y_hat_neg_ck[clause_id * (ull)CLASSES], y, NULL, &loss);
+        compute_loss(y, &y_hat_neg_ck[clause_id * (ull)CLASSES], NULL, &loss);
         loss_neg_ck[clause_id] = loss;
     }
 }
 
-void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights, const int* restrict clause_density,
-                          const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask, const float lambda_,
+void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights,
+                          const int* restrict clause_density, const int* restrict selected_patch_ids,
+                          const int8_t* restrict clause_drop_mask, const float lambda_,
                           uint8_t* restrict feedback_type) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -115,7 +98,8 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
     }
 }
 
-static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob, float delta_L, int ck, bool has_space) {
+static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob, float delta_L, int ck,
+                                        bool has_space) {
     ull rng_k = rng_hash(seed, rng_id, 0xFEEDFACEULL);
     uint rng_counter = 0;
 
@@ -135,8 +119,9 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
     return fb;
 }
 
-void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck, const int* restrict clause_density,
-                             const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask, const float lambda_,
+void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck,
+                             const int* restrict clause_density, const int* restrict selected_patch_ids,
+                             const int8_t* restrict clause_drop_mask, const float lambda_,
                              uint8_t* restrict feedback_type) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
@@ -153,8 +138,9 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
     }
 }
 
-void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e, const int* restrict feat_mins,
-                    const int* restrict literal_offsets, const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
+void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e,
+                    const int* restrict feat_mins, const int* restrict literal_offsets,
+                    const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
     const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
@@ -176,21 +162,23 @@ void update_clauses(const ull seed, const int* restrict selected_patch_ids, cons
             uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
             if (fb == FB_NONE)
                 continue;
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
+                           ta_states);
             is_clause_synced[clause] = 0;
         }
 #else
         uint8_t fb = feedback_type[clause];
         if (fb != FB_NONE) {
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
+                           ta_states);
             is_clause_synced[clause] = 0;
         }
 #endif
     }
 }
 
-void update_weights(const float* restrict grad, const float lr, const int* restrict selected_patch_ids, const int8_t* restrict clause_drop_mask,
-                    float* restrict clause_weights) {
+void update_weights(const float* restrict grad, const float lr, const int* restrict selected_patch_ids,
+                    const int8_t* restrict clause_drop_mask, float* restrict clause_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || selected_patch_ids[clause] < 0)

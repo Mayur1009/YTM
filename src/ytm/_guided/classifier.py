@@ -2,6 +2,7 @@ from typing import ClassVar, Unpack
 
 import numpy as np
 
+from .backends.act_loss import SigmoidBCE, SoftmaxCE
 from .base import BaseTM
 from .config import T_Config
 
@@ -11,17 +12,16 @@ class Classifier(BaseTM):
 
     @property
     def decision_threshold(self) -> float | None:
-        return self._DECISION_THRESHOLDS.get(self.config.act_fn)
+        return self._DECISION_THRESHOLDS.get(self.config.act_loss.act)
 
     @decision_threshold.setter
     def decision_threshold(self, value: float) -> None:
-        self._DECISION_THRESHOLDS[self.config.act_fn] = value
+        self._DECISION_THRESHOLDS[self.config.act_loss.act] = value
 
 
 class MultiClassTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: int | tuple[int, ...], n_classes: int, **opt: Unpack[T_Config]):
-        opt.setdefault("act_fn", "softmax")
-        opt.setdefault("loss_fn", "ce")
+        opt.setdefault("act_loss", SoftmaxCE())
         super().__init__(n_clauses, s, dim, n_classes, **opt)
 
     def fit(
@@ -50,8 +50,7 @@ class MultiClassTM(Classifier):
 
 class MultiOutputTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: int | tuple[int, ...], n_classes: int, **opt: Unpack[T_Config]):
-        opt.setdefault("act_fn", "sigmoid")
-        opt.setdefault("loss_fn", "ce")
+        opt.setdefault("act_loss", SigmoidBCE())
         super().__init__(n_clauses, s, dim, n_classes, **opt)
 
     def fit(
@@ -77,8 +76,7 @@ class MultiOutputTM(Classifier):
 
 class BinaryTM(Classifier):
     def __init__(self, n_clauses: int, s: float, dim: int | tuple[int, ...], **opt: Unpack[T_Config]):
-        opt.setdefault("act_fn", "sigmoid")
-        opt.setdefault("loss_fn", "ce")
+        opt.setdefault("act_loss", SigmoidBCE())
         opt.setdefault("coalesced", False)
         super().__init__(n_clauses, s, dim, 1, **opt)
 
