@@ -71,7 +71,7 @@ class TestActivations:
         assert np.array_equal(y_hat_batch, y_hat_loop)
 
 
-def _pipeline_loss(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weights: np.ndarray) -> float:
+def _pipeline_loss(dev: CPUDevice, votes: np.ndarray, y: np.ndarray) -> float:
     n = dev.config.n_classes
     y_hat = np.empty(n, dtype=np.float32)
     loss = np.empty(1, dtype=np.float32)
@@ -79,14 +79,13 @@ def _pipeline_loss(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weigh
     dev.lib.loss_gradient(
         y_hat.ctypes.data_as(_float_p),
         y.ctypes.data_as(_float_p),
-        class_weights.ctypes.data_as(_float_p),
         None,
         loss.ctypes.data_as(_float_p),
     )
     return float(loss[0])
 
 
-def _pipeline_grad(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weights: np.ndarray) -> np.ndarray:
+def _pipeline_grad(dev: CPUDevice, votes: np.ndarray, y: np.ndarray) -> np.ndarray:
     n = dev.config.n_classes
     y_hat = np.empty(n, dtype=np.float32)
     grad = np.empty(n, dtype=np.float32)
@@ -94,7 +93,6 @@ def _pipeline_grad(dev: CPUDevice, votes: np.ndarray, y: np.ndarray, class_weigh
     dev.lib.loss_gradient(
         y_hat.ctypes.data_as(_float_p),
         y.ctypes.data_as(_float_p),
-        class_weights.ctypes.data_as(_float_p),
         grad.ctypes.data_as(_float_p),
         None,
     )
@@ -126,9 +124,8 @@ class TestLossGradient:
         rng = np.random.default_rng(7)
         votes = rng.uniform(-2, 2, size=3).astype(np.float32)
         y = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        w = np.ones(3, dtype=np.float32)
 
-        analytic = _pipeline_grad(dev, votes, y, w)
+        analytic = _pipeline_grad(dev, votes, y)
 
         # softmax/sigmoid divide by NORM before activating, and the closed-form grad is w.r.t. that
         # scaled logit (z = votes / NORM), not raw votes; identity applies no such scaling. Stepping
@@ -140,7 +137,7 @@ class TestLossGradient:
             plus, minus = votes.copy(), votes.copy()
             plus[i] += eps * scale
             minus[i] -= eps * scale
-            numeric[i] = (_pipeline_loss(dev, plus, y, w) - _pipeline_loss(dev, minus, y, w)) / (2 * eps)
+            numeric[i] = (_pipeline_loss(dev, plus, y) - _pipeline_loss(dev, minus, y)) / (2 * eps)
 
         assert np.allclose(analytic, -numeric, atol=5e-2, rtol=5e-2), (analytic, -numeric)
 

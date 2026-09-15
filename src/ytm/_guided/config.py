@@ -68,7 +68,6 @@ class TMConfig(BaseTMConfig):
         self._fb_signal = FbSignal[self.fb_signal.upper()]
 
         kw = self.loss_fn_kwargs
-        self._loss_gamma = kw.get("gamma", 1.0 if self.loss_fn == "tversky" else 0.0)
         self._loss_eps = kw.get("eps", 1e-4 if self.loss_fn == "sce" else (1e-7 if self.loss_fn == "ce" else 1e-6))
         self._loss_alpha = kw.get("alpha", 1.0 if self.loss_fn == "sce" else 0.5)
         self._loss_beta = kw.get("beta", 1.0 if self.loss_fn == "sce" else 0.5)
@@ -87,7 +86,6 @@ class TMConfig(BaseTMConfig):
 #define FB_SIGNAL {self._fb_signal.value}
 #define ACT_FN {self._act_fn.value}
 #define LOSS_FN {self._loss_fn.value}
-#define LOSS_GAMMA {float(self._loss_gamma)}f
 #define LOSS_EPS {float(self._loss_eps)}f
 #define LOSS_ALPHA {float(self._loss_alpha)}f
 #define LOSS_BETA {float(self._loss_beta)}f

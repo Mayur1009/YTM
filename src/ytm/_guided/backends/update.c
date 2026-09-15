@@ -44,8 +44,8 @@ void votes_activation_batch(const float* restrict votes, int n_samples, float* r
 #endif
 }
 
-void loss_gradient(const float* restrict y_hat, const float* restrict y, const float* restrict class_weights, float* restrict grad, float* restrict loss) {
-    loss_gradient_impl(y_hat, y, class_weights, grad, loss);
+void loss_gradient(const float* restrict y_hat, const float* restrict y, float* restrict grad, float* restrict loss) {
+    loss_gradient_impl(y_hat, y, grad, loss);
 }
 
 void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights, const int* restrict selected_patch_ids,
@@ -68,12 +68,11 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
     }
 }
 
-void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, const float* restrict loss_class_weights,
-                         float* restrict loss_neg_ck) {
+void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, float* restrict loss_neg_ck) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         float loss = 0.0f;
-        loss_gradient_impl(&y_hat_neg_ck[clause_id * (ull)CLASSES], y, loss_class_weights, NULL, &loss);
+        loss_gradient_impl(&y_hat_neg_ck[clause_id * (ull)CLASSES], y, NULL, &loss);
         loss_neg_ck[clause_id] = loss;
     }
 }
