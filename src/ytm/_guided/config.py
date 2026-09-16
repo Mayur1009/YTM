@@ -26,7 +26,6 @@ class TMConfig(BaseTMConfig):
     weight_init: Literal["random"] | float | str = "random"
     act_loss: ActLoss = field(default_factory=SoftmaxCE)
     fb_signal: Literal["delta_l", "grad"] = "delta_l"
-    allow_polarity_change: bool = False
 
     def _derive_vars(self):
         super()._derive_vars()
