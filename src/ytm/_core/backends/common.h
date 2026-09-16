@@ -28,6 +28,7 @@
 #define POSITION_LITERALS 1
 #define WEIGHTED 1
 #define MAX_WEIGHT 1073741824.0f
+#define ALLOW_POLARITY_CHANGE 1
 #define TYPE1A_FB 1
 #define TYPE1B_FB 1
 #define TYPE2_FB 1

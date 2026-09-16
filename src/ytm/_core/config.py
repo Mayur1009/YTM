@@ -41,6 +41,7 @@ class BaseTMConfig:
     # clause weights
     weighted: bool = True
     max_weight: float = float(1 << 30)
+    allow_polarity_change: bool = True
 
     # feedback
     skip_t1a_fb: bool = False
@@ -217,6 +218,7 @@ class BaseTMConfig:
 #define NEGATIVE_CLAUSES {int(self.negative_clauses)}
 #define WEIGHTED {int(self.weighted)}
 #define MAX_WEIGHT {float(self.max_weight)}f
+#define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
 
 #define TYPE1A_FB {int(not self.skip_t1a_fb)}
 #define TYPE1B_FB {int(not self.skip_t1b_fb)}
@@ -259,6 +261,7 @@ class T_BaseTMConfig(TypedDict, total=False):
     # clause weights
     weighted: bool
     max_weight: float
+    allow_polarity_change: bool
 
     # feedback
     skip_t1a_fb: bool

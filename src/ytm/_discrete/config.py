@@ -9,7 +9,6 @@ class TMConfig(BaseTMConfig):
     T: float | tuple[float, float]
     q: float = 1.0
     weight_init: int = 1
-    allow_polarity_change: bool = True
 
     def _derive_vars(self):
         super()._derive_vars()
@@ -30,7 +29,6 @@ class TMConfig(BaseTMConfig):
         self._header += f"""
 #define T_MIN {self._T_min}f
 #define T_MAX {self._T_max}f
-#define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
 """
 
 
@@ -46,4 +44,3 @@ class RegressionConfig(TMConfig):
 class T_Config(T_BaseTMConfig, T_DeviceConfig, total=False):
     q: float
     weight_init: int
-    allow_polarity_change: bool

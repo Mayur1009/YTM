@@ -188,7 +188,12 @@ void update_weights(const float* restrict grad, const float lr, const int* restr
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
             ull idx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
-            clause_weights[idx] = clip(clause_weights[idx] + lr * grad[class_id], -MAX_WEIGHT, MAX_WEIGHT);
+            float new_w = clause_weights[idx] + lr * grad[class_id];
+#if ALLOW_POLARITY_CHANGE
+            clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);
+#else
+            clause_weights[idx] = (clause_weights[idx] >= 0) ? clip(new_w, 0.0001f, MAX_WEIGHT) : clip(new_w, -MAX_WEIGHT, -0.0001f);
+#endif
         }
     }
 }
