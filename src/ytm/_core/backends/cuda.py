@@ -31,11 +31,11 @@ class CUDADevice(BaseDevice):
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "feedback.cu", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
         return {name: read_file(core / name) for name in names}
 
     def _kernel_names(self) -> tuple[str, ...]:
-        return ("pack_clauses", "infer_clauses", "infer_clauses_patchwise", "sum_votes", "wic", "wac")
+        return ("pack_clauses", "calc_clause_outputs", "calc_clause_outputs_patchwise", "sum_votes", "evaluate", "count_votes", "wic", "wac")
 
     def _init_kernels(self):
         with self.cuda_dev:
@@ -103,7 +103,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.k_infer_clauses(
+                self.k_calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * warp_size),
                     (
                         Xb,
@@ -138,7 +138,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.k_infer_clauses(
+                self.k_calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * warp_size),
                     (
                         Xb,
@@ -168,7 +168,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
-                self.k_infer_clauses_patchwise(
+                self.k_calc_clause_outputs_patchwise(
                     *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
                     (
                         Xb,
