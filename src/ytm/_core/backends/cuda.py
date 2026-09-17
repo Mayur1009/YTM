@@ -3,6 +3,7 @@ import pathlib
 import cupy as cp
 import numpy as np
 
+from ..utils import tqdm_bar
 from .base import BaseDevice
 
 
@@ -15,7 +16,17 @@ class CUDADevice(BaseDevice):
     cuda_dev: cp.cuda.Device
     module: cp.RawModule
 
-    def dev_init(self): ...
+    def dev_init(self):
+        self.xp = cp
+        self.cuda_dev = cp.cuda.Device(self.device_config._gpu_id)
+
+        with self.cuda_dev:
+            self._init_clauses()
+            self._init_weights()
+            self._init_patch_weights()
+            self._init_packed_clauses()
+            self._init_device_arrays()
+            self._init_kernels()
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
@@ -70,3 +81,169 @@ class CUDADevice(BaseDevice):
                     np.int32(full),
                 ),
             )
+
+    def _batches(self, N: int, batch_size: int, desc: str):
+        if batch_size == -1:
+            batch_size = N
+        for i in tqdm_bar(range(0, N, batch_size), desc=desc):
+            end = min(i + batch_size, N)
+            yield i, end, end - i
+
+    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+        warp_size = self.device_config._cuda_props["warp_size"]
+        pc = self.packed_clauses
+
+        with self.cuda_dev:
+            self.pack_clauses(force_repack)
+            class_sums = cp.zeros((N, cfg.n_classes), dtype=np.float32)
+
+            for i, end, bs in self._batches(N, batch_size, "Infer"):
+                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
+
+                self.k_infer_clauses(
+                    *self._kernel_config(bs * cfg._total_clauses * warp_size),
+                    (
+                        Xb,
+                        clause_outputs,
+                        np.int32(bs),
+                        pc.clause_position_bounds,
+                        pc.clause_feat_bounds,
+                        pc.bounded_feat_ids,
+                        pc.n_bounded_feats,
+                        pc.clause_density,
+                    ),
+                )
+
+                self.k_sum_votes(
+                    *self._kernel_config(bs * cfg.n_classes * warp_size),
+                    (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
+                )
+
+            return class_sums.get()
+
+    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+        warp_size = self.device_config._cuda_props["warp_size"]
+        pc = self.packed_clauses
+        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
+
+        with self.cuda_dev:
+            self.pack_clauses(force_repack)
+
+            for i, end, bs in self._batches(N, batch_size, "Transform"):
+                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
+
+                self.k_infer_clauses(
+                    *self._kernel_config(bs * cfg._total_clauses * warp_size),
+                    (
+                        Xb,
+                        clause_outputs,
+                        np.int32(bs),
+                        pc.clause_position_bounds,
+                        pc.clause_feat_bounds,
+                        pc.bounded_feat_ids,
+                        pc.n_bounded_feats,
+                        pc.clause_density,
+                    ),
+                )
+                out[i:end] = clause_outputs.get()
+
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
+
+    def _patch_outputs(self, X: np.ndarray, batch_size: int, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+        pc = self.packed_clauses
+        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+
+        with self.cuda_dev:
+            self.pack_clauses(force_repack)
+
+            for i, end, bs in self._batches(N, batch_size, desc):
+                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+
+                self.k_infer_clauses_patchwise(
+                    *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
+                    (
+                        Xb,
+                        patch_output,
+                        np.int32(bs),
+                        pc.clause_position_bounds,
+                        pc.clause_feat_bounds,
+                        pc.bounded_feat_ids,
+                        pc.n_bounded_feats,
+                        pc.clause_density,
+                    ),
+                )
+                out[i:end] = patch_output.get()
+
+        return out
+
+    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        out = self._patch_outputs(X, batch_size, force_repack)
+        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
+
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        pc = self.packed_clauses
+
+        with self.cuda_dev:
+            self.pack_clauses(force_repack)
+
+            pw = self.patch_weights.astype(np.float32)
+            pw_norm = cp.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
+            output = cp.zeros(cfg._dim, dtype=np.float32)
+
+            self.k_wic(
+                *self._kernel_config(cfg._total_clauses * cfg._n_patches),
+                (
+                    np.int32(class_id),
+                    np.int32(polarity),
+                    self.clause_weights,
+                    pc.clause_feat_bounds,
+                    pc.clause_position_bounds,
+                    pc.clause_density,
+                    pw_norm,
+                    self.feat_mins_gpu,
+                    self.feat_maxs_gpu,
+                    np.float32(pw_th),
+                    output,
+                ),
+            )
+            return output.get()
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        pc = self.packed_clauses
+        N = X.shape[0]
+
+        patch_output = self._patch_outputs(X, -1, force_repack, desc="WAC activations")
+
+        with self.cuda_dev:
+            patch_output_gpu = cp.asarray(patch_output)
+            target_classes_gpu = cp.asarray(target_classes, dtype=np.int32)
+            output = cp.zeros((N, *cfg._dim), dtype=np.float32)
+
+            self.k_wac(
+                *self._kernel_config(N * cfg._total_clauses * cfg._n_patches),
+                (
+                    target_classes_gpu,
+                    np.int32(polarity),
+                    np.int32(N),
+                    self.clause_weights,
+                    pc.clause_feat_bounds,
+                    patch_output_gpu,
+                    pc.clause_density,
+                    self.feat_mins_gpu,
+                    self.feat_maxs_gpu,
+                    output,
+                ),
+            )
+            return output.get()
