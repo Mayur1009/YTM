@@ -18,20 +18,22 @@ void calc_clause_outputs(const int* restrict clause_position_bounds, const int* 
 
 void calc_class_sums(const float* restrict clause_weights, const int* restrict clause_position_bounds,
                      const int* restrict clause_feat_bounds, const int* restrict bounded_feat_ids, const int* restrict n_bounded_feats,
-                     const int* restrict clause_density, const int* restrict X, const int e, float* restrict class_sums) {
-    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    float* sums_e = &class_sums[(ull)e * CLASSES];
+                     const int* restrict clause_density, const int* restrict X, const int N, float* restrict class_sums) {
+    for (int e = 0; e < N; e++) {
+        const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+        float* sums_e = &class_sums[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
-                                n_bounded_feats, clause_density[clause]);
+        for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+            int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
+                                    n_bounded_feats, clause_density[clause]);
 
-        if (out) {
-            ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-            ull class_id;
-            LOOP_CLASS_ID(class_id, clause) {
-                sums_e[class_id] += clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+            if (out) {
+                ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
+                ull class_id;
+                LOOP_CLASS_ID(class_id, clause) {
+                    sums_e[class_id] += clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+                }
             }
         }
     }

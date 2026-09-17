@@ -53,7 +53,7 @@ void w_type2_fb(const int* Xe, int py, int px, const int* fmins, const int* loff
 def _lib(header: str) -> ctypes.CDLL:
     dev = DeviceConfig(device="cpu:1")
     assert dev._compiler is not None
-    code = header + "".join(read_file(CORE / f) for f in ("cpu.h", "common.h", "rng.h", "feedback.c")) + WRAPPERS
+    code = header + "".join(read_file(CORE / f) for f in ("cpu.h", "common.h", "rng.h", "feedback.h", "feedback.c")) + WRAPPERS
 
     with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
         f.write(code)

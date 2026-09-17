@@ -78,7 +78,7 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.c", "pack_clauses.c", "evaluate.c", "interpret.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "feedback.c", "pack_clauses.c", "evaluate.c", "interpret.c")
         return {name: read_file(core / name) for name in names}
 
     def _init_lib(self):
@@ -146,23 +146,21 @@ class CPUDevice(BaseDevice):
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=np.int32)
-        p_X = X.ctypes.data_as(int32_p)
+        X = np.asarray(X, dtype=np.int32, order="C")
         class_sums = np.zeros((X.shape[0], cfg.n_classes), dtype=np.float32)
         self.pack_clauses(force_repack)
 
-        for e in tqdm_bar(range(X.shape[0]), desc="Infer"):
-            self.lib.calc_class_sums(
-                self.p_clause_weights,
-                self.p_clause_position_bounds,
-                self.p_clause_feat_bounds,
-                self.p_bounded_feat_ids,
-                self.p_n_bounded_feats,
-                self.p_clause_density,
-                p_X,
-                c_int(e),
-                class_sums.ctypes.data_as(float_p),
-            )
+        self.lib.calc_class_sums(
+            self.p_clause_weights,
+            self.p_clause_position_bounds,
+            self.p_clause_feat_bounds,
+            self.p_bounded_feat_ids,
+            self.p_n_bounded_feats,
+            self.p_clause_density,
+            X.ctypes.data_as(int32_p),
+            c_int(X.shape[0]),
+            class_sums.ctypes.data_as(float_p),
+        )
         return class_sums
 
     def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
