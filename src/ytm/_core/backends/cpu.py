@@ -144,7 +144,7 @@ class CPUDevice(BaseDevice):
     def _fit_voting(self, buf: CPUFitBuffers):
         self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, buf.p_votes)
 
-    def calc_class_sums(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         X = np.ascontiguousarray(X, dtype=np.int32)
         p_X = X.ctypes.data_as(int32_p)

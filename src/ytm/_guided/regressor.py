@@ -26,6 +26,6 @@ class RegressionTM(BaseTM):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr, lambda_)
 
-    def predict(self, X: np.ndarray, force_repack: bool = False):
-        class_sums = self.score(X, force_repack)
+    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack)
         return class_sums[:, 0], class_sums

@@ -35,8 +35,8 @@ class MultiClassTM(Classifier):
 
         return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, label_sampling)
 
-    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, force_repack, clip_class_sums)
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return np.argmax(class_sums, axis=1), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
@@ -69,8 +69,8 @@ class MultiOutputTM(Classifier):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         return self._fit(X, Y, shuffle, clause_drop_p, batch_size, label_sampling)
 
-    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, force_repack, clip_class_sums)
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return (class_sums > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
@@ -112,8 +112,8 @@ class BinaryTM(Classifier):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
         return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, label_sampling)
 
-    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, force_repack, clip_class_sums)
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return (class_sums[:, 0] > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:

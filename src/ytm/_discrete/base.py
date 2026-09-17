@@ -46,8 +46,8 @@ class BaseTM(CoreBaseTM):
 
         self.dev.fit_epoch(X, encoded_Y, clause_drop_p, batch_size, label_probs)
 
-    def score(self, X: np.ndarray, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
-        class_sums = super().score(X, force_repack)
+    def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
+        class_sums = super().score(X, batch_size, force_repack)
         if clip_class_sums:
             class_sums = np.clip(class_sums, self.config._T_min, self.config._T_max)
         return class_sums

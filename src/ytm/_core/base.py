@@ -28,8 +28,8 @@ class BaseTM(abc.ABC):
     @abc.abstractmethod
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
 
-    def score(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        return self.dev.calc_class_sums(np.ascontiguousarray(X), force_repack)
+    def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        return self.dev.calc_class_sums(np.ascontiguousarray(X), batch_size, force_repack)
 
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.transform(np.ascontiguousarray(X), batch_size, force_repack)

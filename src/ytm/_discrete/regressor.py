@@ -38,8 +38,8 @@ class RegressionTM(BaseTM):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size)
 
-    def predict(self, X: np.ndarray, clip_class_sums: bool = True, force_repack: bool = False):
+    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = True, force_repack: bool = False):
         lo, hi = self.config.y_range
-        class_sums = self.score(X, force_repack, clip_class_sums)
+        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         preds = (class_sums[:, 0] / self.config._T_max) * (hi - lo) + lo
         return preds, class_sums

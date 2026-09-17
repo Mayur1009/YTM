@@ -43,8 +43,8 @@ class MultiClassTM(Classifier):
 
         return self._fit(X, one_hot_Y, shuffle, clause_drop_p, batch_size, lr, lambda_)
 
-    def predict(self, X: np.ndarray, force_repack: bool = False):
-        class_sums = self.score(X, force_repack)
+    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack)
         return np.argmax(class_sums, axis=1), class_sums
 
 
@@ -67,8 +67,8 @@ class MultiOutputTM(Classifier):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         return self._fit(X, Y, shuffle, clause_drop_p, batch_size, lr, lambda_)
 
-    def predict(self, X: np.ndarray, force_repack: bool = False):
-        class_sums = self.score(X, force_repack)
+    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack)
         threshold = self.decision_threshold
         preds = class_sums if threshold is None else (class_sums > threshold).astype(np.uint32)
         return preds, class_sums
@@ -94,8 +94,8 @@ class BinaryTM(Classifier):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
         return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr, lambda_)
 
-    def predict(self, X: np.ndarray, force_repack: bool = False):
-        class_sums = self.score(X, force_repack)
+    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
+        class_sums = self.score(X, batch_size, force_repack=force_repack)
         threshold = self.decision_threshold
         preds = class_sums[:, 0] if threshold is None else (class_sums[:, 0] > threshold).astype(np.uint32)
         return preds, class_sums
