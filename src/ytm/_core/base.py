@@ -44,7 +44,7 @@ class BaseTM(abc.ABC):
         assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
 
         # Shift X, so that the model always sees X in [0, therm_bits]
-        X_sh = np.asarray((X - cfg._feat_mins) if np.any(lo) else X, dtype=cfg._bound_dtype, order="C")
+        X_sh = np.asarray((X - cfg._feat_mins) if np.any(lo) else X, dtype=cfg._fbound_dtype, order="C")
         return X_sh
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:

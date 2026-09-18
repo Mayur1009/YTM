@@ -196,13 +196,16 @@ class BaseTMConfig:
         self._ta_dtype, self._ta_ctype = _get_unsinged_type(self.n_states)
 
         # therm bits
-        self._bound_dtype, self._bound_ctype = _get_unsinged_type(int(self._therm_bits.max()) + 1)
+        self._fbound_dtype, self._fbound_ctype = _get_unsinged_type(int(self._therm_bits.max()) + 1)
 
         # number of features
         self._nfeat_dtype, self._nfeat_ctype = _get_unsinged_type(self._n_raw_patch_feats)
 
         # number of patches
         self._npatches_dtype, self._npatches_ctype = _get_unsinged_type(self._n_patches)
+
+        # patch index bounds
+        self._pbound_dtype, self._pbound_ctype = _get_unsinged_type(max(self._n_patches_y, self._n_patches_x))
 
         # number of literals
         self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals)
@@ -249,7 +252,8 @@ class BaseTMConfig:
 #define BOOST_TP_DEC {int(self.boost_tp_dec)}
 
 #define TA_STATE_T {self._ta_ctype}
-#define BOUND_T {self._bound_ctype}
+#define FBOUND_T {self._fbound_ctype}
+#define PBOUND_T {self._pbound_ctype}
 #define NFEAT_T {self._nfeat_ctype}
 #define NPATCHES_T {self._npatches_ctype}
 #define NLITS_T {self._nlits_ctype}

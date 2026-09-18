@@ -35,7 +35,8 @@
 #define TRACK_PATCH_WEIGHTS 1
 
 #define TA_STATE_T uint32_t
-#define BOUND_T uint32_t
+#define FBOUND_T uint32_t
+#define PBOUND_T uint32_t
 #define NFEAT_T uint32_t
 #define NPATCHES_T uint32_t
 #define NLITS_T uint32_t
@@ -63,7 +64,7 @@ INLINE_FN float clip(float val, float lo, float hi) { return (val < lo) ? lo : (
 INLINE_FN bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
 // Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
-INLINE_FN int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, int fid) {
+INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, int fid) {
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
@@ -73,32 +74,32 @@ INLINE_FN int get_feature_value(const int* X, int patch_idx_y, int patch_idx_x, 
 }
 
 // True when the patch matches a clause (strict AND matching).
-INLINE_FN bool match_patch(const int* X, int patch_idx_y, int patch_idx_x, const int* feat_bounds,
+INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, const FBOUND_T* feat_bounds,
                            const int* bounded_feat_ids, int n_bounded_feat_ids) {
     for (int i = 0; i < n_bounded_feat_ids; ++i) {
         int fid = bounded_feat_ids[i];
-        int val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
+        FBOUND_T val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
         if (val < feat_bounds[fid * 2] || val > feat_bounds[fid * 2 + 1])
             return false;
     }
     return true;
 }
 
-// Clause output on this sample.
-INLINE_FN int clause_output(const int* Xe, ull clause, const int* clause_position_bounds,
-                            const int* clause_feat_bounds, const int* bounded_feat_ids,
-                            const int* n_bounded_feats, int clause_density) {
-    if (clause_density < 0)
+// Clause output on this one sample.
+INLINE_FN int clause_output(const FBOUND_T* Xe, ull clause, const PBOUND_T* clause_position_bounds,
+                            const FBOUND_T* clause_feat_bounds, const int* bounded_feat_ids,
+                            const int* n_bounded_feats, bool has_contra, NLITS_T clause_len) {
+    if (has_contra)
         return 0;
-    if (clause_density == 0)
+    if (clause_len == 0)
         return 1;
 
-    const int* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+    const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
     const int* fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
     int n_fids = n_bounded_feats[clause];
 
 #if (N_PATCHES > 1)
-    const int* pos = &clause_position_bounds[clause * 4];
+    const PBOUND_T* pos = &clause_position_bounds[clause * 4];
     for (int py = pos[0]; py <= pos[1]; py++)
         for (int px = pos[2]; px <= pos[3]; px++)
             if (match_patch(Xe, py, px, feat_bounds, fids, n_fids))
