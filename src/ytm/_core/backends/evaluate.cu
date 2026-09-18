@@ -3,10 +3,10 @@
 #include "cuda.h"
 #endif
 
-__device__ void calc_clause_outputs_conv(const int* X, int8_t* clause_outputs, const int N,
-                                         const int* clause_position_bounds, const int* clause_feat_bounds,
-                                         const int* bounded_feat_ids, const int* n_bounded_feats,
-                                         const int* clause_density) {
+__device__ void calc_clause_outputs_conv(const FBOUND_T* X, int8_t* clause_outputs, const int N,
+                                         const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
+                                         const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
+                                         const int8_t* has_contra, const NLITS_T* clause_len) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -18,19 +18,18 @@ __device__ void calc_clause_outputs_conv(const int* X, int8_t* clause_outputs, c
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
 
-        int cd = clause_density[clause];
-        if (cd <= 0) {
+        if (has_contra[clause] || clause_len[clause] == 0) {
             if (lane == 0)
-                clause_outputs[idx] = (cd == 0) ? 1 : 0;
+                clause_outputs[idx] = has_contra[clause] ? 0 : 1;
             continue;
         }
 
-        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* pos = &clause_position_bounds[clause * 4];
+        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
+        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
         int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_bounded_fids = n_bounded_feats[clause];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_bounded_fids = (int)clause_n_feats[clause];
 
         int n_y = pos1 - pos0 + 1;
         int n_x = pos3 - pos2 + 1;
@@ -43,7 +42,7 @@ __device__ void calc_clause_outputs_conv(const int* X, int8_t* clause_outputs, c
             if (i < patches_to_consider) {
                 int py = pos0 + i / n_x;
                 int px = pos2 + i % n_x;
-                match = match_patch(Xe, py, px, cfb, bounded_fids, n_bounded_fids);
+                match = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
             }
             if (warp.any(match))
                 found = true;
@@ -54,9 +53,10 @@ __device__ void calc_clause_outputs_conv(const int* X, int8_t* clause_outputs, c
     }
 }
 
-__device__ void calc_clause_outputs_noconv(const int* X, int8_t* clause_outputs, const int N,
-                                           const int* clause_feat_bounds, const int* bounded_feat_ids,
-                                           const int* n_bounded_feats, const int* clause_density) {
+__device__ void calc_clause_outputs_noconv(const FBOUND_T* X, int8_t* clause_outputs, const int N,
+                                           const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
+                                           const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                           const NLITS_T* clause_len) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -68,26 +68,24 @@ __device__ void calc_clause_outputs_noconv(const int* X, int8_t* clause_outputs,
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
 
-        int cd = clause_density[clause];
-        if (cd <= 0) {
+        if (has_contra[clause] || clause_len[clause] == 0) {
             if (lane == 0) {
-                clause_outputs[idx] = (cd == 0) ? 1 : 0;
+                clause_outputs[idx] = has_contra[clause] ? 0 : 1;
             }
             continue;
         }
 
-        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_bounded_fids = n_bounded_feats[clause];
+        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_bounded_fids = (int)clause_n_feats[clause];
 
         bool is_matching = true;
         for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
             int i = base + lane;
             if (i < n_bounded_fids) {
-                int fid = bounded_fids[i];
-                int val = get_feature_value(Xe, 0, 0, fid);
-                if (val < cfb[fid * 2] || val > cfb[fid * 2 + 1])
+                FBOUND_T val = get_feature_value(Xe, 0, 0, (int)bounded_fids[i]);
+                if (val < cfb[i * 2] || val > cfb[i * 2 + 1])
                     is_matching = false;
             }
             if (warp.any(!is_matching))
@@ -100,16 +98,16 @@ __device__ void calc_clause_outputs_noconv(const int* X, int8_t* clause_outputs,
     }
 }
 
-extern "C" __global__ void calc_clause_outputs(const int* X, int8_t* clause_outputs, const int N,
-                                               const int* clause_position_bounds, const int* clause_feat_bounds,
-                                               const int* bounded_feat_ids, const int* n_bounded_feats,
-                                               const int* clause_density) {
+extern "C" __global__ void calc_clause_outputs(const FBOUND_T* X, int8_t* clause_outputs, const int N,
+                                               const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
+                                               const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
+                                               const int8_t* has_contra, const NLITS_T* clause_len) {
 #if (N_PATCHES > 1)
-    calc_clause_outputs_conv(X, clause_outputs, N, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
-                             n_bounded_feats, clause_density);
+    calc_clause_outputs_conv(X, clause_outputs, N, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
+                             clause_n_feats, has_contra, clause_len);
 #else
-    calc_clause_outputs_noconv(X, clause_outputs, N, clause_feat_bounds, bounded_feat_ids, n_bounded_feats,
-                               clause_density);
+    calc_clause_outputs_noconv(X, clause_outputs, N, clause_feat_bounds, clause_feat_ids, clause_n_feats,
+                               has_contra, clause_len);
 #endif
 }
 
@@ -148,10 +146,11 @@ extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* 
     }
 }
 
-extern "C" __global__ void calc_clause_outputs_patchwise(const int* X, int8_t* patch_output, const int N,
-                                                         const int* clause_position_bounds,
-                                                         const int* clause_feat_bounds, const int* bounded_feat_ids,
-                                                         const int* n_bounded_feats, const int* clause_density) {
+extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8_t* patch_output, const int N,
+                                                         const PBOUND_T* clause_position_bounds,
+                                                         const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
+                                                         const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                                         const NLITS_T* clause_len) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -163,33 +162,34 @@ extern "C" __global__ void calc_clause_outputs_patchwise(const int* X, int8_t* p
 
         int8_t* output = &patch_output[e * (ull)TOTAL_CLAUSES * N_PATCHES + clause * (ull)N_PATCHES + patch];
 
-        int cd = clause_density[clause];
-        if (cd <= 0) {
-            *output = (cd == 0) ? 1 : 0;
+        if (has_contra[clause] || clause_len[clause] == 0) {
+            *output = has_contra[clause] ? 0 : 1;
             continue;
         }
 
-        const int* pos = &clause_position_bounds[clause * 4];
         int py = patch / N_PATCHES_X;
         int px = patch % N_PATCHES_X;
 
+#if (N_PATCHES > 1)
+        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
         if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
             *output = 0;
             continue;
         }
+#endif
 
-        const int* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const int* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_bounded_fids = n_bounded_feats[clause];
+        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_bounded_fids = (int)clause_n_feats[clause];
 
-        *output = match_patch(Xe, py, px, cfb, bounded_fids, n_bounded_fids) ? 1 : 0;
+        *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
     }
 }
 
-__device__ void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask, const int* clause_feat_bounds,
-                                const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                                int* selected_patch_ids) {
+__device__ void evaluate_noconv(const FBOUND_T* Xe, const int8_t* clause_drop_mask, const FBOUND_T* clause_feat_bounds,
+                                const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                const NLITS_T* clause_len, int8_t* clause_output) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -197,30 +197,28 @@ __device__ void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask, c
     ull total_warps = grid.size() / warp.size();
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
-        int cd = clause_density[clause];
-        if (clause_drop_mask[clause] == 1 || cd < 0) {
+        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             if (lane == 0)
-                selected_patch_ids[clause] = -1;
+                clause_output[clause] = 0;
             continue;
         }
 
-        if (cd == 0) {
+        if (clause_len[clause] == 0) {
             if (lane == 0)
-                selected_patch_ids[clause] = 0;
+                clause_output[clause] = 1;
             continue;
         }
 
-        const int* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        int n_bounded_fids = n_bounded_feats[clause];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        int n_bounded_fids = (int)clause_n_feats[clause];
 
         bool is_matching = true;
         for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
             int i = base + lane;
             if (i < n_bounded_fids) {
-                int fid = bounded_fids[i];
-                int val = get_feature_value(Xe, 0, 0, fid);
-                if (val < feat_bounds[fid * 2] || val > feat_bounds[fid * 2 + 1])
+                FBOUND_T val = get_feature_value(Xe, 0, 0, (int)bounded_fids[i]);
+                if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
                     is_matching = false;
             }
             if (warp.any(!is_matching))
@@ -229,14 +227,15 @@ __device__ void evaluate_noconv(const int* Xe, const int8_t* clause_drop_mask, c
         bool matched = warp.all(is_matching);
 
         if (lane == 0)
-            selected_patch_ids[clause] = matched ? 0 : -1;
+            clause_output[clause] = matched ? 1 : 0;
     }
 }
 
-__device__ void evaluate_conv(const ull seed, const int* Xe, const int8_t* clause_drop_mask,
-                              const int* clause_position_bounds, const int* clause_feat_bounds,
-                              const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                              int* selected_patch_ids, int* patch_weights) {
+__device__ void evaluate_conv(const ull seed, const FBOUND_T* Xe, const int8_t* clause_drop_mask,
+                              const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
+                              const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                              const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
+                              int* patch_weights) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -244,20 +243,20 @@ __device__ void evaluate_conv(const ull seed, const int* Xe, const int8_t* claus
     ull total_warps = grid.size() / warp.size();
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
-        int cd = clause_density[clause];
-        if (clause_drop_mask[clause] == 1 || cd < 0) {
+        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             if (lane == 0)
-                selected_patch_ids[clause] = -1;
+                clause_output[clause] = 0;
             continue;
         }
 
         ull rng_k = rng_hash(seed, clause, 0xDEADBEEFULL);
         uint rng_counter = 0;
 
-        if (cd == 0) {
+        if (clause_len[clause] == 0) {
             if (lane == 0) {
                 int selected_id = (int)(rand_uniform(rng_k, &rng_counter) * N_PATCHES);
-                selected_patch_ids[clause] = selected_id;
+                clause_output[clause] = 1;
+                selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
                 patch_weights[clause * (ull)N_PATCHES + selected_id]++;
 #endif
@@ -265,11 +264,11 @@ __device__ void evaluate_conv(const ull seed, const int* Xe, const int8_t* claus
             continue;
         }
 
-        const int* pos = &clause_position_bounds[clause * 4];
+        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
         const int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const int* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const int* bounded_fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        const int n_bounded_fids = n_bounded_feats[clause];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const int n_bounded_fids = (int)clause_n_feats[clause];
 
         int selected_id = -1;
         int count = 0;
@@ -283,7 +282,7 @@ __device__ void evaluate_conv(const ull seed, const int* Xe, const int8_t* claus
             if (i < patches_to_consider) {
                 int py = pos0 + i / n_x;
                 int px = pos2 + i % n_x;
-                match = match_patch(Xe, py, px, feat_bounds, bounded_fids, n_bounded_fids);
+                match = match_patch(Xe, py, px, bounded_fids, feat_bounds, n_bounded_fids);
             }
 
             uint ballot = warp.ballot(match);
@@ -303,30 +302,33 @@ __device__ void evaluate_conv(const ull seed, const int* Xe, const int8_t* claus
         }
 
         if (lane == 0) {
-            selected_patch_ids[clause] = selected_id;
+            clause_output[clause] = (selected_id >= 0) ? 1 : 0;
+            if (selected_id >= 0) {
+                selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
-            if (selected_id >= 0)
                 patch_weights[clause * (ull)N_PATCHES + selected_id]++;
 #endif
+            }
         }
     }
 }
 
-extern "C" __global__ void evaluate(const ull seed, const int* X, const int e, const int8_t* clause_drop_mask,
-                                    const int* clause_position_bounds, const int* clause_feat_bounds,
-                                    const int* bounded_feat_ids, const int* n_bounded_feats, const int* clause_density,
-                                    int* selected_patch_ids, int* patch_weights) {
-    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+extern "C" __global__ void evaluate(const ull seed, const FBOUND_T* X, const int e, const int8_t* clause_drop_mask,
+                                    const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
+                                    const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                    const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
+                                    int* patch_weights) {
+    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 #if (N_PATCHES > 1)
-    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, bounded_feat_ids,
-                  n_bounded_feats, clause_density, selected_patch_ids, patch_weights);
+    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
+                  clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
 #else
-    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, bounded_feat_ids, n_bounded_feats, clause_density,
-                    selected_patch_ids);
+    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra,
+                    clause_len, clause_output);
 #endif
 }
 
-extern "C" __global__ void count_votes(const int* selected_patch_ids, const float* clause_weights, float* votes) {
+extern "C" __global__ void count_votes(const int8_t* clause_output, const float* clause_weights, float* votes) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
     auto grid = cg::this_grid();
     int lane = warp.thread_rank();
@@ -343,7 +345,7 @@ extern "C" __global__ void count_votes(const int* selected_patch_ids, const floa
 #else
             ull clause = c;
 #endif
-            if (selected_patch_ids[clause] >= 0)
+            if (clause_output[clause])
                 partial += cw[c];
         }
 

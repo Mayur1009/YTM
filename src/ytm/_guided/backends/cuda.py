@@ -64,7 +64,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             X=None,
             Y=None,
             clause_drop_mask=clause_drop_mask,
-            selected_pids=cp.empty(cfg._total_clauses, dtype=np.int32),
+            clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
+            selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
             grad=cp.empty(cfg.n_classes, dtype=np.float32),
             y_hat=cp.empty(cfg.n_classes, dtype=np.float32),
@@ -100,7 +101,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
 
             for i in range(0, N, bs):
                 end = min(i + bs, N)
-                buf.X = cp.asarray(X[i:end], dtype=np.int32)
+                buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
 
                 for e in range(end - i):
@@ -135,8 +136,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     np.uint64(rng_key),
                     buf.grad,
                     self.clause_weights,
-                    self.packed_clauses.clause_density,
-                    buf.selected_pids,
+                    self.packed_clauses.clause_len,
+                    buf.clause_output,
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
@@ -145,7 +146,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         else:
             self.cu_compute_votes_neg_ck(
                 *self._kernel_config(cfg._total_clauses * cfg.n_classes),
-                (buf.votes, self.clause_weights, buf.selected_pids, buf.votes_neg_ck),
+                (buf.votes, self.clause_weights, buf.clause_output, buf.votes_neg_ck),
             )
             self.cu_votes_activation_batch(
                 *per_clause,
@@ -158,8 +159,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     np.uint64(rng_key),
                     buf.loss,
                     buf.loss_neg_ck,
-                    self.packed_clauses.clause_density,
-                    buf.selected_pids,
+                    self.packed_clauses.clause_len,
+                    buf.clause_output,
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
@@ -171,10 +172,10 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
             (
                 np.uint64(rng_key),
+                buf.clause_output,
                 buf.selected_pids,
                 buf.X,
                 np.int32(e),
-                self.feat_mins_gpu,
                 self.literal_offsets_gpu,
                 buf.feedback_type,
                 self.ta_states,
@@ -185,7 +186,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
         self.cu_update_weights(
             *self._kernel_config(self.config._total_clauses),
-            (buf.grad, np.float32(buf.lr), buf.selected_pids, buf.clause_drop_mask, self.clause_weights),
+            (buf.grad, np.float32(buf.lr), buf.clause_output, buf.clause_drop_mask, self.clause_weights),
         )
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:

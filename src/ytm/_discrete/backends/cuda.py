@@ -39,7 +39,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             X=None,
             Y=None,
             clause_drop_mask=clause_drop_mask,
-            selected_pids=cp.empty(cfg._total_clauses, dtype=np.int32),
+            clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
+            selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
             feedback_type=cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=cp.zeros(cfg.n_classes, dtype=np.float32),
@@ -47,6 +48,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         )
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
+        cfg = self.config
         N = X.shape[0]
         bs = N if batch_size == -1 else batch_size
 
@@ -56,7 +58,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
             for i in range(0, N, bs):
                 end = min(i + bs, N)
-                buf.X = cp.asarray(X[i:end], dtype=np.int32)
+                buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
                 buf.label_probs = cp.asarray(label_probs[i:end], dtype=np.float32)
 
@@ -85,8 +87,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             *self._kernel_config(cfg._total_clauses),
             (
                 np.uint64(rng_key),
-                buf.selected_pids,
-                self.packed_clauses.clause_density,
+                buf.clause_output,
+                self.packed_clauses.clause_len,
                 buf.clause_drop_mask,
                 buf.prob,
                 buf.label_probs,
@@ -101,10 +103,10 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
             (
                 np.uint64(rng_key),
+                buf.clause_output,
                 buf.selected_pids,
                 buf.X,
                 np.int32(e),
-                self.feat_mins_gpu,
                 self.literal_offsets_gpu,
                 buf.feedback_type,
                 self.ta_states,

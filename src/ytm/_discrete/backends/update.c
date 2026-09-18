@@ -12,7 +12,7 @@
 #define FB_T2 3
 #endif
 
-void decide_feedback(const ull seed, const int* restrict selected_patch_ids, const int* restrict clause_density,
+void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
                      const int8_t* restrict clause_drop_mask, const float* restrict prob,
                      const float* restrict label_probs, const int e, const float* restrict clause_weights,
                      uint8_t* restrict feedback_type) {
@@ -21,8 +21,8 @@ void decide_feedback(const ull seed, const int* restrict selected_patch_ids, con
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
-        bool has_space = (clause_density[clause] <= (int)MAX_INCLUDED_LITERALS);
+        int clause_output = clause_output_arr[clause];
+        bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
@@ -51,20 +51,24 @@ void decide_feedback(const ull seed, const int* restrict selected_patch_ids, con
     }
 }
 
-void update_clauses(const ull seed, const int* restrict selected_patch_ids, const int* restrict X, const int e,
-                    const int* restrict feat_mins, const int* restrict literal_offsets,
+void update_clauses(const ull seed, const int8_t* restrict clause_output, const NPATCHES_T* restrict selected_patch_ids,
+                    const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
                     const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
-    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
-        int patch_id = selected_patch_ids[clause];
-        int patch_idx_y = (patch_id >= 0) ? patch_id / N_PATCHES_X : -1;
-        int patch_idx_x = (patch_id >= 0) ? patch_id % N_PATCHES_X : -1;
+#if (N_PATCHES > 1)
+        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
+        int patch_idx_y = patch_id / N_PATCHES_X;
+        int patch_idx_x = patch_id % N_PATCHES_X;
+#else
+        int patch_idx_y = 0, patch_idx_x = 0;
+#endif
 
         ull rng_k = rng_hash(seed, clause, 0xCAFEBABEULL);
         uint rng_counter = 0;
@@ -75,8 +79,7 @@ void update_clauses(const ull seed, const int* restrict selected_patch_ids, cons
             if (fb == FB_NONE)
                 continue;
 
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
-                           ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states);
             is_clause_synced[clause] = 0;
         }
     }

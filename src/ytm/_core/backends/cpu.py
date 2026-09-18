@@ -24,14 +24,16 @@ class CPUFitBuffers(FitBuffers):
     p_X: Any = field(init=False)
     p_Y: Any = field(init=False)
     p_clause_drop_mask: Any = field(init=False)
+    p_clause_output: Any = field(init=False)
     p_selected_pids: Any = field(init=False)
     p_votes: Any = field(init=False)
 
     def __post_init__(self):
-        self.p_X = self.X.ctypes.data_as(int32_p)
+        self.p_X = self.X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.X.dtype)))
         self.p_Y = self.Y.ctypes.data_as(float_p)
         self.p_clause_drop_mask = self.clause_drop_mask.ctypes.data_as(int8_p)
-        self.p_selected_pids = self.selected_pids.ctypes.data_as(int32_p)
+        self.p_clause_output = self.clause_output.ctypes.data_as(int8_p)
+        self.p_selected_pids = self.selected_pids.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.selected_pids.dtype)))
         self.p_votes = self.votes.ctypes.data_as(float_p)
 
 
@@ -78,7 +80,7 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "feedback.c", "pack_clauses.c", "evaluate.c", "interpret.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "feedback.c", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
         return {name: read_file(core / name) for name in names}
 
     def _init_lib(self):
@@ -88,21 +90,26 @@ class CPUDevice(BaseDevice):
         cfg = self.config
         pc = self.packed_clauses
 
-        self.p_clause_feat_bounds = pc.clause_feat_bounds.ctypes.data_as(int32_p)
-        self.p_clause_position_bounds = pc.clause_position_bounds.ctypes.data_as(int32_p)
-        self.p_bounded_feat_ids = pc.bounded_feat_ids.ctypes.data_as(int32_p)
-        self.p_n_bounded_feats = pc.n_bounded_feats.ctypes.data_as(int32_p)
-        self.p_clause_density = pc.clause_density.ctypes.data_as(int32_p)
+        ta_state_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._ta_dtype))
+        fbound_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))
+        pbound_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._pbound_dtype))
+        nfeat_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._nfeat_dtype))
+        nlits_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._nlits_dtype))
+
+        self.p_clause_feat_bounds = pc.clause_feat_bounds.ctypes.data_as(fbound_p)
+        self.p_clause_position_bounds = pc.clause_position_bounds.ctypes.data_as(pbound_p)
+        self.p_clause_feat_ids = pc.clause_feat_ids.ctypes.data_as(nfeat_p)
+        self.p_clause_n_feats = pc.clause_n_feats.ctypes.data_as(nfeat_p)
+        self.p_has_contra = pc.has_contra.ctypes.data_as(int8_p)
+        self.p_clause_len = pc.clause_len.ctypes.data_as(nlits_p)
         self.p_is_clause_synced = pc.is_clause_synced.ctypes.data_as(int8_p)
 
-        ta_state_p = POINTER(np.ctypeslib.as_ctypes_type(cfg._ta_dtype))
         self.p_ta_states = self.ta_states.ctypes.data_as(ta_state_p)
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
 
-        self.p_feat_mins = cfg._feat_mins.ctypes.data_as(int32_p)
-        self.p_feat_maxs = cfg._feat_maxs.ctypes.data_as(int32_p)
-        self.p_literal_offsets = cfg._literal_offsets.ctypes.data_as(int32_p)
+        self.p_therm_bits = cfg._therm_bits.ctypes.data_as(fbound_p)
+        self.p_literal_offsets = cfg._literal_offsets.ctypes.data_as(nlits_p)
 
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(max(1, n)))
@@ -113,14 +120,14 @@ class CPUDevice(BaseDevice):
 
         self.lib.pack_clauses(
             self.p_ta_states,
-            self.p_feat_mins,
-            self.p_feat_maxs,
+            self.p_therm_bits,
             self.p_literal_offsets,
             self.p_clause_position_bounds,
             self.p_clause_feat_bounds,
-            self.p_bounded_feat_ids,
-            self.p_n_bounded_feats,
-            self.p_clause_density,
+            self.p_clause_feat_ids,
+            self.p_clause_n_feats,
+            self.p_has_contra,
+            self.p_clause_len,
             self.p_is_clause_synced,
             c_int(full),
         )
@@ -134,19 +141,21 @@ class CPUDevice(BaseDevice):
             buf.p_clause_drop_mask,
             self.p_clause_position_bounds,
             self.p_clause_feat_bounds,
-            self.p_bounded_feat_ids,
-            self.p_n_bounded_feats,
-            self.p_clause_density,
+            self.p_clause_feat_ids,
+            self.p_clause_n_feats,
+            self.p_has_contra,
+            self.p_clause_len,
+            buf.p_clause_output,
             buf.p_selected_pids,
             self.p_patch_weights,
         )
 
     def _fit_voting(self, buf: CPUFitBuffers):
-        self.lib.count_votes(buf.p_selected_pids, self.p_clause_weights, buf.p_votes)
+        self.lib.count_votes(buf.p_clause_output, self.p_clause_weights, buf.p_votes)
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
-        X = np.asarray(X, dtype=np.int32, order="C")
+        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
         class_sums = np.zeros((X.shape[0], cfg.n_classes), dtype=np.float32)
         self.pack_clauses(force_repack)
 
@@ -154,10 +163,11 @@ class CPUDevice(BaseDevice):
             self.p_clause_weights,
             self.p_clause_position_bounds,
             self.p_clause_feat_bounds,
-            self.p_bounded_feat_ids,
-            self.p_n_bounded_feats,
-            self.p_clause_density,
-            X.ctypes.data_as(int32_p),
+            self.p_clause_feat_ids,
+            self.p_clause_n_feats,
+            self.p_has_contra,
+            self.p_clause_len,
+            X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
             c_int(X.shape[0]),
             class_sums.ctypes.data_as(float_p),
         )
@@ -166,8 +176,8 @@ class CPUDevice(BaseDevice):
     def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
         """Whether each clause fired on each sample."""
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=np.int32)
-        p_X = X.ctypes.data_as(int32_p)
+        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
+        p_X = X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype)))
         out = np.zeros((X.shape[0], cfg._total_clauses), dtype=np.int8)
         self.pack_clauses(force_repack)
 
@@ -175,9 +185,10 @@ class CPUDevice(BaseDevice):
             self.lib.calc_clause_outputs(
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
-                self.p_bounded_feat_ids,
-                self.p_n_bounded_feats,
-                self.p_clause_density,
+                self.p_clause_feat_ids,
+                self.p_clause_n_feats,
+                self.p_has_contra,
+                self.p_clause_len,
                 p_X,
                 c_int(e),
                 out.ctypes.data_as(int8_p),
@@ -186,8 +197,8 @@ class CPUDevice(BaseDevice):
 
     def _patch_outputs(self, X: np.ndarray, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=np.int32)
-        p_X = X.ctypes.data_as(int32_p)
+        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
+        p_X = X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype)))
         out = np.zeros((X.shape[0], cfg._total_clauses, cfg._n_patches), dtype=np.int8)
         self.pack_clauses(force_repack)
 
@@ -195,9 +206,10 @@ class CPUDevice(BaseDevice):
             self.lib.calc_clause_outputs_patchwise(
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
-                self.p_bounded_feat_ids,
-                self.p_n_bounded_feats,
-                self.p_clause_density,
+                self.p_clause_feat_ids,
+                self.p_clause_n_feats,
+                self.p_has_contra,
+                self.p_clause_len,
                 p_X,
                 c_int(e),
                 out.ctypes.data_as(int8_p),
@@ -224,10 +236,9 @@ class CPUDevice(BaseDevice):
             self.p_clause_weights,
             self.p_clause_feat_bounds,
             self.p_clause_position_bounds,
-            self.p_clause_density,
+            self.p_has_contra,
             pw_norm.ctypes.data_as(float_p),
-            self.p_feat_mins,
-            self.p_feat_maxs,
+            self.p_therm_bits,
             c_float(pw_th),
             output.ctypes.data_as(float_p),
         )
@@ -250,9 +261,8 @@ class CPUDevice(BaseDevice):
                 c_int(e),
                 self.p_clause_weights,
                 self.p_clause_feat_bounds,
-                self.p_clause_density,
-                self.p_feat_mins,
-                self.p_feat_maxs,
+                self.p_has_contra,
+                self.p_therm_bits,
                 p_output,
             )
         return output

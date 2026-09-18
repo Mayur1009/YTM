@@ -4,16 +4,17 @@
 
 #include <math.h>
 
-void wic(int class_id, int polarity, const float* restrict clause_weights, const int* restrict clause_feat_bounds,
-         const int* restrict clause_position_bounds, const int* restrict clause_density, const float* restrict patch_weights_norm,
-         const int* restrict feat_min, const int* restrict feat_max, float pw_th, float* restrict output) {
+void wic(int class_id, int polarity, const float* restrict clause_weights, const FBOUND_T* restrict clause_feat_bounds,
+         const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
+         const PBOUND_T* restrict clause_position_bounds, const int8_t* restrict has_contra, const float* restrict patch_weights_norm,
+         const FBOUND_T* restrict therm_bits, float pw_th, float* restrict output) {
 #pragma omp parallel for schedule(dynamic) reduction(+ : output[ : HEIGHT * WIDTH * DEPTH])
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
 #if COALESCED == 0
         if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
 #endif
-        if (clause_density[clause_id] == -1)
+        if (has_contra[clause_id])
             continue;
 
         ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
@@ -21,10 +22,12 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
         if ((polarity > 0 && w <= 0.0f) || (polarity < 0 && w >= 0.0f))
             continue;
 
-        const int* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const int n_feats = (int)clause_n_feats[clause_id];
 
 #if (N_PATCHES > 1)
-        const int* pos = &clause_position_bounds[clause_id * 4];
+        const PBOUND_T* pos = &clause_position_bounds[clause_id * 4];
         for (int py = pos[0]; py <= pos[1]; py++) {
             for (int px = pos[2]; px <= pos[3]; px++) {
                 int p = py * N_PATCHES_X + px;
@@ -35,8 +38,9 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
                 float wm = fabsf(w) * pwv;
                 int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
 
-                for (int k = 0; k < N_RAW_PATCH_FEATS; k++) {
-                    float cp = (float)(cfb[k * 2] + cfb[k * 2 + 1] - feat_min[k] - feat_max[k]);
+                for (int i = 0; i < n_feats; i++) {
+                    int k = (int)cfids[i];
+                    float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
                     int rel_y = k / (PATCH_WIDTH * DEPTH);
                     int rel_x = (k / DEPTH) % PATCH_WIDTH;
                     int d = k % DEPTH;
@@ -47,8 +51,9 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
         }
 #else
         float wm = fabsf(w);
-        for (int k = 0; k < N_RAW_PATCH_FEATS; k++) {
-            float cp = (float)(cfb[k * 2] + cfb[k * 2 + 1] - feat_min[k] - feat_max[k]);
+        for (int i = 0; i < n_feats; i++) {
+            int k = (int)cfids[i];
+            float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
             output[k] += cp * wm;
         }
 #endif
@@ -56,7 +61,8 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
 }
 
 void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output, const int e, const float* restrict clause_weights,
-                const int* restrict clause_feat_bounds, const int* restrict clause_density, const int* restrict feat_min, const int* restrict feat_max,
+                const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
+                const int8_t* restrict has_contra, const FBOUND_T* restrict therm_bits,
                 float* restrict output) {
     const int8_t* patch_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
     float* out_e = &output[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -67,7 +73,7 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
         if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
 #endif
-        if (clause_density[clause_id] == -1)
+        if (has_contra[clause_id])
             continue;
 
         ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
@@ -76,7 +82,9 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
             continue;
 
         const int8_t* clause_act = &patch_e[clause_id * (ull)N_PATCHES];
-        const int* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const int n_feats = (int)clause_n_feats[clause_id];
         float wm = fabsf(w);
 
         for (int p = 0; p < N_PATCHES; p++) {
@@ -87,8 +95,9 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
             int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
             int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
 #endif
-            for (int k = 0; k < N_RAW_PATCH_FEATS; k++) {
-                float cp = (float)(cfb[k * 2] + cfb[k * 2 + 1] - feat_min[k] - feat_max[k]);
+            for (int i = 0; i < n_feats; i++) {
+                int k = (int)cfids[i];
+                float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
 #if (N_PATCHES > 1)
                 int rel_y = k / (PATCH_WIDTH * DEPTH);
                 int rel_x = (k / DEPTH) % PATCH_WIDTH;

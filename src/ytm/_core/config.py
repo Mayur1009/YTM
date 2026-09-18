@@ -161,6 +161,7 @@ class BaseTMConfig:
         self._feat_mins = self._resolve_feat_bound("feat_mins", self.feat_mins)
         self._feat_maxs = self._resolve_feat_bound("feat_maxs", self.feat_maxs)
         self._therm_bits = self._feat_maxs - self._feat_mins
+        self._all_binary_feats = bool(np.all(self._therm_bits == 1))
 
         assert np.all(self._feat_maxs >= self._feat_mins), (
             f"feat_maxs must be >= feat_mins for every feature, violated at "
@@ -199,7 +200,7 @@ class BaseTMConfig:
         self._fbound_dtype, self._fbound_ctype = _get_unsinged_type(int(self._therm_bits.max()) + 1)
 
         # number of features
-        self._nfeat_dtype, self._nfeat_ctype = _get_unsinged_type(self._n_raw_patch_feats)
+        self._nfeat_dtype, self._nfeat_ctype = _get_unsinged_type(self._n_raw_patch_feats + 1)
 
         # number of patches
         self._npatches_dtype, self._npatches_ctype = _get_unsinged_type(self._n_patches)
@@ -208,7 +209,10 @@ class BaseTMConfig:
         self._pbound_dtype, self._pbound_ctype = _get_unsinged_type(max(self._n_patches_y, self._n_patches_x))
 
         # number of literals
-        self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals)
+        self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals + 1)
+
+        self._therm_bits = self._therm_bits.astype(self._fbound_dtype)
+        self._literal_offsets = self._literal_offsets.astype(self._nlits_dtype)
 
     def _build_header(self):
         self._header = f"""
@@ -234,6 +238,7 @@ class BaseTMConfig:
 #define MAX_INCLUDED_LITERALS {self._max_includes}
 #define NEGATED_LITERALS {int(self.negated_literals)}
 #define POSITION_LITERALS {int(self.position_literals)}
+#define ALL_BINARY_FEATS {int(self._all_binary_feats)}
 
 #define INCLUDE_STATE {self._include_state}
 #define MAX_TA_STATE {self.n_states - 1}

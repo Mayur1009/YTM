@@ -58,7 +58,7 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
 
     def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask: np.ndarray, lr: float, lambda_: float) -> GuidedFitBuffers:
         cfg = self.config
-        for name, arr, dtype in (("X", X, np.int32), ("Y", Y, np.float32)):
+        for name, arr, dtype in (("X", X, cfg._fbound_dtype), ("Y", Y, np.float32)):
             assert arr.dtype == dtype and arr.flags.c_contiguous, (
                 f"`{name}` must be C contiguous {np.dtype(dtype)}, got {arr.dtype} contiguous={arr.flags.c_contiguous}"
             )
@@ -76,7 +76,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
-            selected_pids=np.empty(cfg._total_clauses, dtype=np.int32),
+            clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
+            selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=np.empty(cfg.n_classes, dtype=np.float32),
             grad=np.empty(cfg.n_classes, dtype=np.float32),
             y_hat=np.empty(cfg.n_classes, dtype=np.float32),
@@ -135,22 +136,22 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 c_uint64(rng_key),
                 buf.p_grad,
                 self.p_clause_weights,
-                self.p_clause_density,
-                buf.p_selected_pids,
+                self.p_clause_len,
+                buf.p_clause_output,
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
             )
         else:
-            self.lib.compute_votes_neg_ck(buf.p_votes, self.p_clause_weights, buf.p_selected_pids, buf.p_votes_neg_ck)
+            self.lib.compute_votes_neg_ck(buf.p_votes, self.p_clause_weights, buf.p_clause_output, buf.p_votes_neg_ck)
             self.lib.votes_activation_batch(buf.p_votes_neg_ck, c_int(cfg._total_clauses), buf.p_y_hat_neg_ck)
             self.lib.compute_loss_neg_ck(buf.p_y_hat_neg_ck, p_Y_e, buf.p_loss_neg_ck)
             self.lib.decide_feedback_delta_l(
                 c_uint64(rng_key),
                 buf.p_loss,
                 buf.p_loss_neg_ck,
-                self.p_clause_density,
-                buf.p_selected_pids,
+                self.p_clause_len,
+                buf.p_clause_output,
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
@@ -159,10 +160,10 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
     def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         self.lib.update_clauses(
             c_uint64(rng_key),
+            buf.p_clause_output,
             buf.p_selected_pids,
             buf.p_X,
             c_int(e),
-            self.p_feat_mins,
             self.p_literal_offsets,
             buf.p_feedback_type,
             self.p_ta_states,
@@ -170,7 +171,7 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
         )
 
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
-        self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_selected_pids, buf.p_clause_drop_mask, self.p_clause_weights)
+        self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_clause_output, buf.p_clause_drop_mask, self.p_clause_weights)
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         votes = super().calc_class_sums(X, batch_size, force_repack)

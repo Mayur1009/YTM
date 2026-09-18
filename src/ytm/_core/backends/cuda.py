@@ -32,7 +32,7 @@ class CUDADevice(BaseDevice):
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "feedback.cu", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "feedback.cu", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
         return {name: read_file(core / name) for name in names}
 
     def _init_kernels(self):
@@ -51,9 +51,8 @@ class CUDADevice(BaseDevice):
     def _init_device_arrays(self):
         cfg = self.config
         with self.cuda_dev:
-            self.feat_mins_gpu = cp.asarray(cfg._feat_mins, dtype=np.int32)
-            self.feat_maxs_gpu = cp.asarray(cfg._feat_maxs, dtype=np.int32)
-            self.literal_offsets_gpu = cp.asarray(cfg._literal_offsets, dtype=np.int32)
+            self.therm_bits_gpu = cp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
+            self.literal_offsets_gpu = cp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
 
     def _kernel_config(self, n: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         dev = self.device_config
@@ -74,14 +73,14 @@ class CUDADevice(BaseDevice):
                 *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
                 (
                     self.ta_states,
-                    self.feat_mins_gpu,
-                    self.feat_maxs_gpu,
+                    self.therm_bits_gpu,
                     self.literal_offsets_gpu,
                     self.packed_clauses.clause_position_bounds,
                     self.packed_clauses.clause_feat_bounds,
-                    self.packed_clauses.bounded_feat_ids,
-                    self.packed_clauses.n_bounded_feats,
-                    self.packed_clauses.clause_density,
+                    self.packed_clauses.clause_feat_ids,
+                    self.packed_clauses.clause_n_feats,
+                    self.packed_clauses.has_contra,
+                    self.packed_clauses.clause_len,
                     self.packed_clauses.is_clause_synced,
                     np.int32(full),
                 ),
@@ -101,9 +100,11 @@ class CUDADevice(BaseDevice):
                 buf.clause_drop_mask,
                 pc.clause_position_bounds,
                 pc.clause_feat_bounds,
-                pc.bounded_feat_ids,
-                pc.n_bounded_feats,
-                pc.clause_density,
+                pc.clause_feat_ids,
+                pc.clause_n_feats,
+                pc.has_contra,
+                pc.clause_len,
+                buf.clause_output,
                 buf.selected_pids,
                 self.patch_weights,
             ),
@@ -112,7 +113,7 @@ class CUDADevice(BaseDevice):
     def _fit_voting(self, buf):
         self.cu_count_votes(
             *self._kernel_config(self.config.n_classes * self.device_config._cuda_props["warp_size"]),
-            (buf.selected_pids, self.clause_weights, buf.votes),
+            (buf.clause_output, self.clause_weights, buf.votes),
         )
 
     def _batches(self, N: int, batch_size: int, desc: str):
@@ -133,7 +134,7 @@ class CUDADevice(BaseDevice):
             class_sums = cp.zeros((N, cfg.n_classes), dtype=np.float32)
 
             for i, end, bs in self._batches(N, batch_size, "Infer"):
-                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu_calc_clause_outputs(
@@ -144,9 +145,10 @@ class CUDADevice(BaseDevice):
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
-                        pc.bounded_feat_ids,
-                        pc.n_bounded_feats,
-                        pc.clause_density,
+                        pc.clause_feat_ids,
+                        pc.clause_n_feats,
+                        pc.has_contra,
+                        pc.clause_len,
                     ),
                 )
 
@@ -168,7 +170,7 @@ class CUDADevice(BaseDevice):
             self.pack_clauses(force_repack)
 
             for i, end, bs in self._batches(N, batch_size, "Transform"):
-                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu_calc_clause_outputs(
@@ -179,9 +181,10 @@ class CUDADevice(BaseDevice):
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
-                        pc.bounded_feat_ids,
-                        pc.n_bounded_feats,
-                        pc.clause_density,
+                        pc.clause_feat_ids,
+                        pc.clause_n_feats,
+                        pc.has_contra,
+                        pc.clause_len,
                     ),
                 )
                 out[i:end] = clause_outputs.get()
@@ -198,7 +201,7 @@ class CUDADevice(BaseDevice):
             self.pack_clauses(force_repack)
 
             for i, end, bs in self._batches(N, batch_size, desc):
-                Xb = cp.asarray(X[i:end], dtype=np.int32)
+                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
                 self.cu_calc_clause_outputs_patchwise(
@@ -209,9 +212,10 @@ class CUDADevice(BaseDevice):
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
-                        pc.bounded_feat_ids,
-                        pc.n_bounded_feats,
-                        pc.clause_density,
+                        pc.clause_feat_ids,
+                        pc.clause_n_feats,
+                        pc.has_contra,
+                        pc.clause_len,
                     ),
                 )
                 out[i:end] = patch_output.get()
@@ -242,10 +246,9 @@ class CUDADevice(BaseDevice):
                     self.clause_weights,
                     pc.clause_feat_bounds,
                     pc.clause_position_bounds,
-                    pc.clause_density,
+                    pc.has_contra,
                     pw_norm,
-                    self.feat_mins_gpu,
-                    self.feat_maxs_gpu,
+                    self.therm_bits_gpu,
                     np.float32(pw_th),
                     output,
                 ),
@@ -273,9 +276,8 @@ class CUDADevice(BaseDevice):
                     self.clause_weights,
                     pc.clause_feat_bounds,
                     patch_output_gpu,
-                    pc.clause_density,
-                    self.feat_mins_gpu,
-                    self.feat_maxs_gpu,
+                    pc.has_contra,
+                    self.therm_bits_gpu,
                     output,
                 ),
             )

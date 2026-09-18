@@ -24,7 +24,7 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
     }
 }
 
-extern "C" __global__ void decide_feedback(const ull seed, const int* selected_patch_ids, const int* clause_density,
+extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_output_arr, const NLITS_T* clause_len,
                                            const int8_t* clause_drop_mask, const float* prob, const float* label_probs,
                                            const int e, const float* clause_weights, uint8_t* feedback_type) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
@@ -33,8 +33,8 @@ extern "C" __global__ void decide_feedback(const ull seed, const int* selected_p
 
     for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        int clause_output = (selected_patch_ids[clause] >= 0) ? 1 : 0;
-        bool has_space = (clause_density[clause] <= (int)MAX_INCLUDED_LITERALS);
+        int clause_output = clause_output_arr[clause];
+        bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
@@ -65,8 +65,8 @@ extern "C" __global__ void decide_feedback(const ull seed, const int* selected_p
 
 // A whole warp owns one clause, so `fb` is warp uniform and `apply_feedback` can stride its lanes
 // over the literals.
-extern "C" __global__ void update_clauses(const ull seed, const int* selected_patch_ids, const int* X, const int e,
-                                          const int* feat_mins, const int* literal_offsets,
+extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_output, const NPATCHES_T* selected_patch_ids,
+                                          const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
                                           const uint8_t* feedback_type, TA_STATE_T* global_ta_states,
                                           int8_t* is_clause_synced) {
     auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
@@ -75,15 +75,19 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
     ull warp_id = grid.thread_rank() / warp.size();
     ull total_warps = grid.size() / warp.size();
 
-    const int* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
     for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
-        int patch_id = selected_patch_ids[clause];
-        int patch_idx_y = (patch_id >= 0) ? patch_id / N_PATCHES_X : -1;
-        int patch_idx_x = (patch_id >= 0) ? patch_id % N_PATCHES_X : -1;
+#if (N_PATCHES > 1)
+        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
+        int patch_idx_y = patch_id / N_PATCHES_X;
+        int patch_idx_x = patch_id % N_PATCHES_X;
+#else
+        int patch_idx_y = 0, patch_idx_x = 0;
+#endif
 
         ull rng_k = rng_hash(seed, clause * (ull)WARP_SIZE + (ull)lane, 0xCAFEBABEULL);
         uint rng_counter = 0;
@@ -94,8 +98,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int* selected_pa
             if (fb == FB_NONE)
                 continue;
 
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, feat_mins, literal_offsets,
-                           ta_states, lane);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, lane);
             if (lane == 0)
                 is_clause_synced[clause] = 0;
         }

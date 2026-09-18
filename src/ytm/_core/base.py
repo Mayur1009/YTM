@@ -44,8 +44,7 @@ class BaseTM(abc.ABC):
         assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
 
         # Shift X, so that the model always sees X in [0, therm_bits]
-        X_sh = np.asarray((X - cfg._feat_mins) if np.any(lo) else X, dtype=cfg._fbound_dtype, order="C")
-        return X_sh
+        return np.asarray((Xv - lo) if np.any(lo) else Xv, dtype=cfg._fbound_dtype, order="C")
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
@@ -87,11 +86,27 @@ class BaseTM(abc.ABC):
         shape = (cfg._n_clause_banks, cfg._n_clauses)
 
         position_bounds = None
-        if cfg.position_literals or cfg._n_patches > 1:
+        if cfg._n_patches > 1:
             position_bounds = packed.clause_position_bounds.reshape(*shape, 4)
 
+        # Scatter the compacted bounds back to one entry per feature, unconstrained ones spanning
+        # the full range, then undo the internal zero basing so the intervals are in user units.
+        n_feat = cfg._n_raw_patch_feats
+        feature_bounds = np.empty((cfg._total_clauses, n_feat, 2), dtype=np.int32)
+        feature_bounds[:, :, 0] = 0
+        feature_bounds[:, :, 1] = cfg._therm_bits
+
+        fids = packed.clause_feat_ids.reshape(cfg._total_clauses, n_feat)
+        compact = packed.clause_feat_bounds.reshape(cfg._total_clauses, n_feat, 2)
+        used = np.arange(n_feat)[None, :] < packed.clause_n_feats[:, None]
+        ci, si = np.nonzero(used)
+        feature_bounds[ci, fids[ci, si]] = compact[ci, si]
+
+        feature_bounds = feature_bounds.reshape(*shape, n_feat, 2) + cfg._feat_mins.reshape(-1, 1)
+
         return ClauseInfo(
-            feature_bounds=packed.clause_feat_bounds.reshape(*shape, cfg._n_raw_patch_feats * 2),
+            feature_bounds=feature_bounds.reshape(*shape, cfg._n_raw_patch_feats * 2),
             position_bounds=position_bounds,
-            clause_density=packed.clause_density.reshape(*shape),
+            has_contra=packed.has_contra.reshape(*shape),
+            clause_len=packed.clause_len.reshape(*shape),
         )

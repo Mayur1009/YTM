@@ -119,11 +119,14 @@ class BaseDevice(abc.ABC):
     def _init_packed_clauses(self):
         cfg = self.config
         self.packed_clauses = PackedClauses(
-            clause_feat_bounds=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats, 2), dtype=np.int32),
-            clause_position_bounds=self.xp.empty((cfg._total_clauses, 4), dtype=np.int32),
-            bounded_feat_ids=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats), dtype=np.int32),
-            n_bounded_feats=self.xp.empty(cfg._total_clauses, dtype=np.int32),
-            clause_density=self.xp.empty(cfg._total_clauses, dtype=np.int32),
+            clause_feat_ids=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats), dtype=cfg._nfeat_dtype),
+            clause_feat_bounds=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats, 2), dtype=cfg._fbound_dtype),
+            clause_n_feats=self.xp.empty(cfg._total_clauses, dtype=cfg._nfeat_dtype),
+            clause_position_bounds=self.xp.empty(
+                (cfg._total_clauses, 4) if cfg._n_patches > 1 else (1, 1), dtype=cfg._pbound_dtype
+            ),
+            has_contra=self.xp.empty(cfg._total_clauses, dtype=np.int8),
+            clause_len=self.xp.empty(cfg._total_clauses, dtype=cfg._nlits_dtype),
             is_clause_synced=self.xp.zeros(cfg._total_clauses, dtype=np.int8),
         )
 
@@ -146,9 +149,10 @@ class BaseDevice(abc.ABC):
         return PackedClauses(
             clause_feat_bounds=self._to_host(pc.clause_feat_bounds),
             clause_position_bounds=self._to_host(pc.clause_position_bounds),
-            bounded_feat_ids=self._to_host(pc.bounded_feat_ids),
-            n_bounded_feats=self._to_host(pc.n_bounded_feats),
-            clause_density=self._to_host(pc.clause_density),
+            clause_feat_ids=self._to_host(pc.clause_feat_ids),
+            clause_n_feats=self._to_host(pc.clause_n_feats),
+            has_contra=self._to_host(pc.has_contra),
+            clause_len=self._to_host(pc.clause_len),
             is_clause_synced=self._to_host(pc.is_clause_synced),
         )
 

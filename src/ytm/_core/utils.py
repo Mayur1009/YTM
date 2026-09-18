@@ -69,17 +69,19 @@ class FitBuffers:
     X: Any  # (n_samples, *dim) the epoch's inputs, cast for the kernels
     Y: Any  # (n_samples, n_classes) targets
     clause_drop_mask: Any  # (total_clauses,) one mask for the whole epoch, per Drop Clause
-    selected_pids: Any  # (total_clauses,) patch each clause matched on, -1 for none
+    clause_output: Any  # (total_clauses,) 1 when the clause fired on this sample
+    selected_pids: Any  # (total_clauses,) patch each clause matched on, only valid where it fired
     votes: Any  # (n_classes,) weighted vote sum for the current sample
 
 
 @dataclass
 class PackedClauses:
-    clause_feat_bounds: Any  # (total_clauses, n_raw_patch_feats, 2) closed [lower, upper]
-    clause_position_bounds: Any  # (total_clauses, 4) closed [min_y, max_y, min_x, max_x]
-    bounded_feat_ids: Any  # (total_clauses, n_raw_patch_feats) features that constrain anything
-    n_bounded_feats: Any  # (total_clauses,) how many of the above are in use
-    clause_density: Any  # (total_clauses,) included literals, -1 marks a contradiction
+    clause_feat_ids: Any  # (total_clauses, n_raw_patch_feats) the features this clause constrains
+    clause_feat_bounds: Any  # (total_clauses, n_raw_patch_feats, 2) closed [lower, upper], parallel to the ids
+    clause_n_feats: Any  # (total_clauses,) how many entries of the two above are in use
+    clause_position_bounds: Any  # (total_clauses, 4) closed [min_y, max_y, min_x, max_x], (1, 1) with one patch
+    has_contra: Any  # (total_clauses,) 1 when the clause is unsatisfiable
+    clause_len: Any  # (total_clauses,) included literals, 0 means the clause is vacuous
     is_clause_synced: Any  # (total_clauses,) 0 when the clause needs repacking
 
 
@@ -93,24 +95,27 @@ class ClauseInfo:
         Closed ``[lower, upper]`` feature inclusion bounds per clause.
     position_bounds : ndarray of shape (n_clause_banks, n_clauses, 4) or None
         Closed ``[min_y, max_y, min_x, max_x]`` position bounds per clause.
-        ``None`` when position literals are disabled and input has a single patch.
-    clause_density : ndarray of shape (n_clause_banks, n_clauses), dtype int
-        Number of included literals per clause. ``-1`` marks an invalid
-        clause (contains a contradiction).
+        ``None`` when the input has a single patch.
+    has_contra : ndarray of shape (n_clause_banks, n_clauses), dtype int8
+        ``1`` when the clause is unsatisfiable (contains a contradiction).
+    clause_len : ndarray of shape (n_clause_banks, n_clauses), dtype int
+        Number of included literals per clause. ``0`` means the clause is
+        vacuous and fires on every input.
     """
 
     feature_bounds: np.ndarray
     position_bounds: np.ndarray | None
-    clause_density: np.ndarray
+    has_contra: np.ndarray
+    clause_len: np.ndarray
 
     def _title(self, bank: int, clause: int) -> str:
-        density = int(self.clause_density[bank, clause])
-        if density < 0:
+        length = int(self.clause_len[bank, clause])
+        if self.has_contra[bank, clause]:
             state = "CONTRADICTION"
-        elif density == 0:
-            state = "density=0  (matches everything)"
+        elif length == 0:
+            state = "len=0  (matches everything)"
         else:
-            state = f"density={density}"
+            state = f"len={length}"
         return f"clause ({bank}, {clause})  {state}"
 
     def _position(self, bank: int, clause: int, le: str) -> list[tuple[str, bool]]:
@@ -157,8 +162,8 @@ class ClauseInfo:
             body.append("position   " + "    ".join(f"[red]{t}[/]" if bad else t for t, bad in pos))
         body.append(table)
 
-        density = int(self.clause_density[bank, clause])
-        colour = "red" if density < 0 else ("yellow" if density == 0 else "green")
+        length = int(self.clause_len[bank, clause])
+        colour = "red" if self.has_contra[bank, clause] else ("yellow" if length == 0 else "green")
         return Panel(Group(*body), title=f"[{colour}]{self._title(bank, clause)}[/]", title_align="left")
 
     def to_string(self, bank: int, clause: int, feat_names: Sequence[str] | None = None) -> str:

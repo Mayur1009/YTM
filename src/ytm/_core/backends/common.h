@@ -26,6 +26,7 @@
 #define MAX_INCLUDED_LITERALS 272
 #define NEGATED_LITERALS 1
 #define POSITION_LITERALS 1
+#define ALL_BINARY_FEATS 0
 #define WEIGHTED 1
 #define MAX_WEIGHT 1073741824.0f
 #define ALLOW_POLARITY_CHANGE 1
@@ -74,12 +75,11 @@ INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int pat
 }
 
 // True when the patch matches a clause (strict AND matching).
-INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, const FBOUND_T* feat_bounds,
-                           const int* bounded_feat_ids, int n_bounded_feat_ids) {
-    for (int i = 0; i < n_bounded_feat_ids; ++i) {
-        int fid = bounded_feat_ids[i];
-        FBOUND_T val = get_feature_value(X, patch_idx_y, patch_idx_x, fid);
-        if (val < feat_bounds[fid * 2] || val > feat_bounds[fid * 2 + 1])
+INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, const NFEAT_T* feat_ids,
+                           const FBOUND_T* feat_bounds, int n_feats) {
+    for (int i = 0; i < n_feats; ++i) {
+        FBOUND_T val = get_feature_value(X, patch_idx_y, patch_idx_x, (int)feat_ids[i]);
+        if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
             return false;
     }
     return true;
@@ -87,25 +87,25 @@ INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, 
 
 // Clause output on this one sample.
 INLINE_FN int clause_output(const FBOUND_T* Xe, ull clause, const PBOUND_T* clause_position_bounds,
-                            const FBOUND_T* clause_feat_bounds, const int* bounded_feat_ids,
-                            const int* n_bounded_feats, bool has_contra, NLITS_T clause_len) {
+                            const NFEAT_T* clause_feat_ids, const FBOUND_T* clause_feat_bounds,
+                            const NFEAT_T* clause_n_feats, bool has_contra, NLITS_T clause_len) {
     if (has_contra)
         return 0;
     if (clause_len == 0)
         return 1;
 
+    const NFEAT_T* fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
     const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-    const int* fids = &bounded_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-    int n_fids = n_bounded_feats[clause];
+    int n_fids = (int)clause_n_feats[clause];
 
 #if (N_PATCHES > 1)
     const PBOUND_T* pos = &clause_position_bounds[clause * 4];
     for (int py = pos[0]; py <= pos[1]; py++)
         for (int px = pos[2]; px <= pos[3]; px++)
-            if (match_patch(Xe, py, px, feat_bounds, fids, n_fids))
+            if (match_patch(Xe, py, px, fids, feat_bounds, n_fids))
                 return 1;
     return 0;
 #else
-    return match_patch(Xe, 0, 0, feat_bounds, fids, n_fids) ? 1 : 0;
+    return match_patch(Xe, 0, 0, fids, feat_bounds, n_fids) ? 1 : 0;
 #endif
 }

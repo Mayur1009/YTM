@@ -3,9 +3,10 @@
 #include "common.h"
 #endif
 
-extern "C" __global__ void wic(int class_id, int polarity, const float* clause_weights, const int* clause_feat_bounds,
-                               const int* clause_position_bounds, const int* clause_density,
-                               const float* patch_weights_norm, const int* feat_min, const int* feat_max, float pw_th,
+extern "C" __global__ void wic(int class_id, int polarity, const float* clause_weights, const FBOUND_T* clause_feat_bounds,
+                               const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
+                               const PBOUND_T* clause_position_bounds, const int8_t* has_contra,
+                               const float* patch_weights_norm, const FBOUND_T* therm_bits, float pw_th,
                                float* output) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
@@ -19,7 +20,7 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
             continue;
 #endif
 
-        if (clause_density[clause_id] == -1)
+        if (has_contra[clause_id])
             continue;
 
         ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
@@ -28,7 +29,7 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
             continue;
 
 #if (N_PATCHES > 1)
-        const int* pos = &clause_position_bounds[clause_id * 4];
+        const PBOUND_T* pos = &clause_position_bounds[clause_id * 4];
         int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
         if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])
             continue;
@@ -43,10 +44,13 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
 #endif
 
         float wm = fabsf(w) * pwv;
-        const int* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const int n_feats = (int)clause_n_feats[clause_id];
 
-        for (int k = 0; k < N_RAW_PATCH_FEATS; ++k) {
-            float cp = (float)(cfb[k * 2] + cfb[k * 2 + 1] - feat_min[k] - feat_max[k]);
+        for (int i = 0; i < n_feats; ++i) {
+            int k = (int)cfids[i];
+            float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
 
 #if (N_PATCHES > 1)
             int rel_y = k / (PATCH_WIDTH * DEPTH);
@@ -62,8 +66,9 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
 }
 
 extern "C" __global__ void wac(const int* target_classes, int polarity, int N, const float* clause_weights,
-                               const int* clause_feat_bounds, const int8_t* patch_output, const int* clause_density,
-                               const int* feat_min, const int* feat_max, float* output) {
+                               const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
+                               const int8_t* patch_output, const int8_t* has_contra,
+                               const FBOUND_T* therm_bits, float* output) {
     ull tid = threadIdx.x + blockIdx.x * blockDim.x;
     ull stride = blockDim.x * gridDim.x;
 
@@ -80,7 +85,7 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
             continue;
 #endif
 
-        if (clause_density[clause_id] == -1)
+        if (has_contra[clause_id])
             continue;
 
         ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
@@ -93,7 +98,9 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
             continue;
 
         float wm = fabsf(w);
-        const int* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
+        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const int n_feats = (int)clause_n_feats[clause_id];
         float* out_e = &output[e * (ull)HEIGHT * WIDTH * DEPTH];
 
 #if (N_PATCHES > 1)
@@ -101,8 +108,9 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
         int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
 #endif
 
-        for (int k = 0; k < N_RAW_PATCH_FEATS; ++k) {
-            float cp = (float)(cfb[k * 2] + cfb[k * 2 + 1] - feat_min[k] - feat_max[k]);
+        for (int i = 0; i < n_feats; ++i) {
+            int k = (int)cfids[i];
+            float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
 
 #if (N_PATCHES > 1)
             int rel_y = k / (PATCH_WIDTH * DEPTH);

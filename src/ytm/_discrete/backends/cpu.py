@@ -38,7 +38,7 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
 
     def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask: np.ndarray, label_probs: np.ndarray) -> DiscreteFitBuffers:
         cfg = self.config
-        for name, arr, dtype in (("X", X, np.int32), ("Y", Y, np.float32), ("label_probs", label_probs, np.float32)):
+        for name, arr, dtype in (("X", X, cfg._fbound_dtype), ("Y", Y, np.float32), ("label_probs", label_probs, np.float32)):
             assert arr.dtype == dtype and arr.flags.c_contiguous, (
                 f"`{name}` must be C contiguous {np.dtype(dtype)}, got {arr.dtype} contiguous={arr.flags.c_contiguous}"
             )
@@ -47,7 +47,8 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
-            selected_pids=np.empty(cfg._total_clauses, dtype=np.int32),
+            clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
+            selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=np.empty(cfg.n_classes, dtype=np.float32),
             feedback_type=np.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=np.zeros(cfg.n_classes, dtype=np.float32),
@@ -73,8 +74,8 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
         self.lib.calc_update_prob(buf.p_votes, buf.p_Y, c_int(e), buf.p_prob)
         self.lib.decide_feedback(
             c_uint64(rng_key),
-            buf.p_selected_pids,
-            self.p_clause_density,
+            buf.p_clause_output,
+            self.p_clause_len,
             buf.p_clause_drop_mask,
             buf.p_prob,
             buf.p_label_probs,
@@ -89,10 +90,10 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
     def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         self.lib.update_clauses(
             c_uint64(rng_key),
+            buf.p_clause_output,
             buf.p_selected_pids,
             buf.p_X,
             c_int(e),
-            self.p_feat_mins,
             self.p_literal_offsets,
             buf.p_feedback_type,
             self.p_ta_states,
