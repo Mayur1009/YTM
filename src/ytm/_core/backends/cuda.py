@@ -44,7 +44,6 @@ class CUDADevice(BaseDevice):
             self.cu_calc_clause_outputs_patchwise = self.cu_mod.get_function("calc_clause_outputs_patchwise")
             self.cu_sum_votes = self.cu_mod.get_function("sum_votes")
             self.cu_evaluate = self.cu_mod.get_function("evaluate")
-            self.cu_count_votes = self.cu_mod.get_function("count_votes")
             self.cu_wic = self.cu_mod.get_function("wic")
             self.cu_wac = self.cu_mod.get_function("wac")
 
@@ -111,9 +110,9 @@ class CUDADevice(BaseDevice):
         )
 
     def _fit_voting(self, buf):
-        self.cu_count_votes(
+        self.cu_sum_votes(
             *self._kernel_config(self.config.n_classes * self.device_config._cuda_props["warp_size"]),
-            (buf.clause_output, self.clause_weights, buf.votes),
+            (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
         )
 
     def _batches(self, N: int, batch_size: int, desc: str):
