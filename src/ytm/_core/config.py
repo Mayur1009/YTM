@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
@@ -14,8 +15,8 @@ class BaseTMConfig:
     n_classes: int
 
     # discrete input
-    feat_mins: int | np.ndarray = 0
-    feat_maxs: int | np.ndarray = 1
+    feat_mins: int | Sequence[int] | np.ndarray = 0
+    feat_maxs: int | Sequence[int] | np.ndarray = 1
 
     # convolution
     patch_dim: tuple[int, int] | None = None
@@ -96,6 +97,12 @@ class BaseTMConfig:
         )
         self._stride = (int(self.stride[0]), int(self.stride[1]))
 
+        # number of patches and raw features, needed before the feat bounds can be resolved
+        self._n_patches_y = ((self._dim[0] - self._patch_dim[0]) // self._stride[0]) + 1
+        self._n_patches_x = ((self._dim[1] - self._patch_dim[1]) // self._stride[1]) + 1
+        self._n_patches = self._n_patches_y * self._n_patches_x
+        self._n_raw_patch_feats = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
+
         # TA states, need at least an include and an exclude state
         assert self.n_states >= 2, f"n_states must be at least 2, got {self.n_states}"
 
@@ -120,35 +127,38 @@ class BaseTMConfig:
                 f"or an int within 0 and n_states - 1 ({self.n_states - 1}), got {self.ta_init}"
             )
 
+    def _resolve_feat_bound(self, name: str, value: int | Sequence[int] | np.ndarray) -> np.ndarray:
+        n_feat = self._n_raw_patch_feats
+        depth = self._dim[2]
+
+        if np.ndim(value) == 0:
+            return np.full(n_feat, value, dtype=np.int32)
+
+        arr = np.asarray(value, dtype=np.int32, order="C")
+
+        if self._n_patches > 1:
+            assert arr.shape == (depth,), f"{name} should either be a scalar, or tuple of length dim[2]."
+            return np.tile(arr, self._patch_dim[0] * self._patch_dim[1])
+
+        assert arr.size == n_feat, f"{name} must be a scalar or have {n_feat} entries, got shape {arr.shape}"
+
+        return arr.reshape(-1)
+
     def _check_feat_bounds(self):
         """Broadcast feat bounds to one int32 entry per raw patch feature."""
-        n_feat = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
+        self._feat_mins = self._resolve_feat_bound("feat_mins", self.feat_mins)
+        self._feat_maxs = self._resolve_feat_bound("feat_maxs", self.feat_maxs)
 
-        if np.isscalar(self.feat_mins):
-            self._feat_mins = np.full(n_feat, self.feat_mins, dtype=np.int32)
-        else:
-            self._feat_mins = np.asarray(self.feat_mins, dtype=np.int32, order="C")
-            assert self._feat_mins.shape == (n_feat,), f"feat_mins must have shape ({n_feat},), got {self._feat_mins.shape}"
-
-        if np.isscalar(self.feat_maxs):
-            self._feat_maxs = np.full(n_feat, self.feat_maxs, dtype=np.int32)
-        else:
-            self._feat_maxs = np.asarray(self.feat_maxs, dtype=np.int32, order="C")
-            assert self._feat_maxs.shape == (n_feat,), f"feat_maxs must have shape ({n_feat},), got {self._feat_maxs.shape}"
+        assert np.all(self._feat_maxs >= self._feat_mins), (
+            f"feat_maxs must be >= feat_mins for every feature, violated at "
+            f"{np.flatnonzero(self._feat_maxs < self._feat_mins)[:8].tolist()}"
+        )
 
     def _derive_vars(self):
         """Calculate variables from the params, so that they can be used later."""
         # Clause banks and total clauses. Coalesced shares one bank across all classes.
         self._n_clause_banks = 1 if self.coalesced else self.n_classes
         self._total_clauses = self._n_clause_banks * self._n_clauses
-
-        # number of patches and convolution
-        self._n_patches_y = ((self._dim[0] - self._patch_dim[0]) // self._stride[0]) + 1
-        self._n_patches_x = ((self._dim[1] - self._patch_dim[1]) // self._stride[1]) + 1
-        self._n_patches = self._n_patches_y * self._n_patches_x
-
-        # number of raw features.
-        self._n_raw_patch_feats = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
 
         # positional literals, thermometer encoded so one less than the number of positions
         self._n_position_feats = (self._n_patches_y - 1) + (self._n_patches_x - 1)
@@ -234,8 +244,8 @@ class BaseTMConfig:
 
 class T_BaseTMConfig(TypedDict, total=False):
     # discrete input
-    feat_mins: int | np.ndarray
-    feat_maxs: int | np.ndarray
+    feat_mins: int | Sequence[int] | np.ndarray
+    feat_maxs: int | Sequence[int] | np.ndarray
 
     # convolution
     patch_dim: tuple[int, int] | None
