@@ -1,7 +1,7 @@
 import numpy as np
 
 _fun_template = (
-    "INLINE_FN void compute_loss(const float* restrict y, const float* restrict y_hat, float* restrict grad, float* restrict loss)"
+    "INLINE_FN void compute_loss(const float* RESTRICT y, const float* RESTRICT y_hat, float* RESTRICT grad, float* RESTRICT loss)"
 )
 
 

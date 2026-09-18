@@ -19,3 +19,4 @@ typedef unsigned char uint8_t;
 #endif
 
 #define INLINE_FN __device__ inline
+#define RESTRICT __restrict__

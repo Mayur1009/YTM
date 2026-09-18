@@ -10,6 +10,7 @@ typedef unsigned int uint;
 typedef unsigned long long ull;
 
 #define INLINE_FN static inline
+#define RESTRICT restrict
 
 #if _OPENMP
 #include <omp.h>

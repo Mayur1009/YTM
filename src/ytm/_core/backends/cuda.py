@@ -19,6 +19,7 @@ class CUDADevice(BaseDevice):
     def dev_init(self):
         self.xp = cp
         self.cuda_dev = cp.cuda.Device(self.device_config._gpu_id)
+        self.cuda_dev.use()
 
         with self.cuda_dev:
             self._init_clauses()
@@ -81,6 +82,34 @@ class CUDADevice(BaseDevice):
                     np.int32(full),
                 ),
             )
+
+    # == fit steps ==
+    def _fit_eval(self, buf, e: int, rng_key):
+        cfg = self.config
+        pc = self.packed_clauses
+
+        self.k_evaluate(
+            *self._kernel_config(cfg._total_clauses * self.device_config._cuda_props["warp_size"]),
+            (
+                np.uint64(rng_key),
+                buf.X,
+                np.int32(e),
+                buf.clause_drop_mask,
+                pc.clause_position_bounds,
+                pc.clause_feat_bounds,
+                pc.bounded_feat_ids,
+                pc.n_bounded_feats,
+                pc.clause_density,
+                buf.selected_pids,
+                self.patch_weights,
+            ),
+        )
+
+    def _fit_voting(self, buf):
+        self.k_count_votes(
+            *self._kernel_config(self.config.n_classes * self.device_config._cuda_props["warp_size"]),
+            (buf.selected_pids, self.clause_weights, buf.votes),
+        )
 
     def _batches(self, N: int, batch_size: int, desc: str):
         if batch_size == -1:

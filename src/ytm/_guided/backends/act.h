@@ -15,7 +15,7 @@
 #endif
 
 #if ACT_FN == ACT_SOFTMAX
-INLINE_FN void compute_act(const float* restrict votes, float* restrict y_hat) {
+INLINE_FN void compute_act(const float* RESTRICT votes, float* RESTRICT y_hat) {
     float max_v = -INFINITY;
     for (int c = 0; c < CLASSES; c++) {
         float v = votes[c] / NORM;
@@ -32,12 +32,12 @@ INLINE_FN void compute_act(const float* restrict votes, float* restrict y_hat) {
         y_hat[c] /= sum_exp;
 }
 #elif ACT_FN == ACT_SIGMOID
-INLINE_FN void compute_act(const float* restrict votes, float* restrict y_hat) {
+INLINE_FN void compute_act(const float* RESTRICT votes, float* RESTRICT y_hat) {
     for (int c = 0; c < CLASSES; c++)
         y_hat[c] = 1.0f / (1.0f + expf(-votes[c] / NORM));
 }
 #else
-INLINE_FN void compute_act(const float* restrict votes, float* restrict y_hat) {
+INLINE_FN void compute_act(const float* RESTRICT votes, float* RESTRICT y_hat) {
     for (int c = 0; c < CLASSES; c++)
         y_hat[c] = votes[c] / NORM;
 }
