@@ -4,9 +4,9 @@
 #endif
 
 void calc_clause_outputs(const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
-                         const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                         const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int e,
-                         int8_t* restrict clause_outputs) {
+                         const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
+                         const int8_t* restrict has_contra, const NLITS_T* restrict clause_len,
+                         const FBOUND_T* restrict X, const int e, int8_t* restrict clause_outputs) {
     const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* out_e = &clause_outputs[(ull)e * TOTAL_CLAUSES];
 
@@ -18,8 +18,9 @@ void calc_clause_outputs(const PBOUND_T* restrict clause_position_bounds, const 
 }
 
 void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restrict clause_position_bounds,
-                     const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
-                     const int8_t* restrict has_contra, const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int N,
+                     const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                     const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                     const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int N,
                      float* restrict class_sums) {
     for (int e = 0; e < N; e++) {
         const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
@@ -41,9 +42,11 @@ void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restr
     }
 }
 
-void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
-                                   const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                                   const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int e, int8_t* restrict patch_output) {
+void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_bounds,
+                                   const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                                   const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                                   const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int e,
+                                   int8_t* restrict patch_output) {
     const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
     int8_t* out_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
 
@@ -87,9 +90,10 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
     }
 }
 
-INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restrict clause_drop_mask, const FBOUND_T* restrict clause_feat_bounds,
-                                   const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                                   const NLITS_T* restrict clause_len, int8_t* restrict clause_output) {
+INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restrict clause_drop_mask,
+                               const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                               const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                               const NLITS_T* restrict clause_len, int8_t* restrict clause_output) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
@@ -111,10 +115,11 @@ INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restri
 }
 
 INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const int8_t* restrict clause_drop_mask,
-                                 const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
-                                 const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                                 const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
-                                 NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
+                             const PBOUND_T* restrict clause_position_bounds,
+                             const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                             const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                             const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
+                             NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
@@ -169,16 +174,17 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
 }
 
 void evaluate(const ull seed, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
-              const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
-              const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra, const NLITS_T* restrict clause_len,
-              int8_t* restrict clause_output, NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
+              const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
+              const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
+              const int8_t* restrict has_contra, const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
+              NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
     const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 #if (N_PATCHES > 1)
-    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
+    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
                   clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
 #else
-    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra,
-                    clause_len, clause_output);
+    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra, clause_len,
+                    clause_output);
 #endif
 }
 
