@@ -3,7 +3,7 @@ import pathlib
 import cupy as cp
 import numpy as np
 
-from ..utils import read_file, tqdm_bar
+from ..utils import read_file
 from .base import BaseDevice
 
 
@@ -110,13 +110,6 @@ class CUDADevice(BaseDevice):
             (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
         )
 
-    def _batches(self, N: int, batch_size: int, desc: str):
-        if batch_size == -1:
-            batch_size = N
-        for i in tqdm_bar(range(0, N, batch_size), desc=desc):
-            end = min(i + batch_size, N)
-            yield i, end, end - i
-
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
@@ -215,11 +208,6 @@ class CUDADevice(BaseDevice):
                 out[i:end] = patch_output.get()
 
         return out
-
-    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        out = self._patch_outputs(X, batch_size, force_repack)
-        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
         cfg = self.config

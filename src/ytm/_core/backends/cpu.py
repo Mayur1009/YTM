@@ -191,7 +191,7 @@ class CPUDevice(BaseDevice):
             )
         return out.reshape(X.shape[0], cfg._n_clause_banks, cfg._n_clauses)
 
-    def _patch_outputs(self, X: np.ndarray, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
+    def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
         cfg = self.config
         X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
         p_X = X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype)))
@@ -211,11 +211,6 @@ class CPUDevice(BaseDevice):
                 out.ctypes.data_as(int8_p),
             )
         return out
-
-    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        out = self._patch_outputs(X, force_repack)
-        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
         cfg = self.config

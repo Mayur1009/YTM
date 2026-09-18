@@ -6,7 +6,7 @@ import numpy as np
 
 from ..config import BaseTMConfig
 from ..device_config import DeviceConfig
-from ..utils import PackedClauses
+from ..utils import PackedClauses, tqdm_bar
 
 
 class BaseDevice(abc.ABC):
@@ -62,7 +62,19 @@ class BaseDevice(abc.ABC):
     def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False): ...
 
     @abc.abstractmethod
-    def transform_patchwise(self, X: np.ndarray, batch_size: int, force_repack: bool = False): ...
+    def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray: ...
+
+    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        out = self._patch_outputs(X, batch_size, force_repack)
+        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
+
+    def _batches(self, N: int, batch_size: int, desc: str):
+        if batch_size == -1:
+            batch_size = N
+        for i in tqdm_bar(range(0, N, batch_size), desc=desc):
+            end = min(i + batch_size, N)
+            yield i, end, end - i
 
     @abc.abstractmethod
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False): ...
