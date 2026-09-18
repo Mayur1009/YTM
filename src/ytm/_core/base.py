@@ -30,20 +30,22 @@ class BaseTM(abc.ABC):
 
     def _prepare_X(self, X: np.ndarray) -> np.ndarray:
         cfg = self.config
-        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), (
-            f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
-        )
 
+        # number of features match
+        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
+
+        # Check if values are in provided bounds
         if cfg._n_patches == 1:
             lo, hi, axes = cfg._feat_mins.reshape(cfg._dim), cfg._feat_maxs.reshape(cfg._dim), 0
         else:
             lo, hi, axes = cfg._feat_mins[: cfg._dim[2]], cfg._feat_maxs[: cfg._dim[2]], (0, 1, 2)
-
         Xv = np.asarray(X).reshape(X.shape[0], *cfg._dim)
         assert np.all(Xv.min(axis=axes) >= lo), f"X has values below feat_mins, min is {int(Xv.min())}"
         assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
 
-        return np.asarray(X, dtype=np.int32, order="C")
+        # Shift X, so that the model always sees X in [0, therm_bits]
+        X_sh = np.asarray((X - cfg._feat_mins) if np.any(lo) else X, dtype=cfg._bound_dtype, order="C")
+        return X_sh
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
