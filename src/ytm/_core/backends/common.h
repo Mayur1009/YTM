@@ -33,7 +33,13 @@
 #define TYPE1B_FB 1
 #define TYPE2_FB 1
 #define TRACK_PATCH_WEIGHTS 1
+
 #define TA_STATE_T uint32_t
+#define BOUND_T uint32_t
+#define NFEAT_T uint32_t
+#define NPATCHES_T uint32_t
+#define NLITS_T uint32_t
+
 #endif
 
 // Derived macros and patch helpers, shared by the C and CUDA builds.

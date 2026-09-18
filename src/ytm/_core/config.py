@@ -7,6 +7,17 @@ import numpy as np
 from .utils import Feedback, enum_to_header
 
 
+def _get_unsinged_type(val: int):
+    if val <= (1 << 8):
+        _dtype, _ctype = np.uint8, "uint8_t"
+    elif val <= (1 << 16):
+        _dtype, _ctype = np.uint16, "uint16_t"
+    else:
+        _dtype, _ctype = np.uint32, "uint32_t"
+
+    return _dtype, _ctype
+
+
 @dataclass()
 class BaseTMConfig:
     n_clauses: int
@@ -59,6 +70,7 @@ class BaseTMConfig:
         self._check_params()
         self._check_feat_bounds()
         self._derive_vars()
+        self._derive_types()
         self._build_header()
 
     def _check_seed(self):
@@ -97,7 +109,7 @@ class BaseTMConfig:
         )
         self._stride = (int(self.stride[0]), int(self.stride[1]))
 
-        # number of patches and raw features, needed before the feat bounds can be resolved
+        # number of patches and raw features
         self._n_patches_y = ((self._dim[0] - self._patch_dim[0]) // self._stride[0]) + 1
         self._n_patches_x = ((self._dim[1] - self._patch_dim[1]) // self._stride[1]) + 1
         self._n_patches = self._n_patches_y * self._n_patches_x
@@ -148,6 +160,7 @@ class BaseTMConfig:
         """Broadcast feat bounds to one int32 entry per raw patch feature."""
         self._feat_mins = self._resolve_feat_bound("feat_mins", self.feat_mins)
         self._feat_maxs = self._resolve_feat_bound("feat_maxs", self.feat_maxs)
+        self._therm_bits = self._feat_maxs - self._feat_mins
 
         assert np.all(self._feat_maxs >= self._feat_mins), (
             f"feat_maxs must be >= feat_mins for every feature, violated at "
@@ -160,21 +173,12 @@ class BaseTMConfig:
         self._n_clause_banks = 1 if self.coalesced else self.n_classes
         self._total_clauses = self._n_clause_banks * self._n_clauses
 
-        # positional literals, thermometer encoded so one less than the number of positions
         self._n_position_feats = (self._n_patches_y - 1) + (self._n_patches_x - 1)
-
-        # thermometer bits for each feature
-        self._therm_bits = self._feat_maxs - self._feat_mins
         self._n_patch_feats = int(np.sum(self._therm_bits))
 
         # literal offsets for thermometer encoded features
         self._literal_offsets = np.zeros(self._n_raw_patch_feats + 1, dtype=np.int32)
         self._literal_offsets[1:] = np.cumsum(self._therm_bits)
-
-        # literal index -> feature id lookup
-        self._lit_to_fid = np.zeros(self._n_patch_feats, dtype=np.int32)
-        for fid in range(self._n_raw_patch_feats):
-            self._lit_to_fid[self._literal_offsets[fid] : self._literal_offsets[fid + 1]] = fid
 
         # final number of actual literals
         self._n_literals = self._n_patch_feats + self._n_position_feats
@@ -187,13 +191,21 @@ class BaseTMConfig:
         else:
             self._max_includes = self.max_includes
 
-        # TA state storage
-        if self.n_states <= (1 << 8):
-            self._ta_dtype, self._ta_ctype = np.uint8, "uint8_t"
-        elif self.n_states <= (1 << 16):
-            self._ta_dtype, self._ta_ctype = np.uint16, "uint16_t"
-        else:
-            self._ta_dtype, self._ta_ctype = np.uint32, "uint32_t"
+    def _derive_types(self):
+        # TA states
+        self._ta_dtype, self._ta_ctype = _get_unsinged_type(self.n_states)
+
+        # therm bits
+        self._bound_dtype, self._bound_ctype = _get_unsinged_type(int(self._therm_bits.max()) + 1)
+
+        # number of features
+        self._nfeat_dtype, self._nfeat_ctype = _get_unsinged_type(self._n_raw_patch_feats)
+
+        # number of patches
+        self._npatches_dtype, self._npatches_ctype = _get_unsinged_type(self._n_patches)
+
+        # number of literals
+        self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals)
 
     def _build_header(self):
         self._header = f"""
@@ -222,13 +234,13 @@ class BaseTMConfig:
 
 #define INCLUDE_STATE {self._include_state}
 #define MAX_TA_STATE {self.n_states - 1}
-#define TA_STATE_T {self._ta_ctype}
 
 #define COALESCED {int(self.coalesced)}
 #define NEGATIVE_CLAUSES {int(self.negative_clauses)}
 #define WEIGHTED {int(self.weighted)}
 #define MAX_WEIGHT {float(self.max_weight)}f
 #define ALLOW_POLARITY_CHANGE {int(self.allow_polarity_change)}
+#define TRACK_PATCH_WEIGHTS {int(self.track_patch_weights)}
 
 #define TYPE1A_FB {int(not self.skip_t1a_fb)}
 #define TYPE1B_FB {int(not self.skip_t1b_fb)}
@@ -236,7 +248,11 @@ class BaseTMConfig:
 #define BOOST_TP_INC {int(self.boost_tp_inc)}
 #define BOOST_TP_DEC {int(self.boost_tp_dec)}
 
-#define TRACK_PATCH_WEIGHTS {int(self.track_patch_weights)}
+#define TA_STATE_T {self._ta_ctype}
+#define BOUND_T {self._bound_ctype}
+#define NFEAT_T {self._nfeat_ctype}
+#define NPATCHES_T {self._npatches_ctype}
+#define NLITS_T {self._nlits_ctype}
 
 {enum_to_header("FB", Feedback)}
 """
