@@ -35,11 +35,10 @@ class BaseTM(CoreBaseTM):
         batch_size: int = -1,
         label_sampling: bool = False,
     ) -> None:
-        cfg = self.config
-        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
+        X = self._prepare_X(X)
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
-        X = np.asarray(X, dtype=np.int32, order="C")[iota]
+        X = X[iota]
 
         encoded_Y = np.asarray(self._encode_Y(Y[iota]), dtype=np.float32, order="C")
         label_probs = np.asarray(self._label_sampler(encoded_Y, label_sampling), dtype=np.float32, order="C")

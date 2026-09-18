@@ -28,14 +28,31 @@ class BaseTM(abc.ABC):
     @abc.abstractmethod
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
 
+    def _prepare_X(self, X: np.ndarray) -> np.ndarray:
+        cfg = self.config
+        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), (
+            f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
+        )
+
+        if cfg._n_patches == 1:
+            lo, hi, axes = cfg._feat_mins.reshape(cfg._dim), cfg._feat_maxs.reshape(cfg._dim), 0
+        else:
+            lo, hi, axes = cfg._feat_mins[: cfg._dim[2]], cfg._feat_maxs[: cfg._dim[2]], (0, 1, 2)
+
+        Xv = np.asarray(X).reshape(X.shape[0], *cfg._dim)
+        assert np.all(Xv.min(axis=axes) >= lo), f"X has values below feat_mins, min is {int(Xv.min())}"
+        assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
+
+        return np.asarray(X, dtype=np.int32, order="C")
+
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return self.dev.calc_class_sums(np.ascontiguousarray(X), batch_size, force_repack)
+        return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
 
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return self.dev.transform(np.ascontiguousarray(X), batch_size, force_repack)
+        return self.dev.transform(self._prepare_X(X), batch_size, force_repack)
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return self.dev.transform_patchwise(np.ascontiguousarray(X), batch_size, force_repack)
+        return self.dev.transform_patchwise(self._prepare_X(X), batch_size, force_repack)
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
         if self.config._n_patches > 1 and not self.config.track_patch_weights:
@@ -43,7 +60,7 @@ class BaseTM(abc.ABC):
         return self.dev.wic(class_id, polarity, pw_th, force_repack)
 
     def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
-        return self.dev.wac(np.ascontiguousarray(X), target_classes, polarity, force_repack)
+        return self.dev.wac(self._prepare_X(X), target_classes, polarity, force_repack)
 
     def set_threads(self, n: int) -> None:
         self.dev.set_threads(max(1, n))
