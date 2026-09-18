@@ -14,7 +14,7 @@ def read_file(path: pathlib.Path) -> str:
 
 class CUDADevice(BaseDevice):
     cuda_dev: cp.cuda.Device
-    module: cp.RawModule
+    cu_mod: cp.RawModule
 
     def dev_init(self):
         self.xp = cp
@@ -35,14 +35,18 @@ class CUDADevice(BaseDevice):
         names = ("cuda.h", "common.h", "rng.h", "feedback.h", "feedback.cu", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
         return {name: read_file(core / name) for name in names}
 
-    def _kernel_names(self) -> tuple[str, ...]:
-        return ("pack_clauses", "calc_clause_outputs", "calc_clause_outputs_patchwise", "sum_votes", "evaluate", "count_votes", "wic", "wac")
-
     def _init_kernels(self):
         with self.cuda_dev:
-            self.module = cp.RawModule(code=self._build_code(), backend="nvrtc", options=())
-            for name in self._kernel_names():
-                setattr(self, f"k_{name}", self.module.get_function(name))
+            self.cu_mod = cp.RawModule(code=self._build_code(), backend="nvrtc", options=())
+
+            self.cu_pack_clauses = self.cu_mod.get_function("pack_clauses")
+            self.cu_calc_clause_outputs = self.cu_mod.get_function("calc_clause_outputs")
+            self.cu_calc_clause_outputs_patchwise = self.cu_mod.get_function("calc_clause_outputs_patchwise")
+            self.cu_sum_votes = self.cu_mod.get_function("sum_votes")
+            self.cu_evaluate = self.cu_mod.get_function("evaluate")
+            self.cu_count_votes = self.cu_mod.get_function("count_votes")
+            self.cu_wic = self.cu_mod.get_function("wic")
+            self.cu_wac = self.cu_mod.get_function("wac")
 
     def _init_device_arrays(self):
         cfg = self.config
@@ -66,7 +70,7 @@ class CUDADevice(BaseDevice):
             if force_repack:
                 self.packed_clauses.is_clause_synced.fill(0)
 
-            self.k_pack_clauses(
+            self.cu_pack_clauses(
                 *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
                 (
                     self.ta_states,
@@ -88,7 +92,7 @@ class CUDADevice(BaseDevice):
         cfg = self.config
         pc = self.packed_clauses
 
-        self.k_evaluate(
+        self.cu_evaluate(
             *self._kernel_config(cfg._total_clauses * self.device_config._cuda_props["warp_size"]),
             (
                 np.uint64(rng_key),
@@ -106,7 +110,7 @@ class CUDADevice(BaseDevice):
         )
 
     def _fit_voting(self, buf):
-        self.k_count_votes(
+        self.cu_count_votes(
             *self._kernel_config(self.config.n_classes * self.device_config._cuda_props["warp_size"]),
             (buf.selected_pids, self.clause_weights, buf.votes),
         )
@@ -132,7 +136,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.k_calc_clause_outputs(
+                self.cu_calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * warp_size),
                     (
                         Xb,
@@ -146,7 +150,7 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                self.k_sum_votes(
+                self.cu_sum_votes(
                     *self._kernel_config(bs * cfg.n_classes * warp_size),
                     (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
                 )
@@ -167,7 +171,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.k_calc_clause_outputs(
+                self.cu_calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * warp_size),
                     (
                         Xb,
@@ -197,7 +201,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=np.int32)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
-                self.k_calc_clause_outputs_patchwise(
+                self.cu_calc_clause_outputs_patchwise(
                     *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
                     (
                         Xb,
@@ -230,7 +234,7 @@ class CUDADevice(BaseDevice):
             pw_norm = cp.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
             output = cp.zeros(cfg._dim, dtype=np.float32)
 
-            self.k_wic(
+            self.cu_wic(
                 *self._kernel_config(cfg._total_clauses * cfg._n_patches),
                 (
                     np.int32(class_id),
@@ -260,7 +264,7 @@ class CUDADevice(BaseDevice):
             target_classes_gpu = cp.asarray(target_classes, dtype=np.int32)
             output = cp.zeros((N, *cfg._dim), dtype=np.float32)
 
-            self.k_wac(
+            self.cu_wac(
                 *self._kernel_config(N * cfg._total_clauses * cfg._n_patches),
                 (
                     target_classes_gpu,

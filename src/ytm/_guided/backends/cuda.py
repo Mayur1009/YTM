@@ -34,19 +34,21 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         sections["update.cu"] = read_file(here / "update.cu")
         return sections
 
-    def _kernel_names(self) -> tuple[str, ...]:
-        names = super()._kernel_names() + (
-            "votes_activation",
-            "votes_activation_batch",
-            "loss_gradient",
-            "update_clauses",
-            "update_weights",
-        )
-        if self.config._fb_signal == FbSignal.DELTA_L:
-            return names + ("compute_votes_neg_ck", "compute_loss_neg_ck", "decide_feedback_delta_l")
-        return names + ("decide_feedback_grad",)
+    def _init_kernels(self):
+        super()._init_kernels()
 
-    def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask, lr: float, lambda_: float) -> GuidedFitBuffers:
+        with self.cuda_dev:
+            self.cu_votes_activation = self.cu_mod.get_function("votes_activation")
+            self.cu_votes_activation_batch = self.cu_mod.get_function("votes_activation_batch")
+            self.cu_loss_gradient = self.cu_mod.get_function("loss_gradient")
+            self.cu_compute_votes_neg_ck = self.cu_mod.get_function("compute_votes_neg_ck")
+            self.cu_compute_loss_neg_ck = self.cu_mod.get_function("compute_loss_neg_ck")
+            self.cu_decide_feedback_grad = self.cu_mod.get_function("decide_feedback_grad")
+            self.cu_decide_feedback_delta_l = self.cu_mod.get_function("decide_feedback_delta_l")
+            self.cu_update_clauses = self.cu_mod.get_function("update_clauses")
+            self.cu_update_weights = self.cu_mod.get_function("update_weights")
+
+    def _fit_allocs(self, clause_drop_mask, lr: float, lambda_: float) -> GuidedFitBuffers:
         cfg = self.config
 
         extra: dict[str, Any] = {}
@@ -59,8 +61,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             feedback_type = cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8)
 
         return GuidedFitBuffers(
-            X=cp.asarray(X, dtype=np.int32),
-            Y=cp.asarray(Y, dtype=np.float32),
+            X=None,
+            Y=None,
             clause_drop_mask=clause_drop_mask,
             selected_pids=cp.empty(cfg._total_clauses, dtype=np.int32),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
@@ -83,23 +85,30 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         lambda_: float | None,
     ) -> float:
         cfg = self.config
+        N = X.shape[0]
+        bs = N if batch_size == -1 else batch_size
 
         with self.cuda_dev:
             buf = self._fit_allocs(
-                X,
-                Y,
                 self._fit_drop_mask(clause_drop_p),
                 lr=cfg.lr if lr is None else lr,
                 lambda_=cfg.lambda_ if lambda_ is None else lambda_,
             )
 
             running_loss = cp.zeros(1, dtype=np.float32)
-            pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
-            for e, rng_key in self._fit_samples(pbar):
-                self.fit_sample(rng_key, buf, e)
-                running_loss += buf.loss
+            samples = self._fit_samples(tqdm_bar(range(N), desc="Fit"))
 
-            return float(running_loss[0]) / X.shape[0]
+            for i in range(0, N, bs):
+                end = min(i + bs, N)
+                buf.X = cp.asarray(X[i:end], dtype=np.int32)
+                buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
+
+                for e in range(end - i):
+                    _, rng_key = next(samples)
+                    self.fit_sample(rng_key, buf, e)
+                    running_loss += buf.loss
+
+            return float(running_loss[0]) / N
 
     def fit_sample(self, rng_key: int, buf: GuidedFitBuffers, e: int) -> None:
         with self.cuda_dev:
@@ -116,11 +125,11 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         one = self._kernel_config(1)
         per_clause = self._kernel_config(cfg._total_clauses)
 
-        self.k_votes_activation(*one, (buf.votes, buf.y_hat))
-        self.k_loss_gradient(*one, (buf.y_hat, buf.Y[e], buf.grad, buf.loss))
+        self.cu_votes_activation(*one, (buf.votes, buf.y_hat))
+        self.cu_loss_gradient(*one, (buf.y_hat, buf.Y[e], buf.grad, buf.loss))
 
         if cfg._fb_signal == FbSignal.GRAD:
-            self.k_decide_feedback_grad(
+            self.cu_decide_feedback_grad(
                 *per_clause,
                 (
                     np.uint64(rng_key),
@@ -134,16 +143,16 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                 ),
             )
         else:
-            self.k_compute_votes_neg_ck(
+            self.cu_compute_votes_neg_ck(
                 *self._kernel_config(cfg._total_clauses * cfg.n_classes),
                 (buf.votes, self.clause_weights, buf.selected_pids, buf.votes_neg_ck),
             )
-            self.k_votes_activation_batch(
+            self.cu_votes_activation_batch(
                 *per_clause,
                 (buf.votes_neg_ck, np.int32(cfg._total_clauses), buf.y_hat_neg_ck),
             )
-            self.k_compute_loss_neg_ck(*per_clause, (buf.y_hat_neg_ck, buf.Y[e], buf.loss_neg_ck))
-            self.k_decide_feedback_delta_l(
+            self.cu_compute_loss_neg_ck(*per_clause, (buf.y_hat_neg_ck, buf.Y[e], buf.loss_neg_ck))
+            self.cu_decide_feedback_delta_l(
                 *per_clause,
                 (
                     np.uint64(rng_key),
@@ -158,7 +167,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             )
 
     def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
-        self.k_update_clauses(
+        self.cu_update_clauses(
             *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
             (
                 np.uint64(rng_key),
@@ -174,7 +183,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         )
 
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
-        self.k_update_weights(
+        self.cu_update_weights(
             *self._kernel_config(self.config._total_clauses),
             (buf.grad, np.float32(buf.lr), buf.selected_pids, buf.clause_drop_mask, self.clause_weights),
         )
@@ -184,7 +193,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         with self.cuda_dev:
             votes_gpu = cp.asarray(votes, dtype=np.float32)
             y_hat = cp.empty_like(votes_gpu)
-            self.k_votes_activation_batch(
+            self.cu_votes_activation_batch(
                 *self._kernel_config(votes.shape[0]),
                 (votes_gpu, np.int32(votes.shape[0]), y_hat),
             )

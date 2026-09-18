@@ -24,28 +24,45 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         sections["update.cu"] = read_file(pathlib.Path(__file__).parent / "update.cu")
         return sections
 
-    def _kernel_names(self) -> tuple[str, ...]:
-        return super()._kernel_names() + ("calc_update_prob", "decide_feedback", "update_clauses", "update_weights")
+    def _init_kernels(self):
+        super()._init_kernels()
 
-    def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask, label_probs: np.ndarray) -> DiscreteFitBuffers:
+        with self.cuda_dev:
+            self.cu_calc_update_prob = self.cu_mod.get_function("calc_update_prob")
+            self.cu_decide_feedback = self.cu_mod.get_function("decide_feedback")
+            self.cu_update_clauses = self.cu_mod.get_function("update_clauses")
+            self.cu_update_weights = self.cu_mod.get_function("update_weights")
+
+    def _fit_allocs(self, clause_drop_mask) -> DiscreteFitBuffers:
         cfg = self.config
         return DiscreteFitBuffers(
-            X=cp.asarray(X, dtype=np.int32),
-            Y=cp.asarray(Y, dtype=np.float32),
+            X=None,
+            Y=None,
             clause_drop_mask=clause_drop_mask,
             selected_pids=cp.empty(cfg._total_clauses, dtype=np.int32),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
             feedback_type=cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=cp.zeros(cfg.n_classes, dtype=np.float32),
-            label_probs=cp.asarray(label_probs, dtype=np.float32),
+            label_probs=None,
         )
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
-        with self.cuda_dev:
-            buf = self._fit_allocs(X, Y, self._fit_drop_mask(clause_drop_p), label_probs)
+        N = X.shape[0]
+        bs = N if batch_size == -1 else batch_size
 
-            for e, rng_key in self._fit_samples(tqdm_bar(range(X.shape[0]), desc="Fit")):
-                self.fit_sample(rng_key, buf, e)
+        with self.cuda_dev:
+            buf = self._fit_allocs(self._fit_drop_mask(clause_drop_p))
+            samples = self._fit_samples(tqdm_bar(range(N), desc="Fit"))
+
+            for i in range(0, N, bs):
+                end = min(i + bs, N)
+                buf.X = cp.asarray(X[i:end], dtype=np.int32)
+                buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
+                buf.label_probs = cp.asarray(label_probs[i:end], dtype=np.float32)
+
+                for e in range(end - i):
+                    _, rng_key = next(samples)
+                    self.fit_sample(rng_key, buf, e)
 
     def fit_sample(self, rng_key: int, buf: DiscreteFitBuffers, e: int) -> None:
         with self.cuda_dev:
@@ -59,12 +76,12 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
 
-        self.k_calc_update_prob(
+        self.cu_calc_update_prob(
             *self._kernel_config(cfg.n_classes),
             (buf.votes, buf.Y, np.int32(e), buf.prob),
         )
 
-        self.k_decide_feedback(
+        self.cu_decide_feedback(
             *self._kernel_config(cfg._total_clauses),
             (
                 np.uint64(rng_key),
@@ -80,7 +97,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         )
 
     def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
-        self.k_update_clauses(
+        self.cu_update_clauses(
             *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
             (
                 np.uint64(rng_key),
@@ -96,7 +113,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         )
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
-        self.k_update_weights(
+        self.cu_update_weights(
             *self._kernel_config(self.config._total_clauses),
             (buf.feedback_type, self.clause_weights),
         )
