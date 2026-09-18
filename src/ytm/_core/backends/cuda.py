@@ -3,13 +3,8 @@ import pathlib
 import cupy as cp
 import numpy as np
 
-from ..utils import tqdm_bar
+from ..utils import read_file, tqdm_bar
 from .base import BaseDevice
-
-
-def read_file(path: pathlib.Path) -> str:
-    with open(path) as f:
-        return f.read()
 
 
 class CUDADevice(BaseDevice):

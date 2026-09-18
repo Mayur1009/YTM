@@ -6,8 +6,7 @@ import cupy as cp
 import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
-from ..._core.backends.cuda import read_file
-from ..._core.utils import FitBuffers, tqdm_bar
+from ..._core.utils import FitBuffers, read_file, tqdm_bar
 from ..config import FbSignal
 from .base import BaseDevice as GuidedBaseDevice
 

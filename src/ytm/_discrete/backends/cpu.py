@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
-from ..._core.backends.cpu import CPUFitBuffers, float_p, read_file
-from ..._core.utils import tqdm_bar
+from ..._core.backends.cpu import CPUFitBuffers, float_p
+from ..._core.utils import read_file, tqdm_bar
 from .base import BaseDevice as DiscreteBaseDevice
 
 uint8_p = POINTER(c_uint8)

@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from .._device_checks import run_compiler
-from ..utils import FitBuffers, tqdm_bar
+from ..utils import FitBuffers, read_file, tqdm_bar
 from .base import BaseDevice
 
 int8_p = POINTER(c_int8)
@@ -36,10 +36,6 @@ class CPUFitBuffers(FitBuffers):
         self.p_selected_pids = self.selected_pids.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.selected_pids.dtype)))
         self.p_votes = self.votes.ctypes.data_as(float_p)
 
-
-def read_file(path: pathlib.Path) -> str:
-    with open(path) as f:
-        return f.read()
 
 
 class CPUDevice(BaseDevice):

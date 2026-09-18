@@ -1,4 +1,5 @@
 import os
+import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from enum import IntEnum
@@ -23,6 +24,11 @@ except ImportError:
 
 def enum_to_header(prefix: str, enum_cls: type[IntEnum]) -> str:
     return "".join(f"#define {prefix}_{m.name} {m.value}\n" for m in enum_cls)
+
+
+def read_file(path: pathlib.Path | str) -> str:
+    with open(path) as f:
+        return f.read()
 
 
 class Feedback(IntEnum):
