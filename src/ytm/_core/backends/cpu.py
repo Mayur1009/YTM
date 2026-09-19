@@ -37,7 +37,6 @@ class CPUFitBuffers(FitBuffers):
         self.p_votes = self.votes.ctypes.data_as(float_p)
 
 
-
 class CPUDevice(BaseDevice):
     lib: CDLL
 
@@ -169,7 +168,7 @@ class CPUDevice(BaseDevice):
         )
         return class_sums
 
-    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         """Whether each clause fired on each sample."""
         cfg = self.config
         X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
@@ -237,27 +236,29 @@ class CPUDevice(BaseDevice):
         )
         return output
 
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
-
-        patch_output = self._patch_outputs(X, force_repack, desc="WAC activations")
-        p_patch_output = patch_output.ctypes.data_as(int8_p)
-
         output = np.zeros((N, *cfg._dim), dtype=np.float32)
-        p_output = output.ctypes.data_as(float_p)
-        for e in tqdm_bar(range(N), desc="WAC"):
-            self.lib.wac_sample(
-                c_int(int(target_classes[e])),
-                c_int(polarity),
-                p_patch_output,
-                c_int(e),
-                self.p_clause_weights,
-                self.p_clause_feat_bounds,
-                self.p_clause_feat_ids,
-                self.p_clause_n_feats,
-                self.p_has_contra,
-                self.p_therm_bits,
-                p_output,
-            )
+
+        for i, end, bs in self._batches(N, batch_size, "WAC"):
+            patch_output = self._patch_outputs(X[i:end], -1, force_repack and i == 0, desc="WAC activations")
+            p_patch_output = patch_output.ctypes.data_as(int8_p)
+            out_b = output[i:end]
+            p_out_b = out_b.ctypes.data_as(float_p)
+
+            for e in range(bs):
+                self.lib.wac_sample(
+                    c_int(int(target_classes[i + e])),
+                    c_int(polarity),
+                    p_patch_output,
+                    c_int(e),
+                    self.p_clause_weights,
+                    self.p_clause_feat_bounds,
+                    self.p_clause_feat_ids,
+                    self.p_clause_n_feats,
+                    self.p_has_contra,
+                    self.p_therm_bits,
+                    p_out_b,
+                )
         return output

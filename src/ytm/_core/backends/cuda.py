@@ -146,7 +146,7 @@ class CUDADevice(BaseDevice):
 
             return class_sums.get()
 
-    def transform(self, X: np.ndarray, batch_size: int, force_repack: bool = False) -> np.ndarray:
+    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
         warp_size = self.device_config._cuda_props["warp_size"]
@@ -239,32 +239,35 @@ class CUDADevice(BaseDevice):
             )
             return output.get()
 
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         pc = self.packed_clauses
         N = X.shape[0]
+        output = np.zeros((N, *cfg._dim), dtype=np.float32)
 
-        patch_output = self._patch_outputs(X, -1, force_repack, desc="WAC activations")
+        for i, end, bs in self._batches(N, batch_size, "WAC"):
+            patch_output = self._patch_outputs(X[i:end], -1, force_repack and i == 0, desc="WAC activations")
 
-        with self.cuda_dev:
-            patch_output_gpu = cp.asarray(patch_output)
-            target_classes_gpu = cp.asarray(target_classes, dtype=np.int32)
-            output = cp.zeros((N, *cfg._dim), dtype=np.float32)
+            with self.cuda_dev:
+                patch_output_gpu = cp.asarray(patch_output)
+                target_classes_gpu = cp.asarray(target_classes[i:end], dtype=np.int32)
+                out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
 
-            self.cu_wac(
-                *self._kernel_config(N * cfg._total_clauses * cfg._n_patches),
-                (
-                    target_classes_gpu,
-                    np.int32(polarity),
-                    np.int32(N),
-                    self.clause_weights,
-                    pc.clause_feat_bounds,
-                    pc.clause_feat_ids,
-                    pc.clause_n_feats,
-                    patch_output_gpu,
-                    pc.has_contra,
-                    self.therm_bits_gpu,
-                    output,
-                ),
-            )
-            return output.get()
+                self.cu_wac(
+                    *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
+                    (
+                        target_classes_gpu,
+                        np.int32(polarity),
+                        np.int32(bs),
+                        self.clause_weights,
+                        pc.clause_feat_bounds,
+                        pc.clause_feat_ids,
+                        pc.clause_n_feats,
+                        patch_output_gpu,
+                        pc.has_contra,
+                        self.therm_bits_gpu,
+                        out_b,
+                    ),
+                )
+                output[i:end] = out_b.get()
+        return output

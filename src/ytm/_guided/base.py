@@ -45,4 +45,4 @@ class BaseTM(CoreBaseTM):
         return self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr, lambda_)
 
     def raw_votes(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return self.dev.raw_votes(np.ascontiguousarray(X), batch_size, force_repack)
+        return self.dev.raw_votes(self._prepare_X(X), batch_size, force_repack)

@@ -60,8 +60,8 @@ class BaseTM(abc.ABC):
             raise ValueError("track_patch_weights=True is required for wic() on a convolutional model.")
         return self.dev.wic(class_id, polarity, pw_th, force_repack)
 
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
-        return self.dev.wac(self._prepare_X(X), target_classes, polarity, force_repack)
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        return self.dev.wac(self._prepare_X(X), target_classes, polarity, batch_size, force_repack)
 
     def set_threads(self, n: int) -> None:
         self.dev.set_threads(max(1, n))
