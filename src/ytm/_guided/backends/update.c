@@ -166,13 +166,13 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
             uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
             if (fb == FB_NONE)
                 continue;
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
             is_clause_synced[clause] = 0;
         }
 #else
         uint8_t fb = feedback_type[clause];
         if (fb != FB_NONE) {
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
             is_clause_synced[clause] = 0;
         }
 #endif

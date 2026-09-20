@@ -27,7 +27,7 @@ class CUDADevice(BaseDevice):
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "feedback.cu", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
         return {name: read_file(core / name) for name in names}
 
     def _init_kernels(self):

@@ -75,7 +75,7 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "feedback.c", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
         return {name: read_file(core / name) for name in names}
 
     def _init_lib(self):

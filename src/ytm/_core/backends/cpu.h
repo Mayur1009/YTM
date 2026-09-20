@@ -11,6 +11,7 @@ typedef unsigned long long ull;
 
 #define INLINE_FN static inline
 #define RESTRICT restrict
+#define LANE_COUNT 1
 
 #if _OPENMP
 #include <omp.h>

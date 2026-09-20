@@ -1,4 +1,3 @@
-// Platform layer for the CUDA build. Concatenated after the generated header, before common.h.
 #pragma once
 
 #define WARP_SIZE 32
@@ -8,7 +7,6 @@
 namespace cg = cooperative_groups;
 using warp_t = cg::thread_block_tile<WARP_SIZE>;
 
-// nvrtc does not give us stdint.
 typedef unsigned int uint;
 typedef unsigned long long ull;
 typedef signed char int8_t;
@@ -20,3 +18,4 @@ typedef unsigned char uint8_t;
 
 #define INLINE_FN __device__ inline
 #define RESTRICT __restrict__
+#define LANE_COUNT WARP_SIZE

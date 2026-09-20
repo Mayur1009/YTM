@@ -1,8 +1,12 @@
 CompileFlags:
   Add:
     - --cuda-path=.pixi/envs/cuda/targets/x86_64-linux
+    - -I.pixi/envs/cuda/targets/x86_64-linux/include
     - -ferror-limit=0
     - -DIS_NEOVIM_CLANGD_ENV
-
-SemanticTokens:
-  DisabledKinds: [InactiveCode]
+---
+If:
+  PathMatch: .*/_core/backends/cuda\.h$
+CompileFlags:
+  Add:
+    - -xcuda

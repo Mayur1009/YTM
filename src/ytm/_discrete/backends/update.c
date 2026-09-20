@@ -79,7 +79,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
             if (fb == FB_NONE)
                 continue;
 
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states);
+            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
             is_clause_synced[clause] = 0;
         }
     }
