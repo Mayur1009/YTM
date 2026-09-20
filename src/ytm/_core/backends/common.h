@@ -61,11 +61,51 @@
 
 INLINE_FN float clip(float val, float lo, float hi) { return (val < lo) ? lo : ((val > hi) ? hi : val); }
 
+INLINE_FN ull weight_offset(ull class_id, ull global_clause_id) {
+    return class_id * (ull)CLAUSES_PER_CLASS + global_clause_id % (ull)CLAUSES_PER_CLASS;
+}
+
+INLINE_FN ull fbtype_offset(ull class_id, ull global_clause_id) {
+    return (global_clause_id % (ull)CLAUSES_PER_CLASS) * (ull)CLASSES + class_id;
+}
+
+INLINE_FN ull ta_offset(ull global_clause_id, ull literal) {
+    return global_clause_id * (ull)N_LITERALS + literal;
+}
+
+INLINE_FN ull feat_ids_offset(ull global_clause_id, ull slot) {
+    return global_clause_id * (ull)N_RAW_PATCH_FEATS + slot;
+}
+
+INLINE_FN ull feat_bounds_offset(ull global_clause_id, ull slot, ull bound) {
+    return (global_clause_id * (ull)N_RAW_PATCH_FEATS + slot) * 2 + bound;
+}
+
+INLINE_FN ull pos_bounds_offset(ull global_clause_id, ull k) {
+    return global_clause_id * 4 + k;
+}
+
+INLINE_FN ull patch_weights_offset(ull global_clause_id, ull patch) {
+    return global_clause_id * (ull)N_PATCHES + patch;
+}
+
+INLINE_FN ull clause_output_offset(ull sample, ull global_clause_id) {
+    return sample * (ull)TOTAL_CLAUSES + global_clause_id;
+}
+
+INLINE_FN ull patch_output_offset(ull sample, ull global_clause_id, ull patch) {
+    return (sample * (ull)TOTAL_CLAUSES + global_clause_id) * (ull)N_PATCHES + patch;
+}
+
+INLINE_FN ull sample_offset(ull sample) {
+    return sample * (ull)HEIGHT * WIDTH * DEPTH;
+}
+
 // A literal is included in the clause once its TA has crossed into the include half.
 INLINE_FN bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
 // Index of raw patch feature `fid` of the patch at (patch_idx_y, patch_idx_x) in the flat image.
-INLINE_FN int flat_index(int fid, int patch_idx_y, int patch_idx_x) {
+INLINE_FN int feature_offset(int fid, int patch_idx_y, int patch_idx_x) {
 #if (PATCH_HEIGHT == HEIGHT && PATCH_WIDTH == WIDTH)
     return fid;
 #else
@@ -80,7 +120,7 @@ INLINE_FN int flat_index(int fid, int patch_idx_y, int patch_idx_x) {
 
 // Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
 INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, int fid) {
-    return X[flat_index(fid, patch_idx_y, patch_idx_x)];
+    return X[feature_offset(fid, patch_idx_y, patch_idx_x)];
 }
 
 // True when the patch matches a clause (strict AND matching).

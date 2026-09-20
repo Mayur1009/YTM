@@ -1,7 +1,7 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "../../_core/backends/common.h"
 #include "../../_core/backends/cpu.h"
-#include "../../_core/backends/feedback.c"
+#include "../../_core/backends/feedback.h"
 #include "../../_core/backends/rng.h"
 #include "act.h"
 
@@ -44,8 +44,7 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
         }
 #endif
         int ck = clause_output[clause_id];
-        ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
-        float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+        float w = clause_weights[weight_offset(class_id, clause_id)];
         votes_neg_ck[clause_class] = votes[class_id] - (ck ? w : -w);
     }
 }
@@ -65,7 +64,6 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                           uint8_t* restrict feedback_type) {
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
@@ -78,7 +76,7 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
             uint8_t fb = FB_NONE;
 
             if (!dropped) {
-                float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+                float w = clause_weights[weight_offset(class_id, clause)];
                 float g = grad[class_id];
 
                 int polarity = (w >= 0) - (w < 0);
@@ -93,7 +91,7 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                     fb = t1a ? FB_T1A : (t1b ? FB_T1B : (t2 ? FB_T2 : FB_NONE));
                 }
             }
-            feedback_type[rel_clause * (ull)CLASSES + class_id] = fb;
+            feedback_type[fbtype_offset(class_id, clause)] = fb;
         }
     }
 }
@@ -142,12 +140,11 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
                     const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
                     const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
+        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)
         int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
@@ -163,7 +160,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
 #if FB_SIGNAL == FB_SIGNAL_GRAD
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
             if (fb == FB_NONE)
                 continue;
             apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
@@ -186,10 +183,9 @@ void update_weights(const float* restrict grad, const float lr, const int8_t* re
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;
 
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            ull idx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+            ull idx = weight_offset(class_id, clause);
             float new_w = clause_weights[idx] + lr * grad[class_id];
 #if ALLOW_POLARITY_CHANGE
             clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);

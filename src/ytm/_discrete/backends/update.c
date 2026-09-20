@@ -1,7 +1,7 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "../../_core/backends/common.h"
 #include "../../_core/backends/cpu.h"
-#include "../../_core/backends/feedback.c"
+#include "../../_core/backends/feedback.h"
 #include "../../_core/backends/rng.h"
 
 #define T_MIN -100.0f
@@ -20,7 +20,6 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
@@ -37,7 +36,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
 
                 if (!(rand_uniform(rng_k, &rng_counter) > label_probs_e[class_id] || target == 0 ||
                       rand_uniform(rng_k, &rng_counter) > fabsf(prob[class_id]))) {
-                    float weight = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+                    float weight = clause_weights[weight_offset(class_id, clause)];
                     int sign = (weight >= 0) - (weight < 0);
 
                     if ((target * sign) > 0)
@@ -46,7 +45,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
                         fb = FB_T2;
                 }
             }
-            feedback_type[rel_clause * (ull)CLASSES + class_id] = fb;
+            feedback_type[fbtype_offset(class_id, clause)] = fb;
         }
     }
 }
@@ -55,12 +54,11 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
                     const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
                     const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-        TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
+        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)
         int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
@@ -75,7 +73,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
             if (fb == FB_NONE)
                 continue;
 
@@ -89,15 +87,14 @@ void update_weights(const uint8_t* restrict feedback_type, float* restrict claus
 #if WEIGHTED
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
             if (fb == FB_T1B)
                 continue;
 
-            float* weight = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+            float* weight = &clause_weights[weight_offset(class_id, clause)];
             int sign = (*weight >= 0) - (*weight < 0);
 
             if (fb == FB_T1A) {

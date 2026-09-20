@@ -1,7 +1,7 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "../../_core/backends/common.h"
 #include "../../_core/backends/cuda.h"
-#include "../../_core/backends/feedback.cu"
+#include "../../_core/backends/feedback.h"
 #include "../../_core/backends/feedback.h"
 #include "../../_core/backends/rng.h"
 #include "act.h"
@@ -48,8 +48,7 @@ extern "C" __global__ void compute_votes_neg_ck(const float* votes, const float*
         }
 #endif
         int ck = clause_output[clause_id];
-        ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
-        float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+        float w = clause_weights[weight_offset(class_id, clause_id)];
         votes_neg_ck[clause_class] = votes[class_id] - (ck ? w : -w);
     }
 }
@@ -67,7 +66,6 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
                                                 const int8_t* clause_drop_mask, const float lambda_,
                                                 uint8_t* feedback_type) {
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
@@ -80,7 +78,7 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
             uint8_t fb = FB_NONE;
 
             if (!dropped) {
-                float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+                float w = clause_weights[weight_offset(class_id, clause)];
                 float g = grad[class_id];
 
                 int polarity = (w >= 0) - (w < 0);
@@ -95,7 +93,7 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
                     fb = t1a ? FB_T1A : (t1b ? FB_T1B : (t2 ? FB_T2 : FB_NONE));
                 }
             }
-            feedback_type[rel_clause * (ull)CLASSES + class_id] = fb;
+            feedback_type[fbtype_offset(class_id, clause)] = fb;
         }
     }
 }
@@ -147,10 +145,10 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
                                           int8_t* is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
 
     WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
-        TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
+        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)
         int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
@@ -164,10 +162,9 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
         uint rng_counter = 0;
 
 #if FB_SIGNAL == FB_SIGNAL_GRAD
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[rel_clause * (ull)CLASSES + class_id];
+            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
             if (fb == FB_NONE)
                 continue;
             apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, lane);
@@ -191,10 +188,9 @@ extern "C" __global__ void update_weights(const float* grad, const float lr, con
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;
 
-        ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
-            ull idx = class_id * (ull)CLAUSES_PER_CLASS + rel_clause;
+            ull idx = weight_offset(class_id, clause);
             float new_w = clause_weights[idx] + lr * grad[class_id];
 #if ALLOW_POLARITY_CHANGE
             clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);

@@ -3,12 +3,20 @@
 #include "rng.h"
 #endif
 
+#define ADD_VOTE(clause, clause_weights, votes)                                                                        \
+    do {                                                                                                               \
+        ull class_id;                                                                                                  \
+        LOOP_CLASS_ID(class_id, (clause)) {                                                                            \
+            (votes)[class_id] += (clause_weights)[weight_offset(class_id, (clause))];                                     \
+        }                                                                                                              \
+    } while (0)
+
 void calc_clause_outputs(const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
                          const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
                          const int8_t* restrict has_contra, const NLITS_T* restrict clause_len,
                          const FBOUND_T* restrict X, const int e, int8_t* restrict clause_outputs) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    int8_t* out_e = &clause_outputs[(ull)e * TOTAL_CLAUSES];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
+    int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -23,7 +31,7 @@ void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restr
                      const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int N,
                      float* restrict class_sums) {
     for (int e = 0; e < N; e++) {
-        const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+        const FBOUND_T* Xe = &X[sample_offset(e)];
         float* sums_e = &class_sums[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
@@ -31,12 +39,8 @@ void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restr
             int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
                                     clause_n_feats, has_contra[clause], clause_len[clause]);
 
-            if (out) {
-                ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-                LOOP_CLASS_ID(class_id, clause) {
-                    sums_e[class_id] += clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
-                }
-            }
+            if (out)
+                ADD_VOTE(clause, clause_weights, sums_e);
         }
     }
 }
@@ -46,8 +50,8 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
                                    const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
                                    const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int e,
                                    int8_t* restrict patch_output) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
-    int8_t* out_e = &patch_output[(ull)e * TOTAL_CLAUSES * N_PATCHES];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
+    int8_t* out_e = &patch_output[patch_output_offset(e, 0, 0)];
 
 #pragma omp parallel for schedule(dynamic)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
@@ -65,12 +69,12 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
             continue;
         }
 
-        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
 #if (N_PATCHES > 1)
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
 
         for (int patch = 0; patch < N_PATCHES; patch++) {
             int py = patch / N_PATCHES_X;
@@ -105,8 +109,8 @@ INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restri
             continue;
         }
 
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         clause_output[clause] = match_patch(Xe, 0, 0, bounded_fids, feat_bounds, n_bounded_fids) ? 1 : 0;
@@ -134,15 +138,15 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
             clause_output[clause] = 1;
             selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
-            patch_weights[clause * (ull)N_PATCHES + selected_id]++;
+            patch_weights[patch_weights_offset(clause, selected_id)]++;
 #endif
             continue;
         }
 
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         const int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         const int n_bounded_fids = (int)clause_n_feats[clause];
 
         int selected_id = -1;
@@ -166,7 +170,7 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
         if (selected_id >= 0) {
             selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
-            patch_weights[clause * (ull)N_PATCHES + selected_id]++;
+            patch_weights[patch_weights_offset(clause, selected_id)]++;
 #endif
         }
     }
@@ -177,7 +181,7 @@ void evaluate(const ull seed, const FBOUND_T* restrict X, const int e, const int
               const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
               const int8_t* restrict has_contra, const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
               NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
 #if (N_PATCHES > 1)
     evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
                   clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
@@ -193,11 +197,9 @@ void count_votes(const int8_t* restrict clause_output, const float* restrict cla
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES])
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        if (clause_output[clause]) {
-            ull class_id, rel_clause = clause % CLAUSES_PER_CLASS;
-            LOOP_CLASS_ID(class_id, clause) {
-                votes[class_id] += clause_weights[class_id * CLAUSES_PER_CLASS + rel_clause];
-            }
-        }
+        if (clause_output[clause])
+            ADD_VOTE(clause, clause_weights, votes);
     }
 }
+
+#undef ADD_VOTE

@@ -20,11 +20,11 @@ __device__ void calc_clause_outputs_conv(const FBOUND_T* X, int8_t* clause_outpu
             continue;
         }
 
-        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        const FBOUND_T* Xe = &X[sample_offset(e)];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         int n_y = pos1 - pos0 + 1;
@@ -67,9 +67,9 @@ __device__ void calc_clause_outputs_noconv(const FBOUND_T* X, int8_t* clause_out
             continue;
         }
 
-        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* Xe = &X[sample_offset(e)];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         bool is_matching = true;
@@ -145,7 +145,7 @@ extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8
         ull clause = clause_patch / (ull)N_PATCHES;
         int patch = clause_patch % N_PATCHES;
 
-        int8_t* output = &patch_output[e * (ull)TOTAL_CLAUSES * N_PATCHES + clause * (ull)N_PATCHES + patch];
+        int8_t* output = &patch_output[patch_output_offset(e, clause, patch)];
 
         if (has_contra[clause] || clause_len[clause] == 0) {
             *output = has_contra[clause] ? 0 : 1;
@@ -156,16 +156,16 @@ extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8
         int px = patch % N_PATCHES_X;
 
 #if (N_PATCHES > 1)
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
             *output = 0;
             continue;
         }
 #endif
 
-        const FBOUND_T* Xe = &X[e * (ull)HEIGHT * WIDTH * DEPTH];
-        const FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* Xe = &X[sample_offset(e)];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
@@ -190,8 +190,8 @@ __device__ void evaluate_noconv(const FBOUND_T* Xe, const int8_t* clause_drop_ma
             continue;
         }
 
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         bool is_matching = true;
@@ -235,16 +235,16 @@ __device__ void evaluate_conv(const ull seed, const FBOUND_T* Xe, const int8_t* 
                 clause_output[clause] = 1;
                 selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
-                patch_weights[clause * (ull)N_PATCHES + selected_id]++;
+                patch_weights[patch_weights_offset(clause, selected_id)]++;
 #endif
             }
             continue;
         }
 
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         const int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         const int n_bounded_fids = (int)clause_n_feats[clause];
 
         int selected_id = -1;
@@ -283,7 +283,7 @@ __device__ void evaluate_conv(const ull seed, const FBOUND_T* Xe, const int8_t* 
             if (selected_id >= 0) {
                 selected_patch_ids[clause] = (NPATCHES_T)selected_id;
 #if TRACK_PATCH_WEIGHTS
-                patch_weights[clause * (ull)N_PATCHES + selected_id]++;
+                patch_weights[patch_weights_offset(clause, selected_id)]++;
 #endif
             }
         }
@@ -295,7 +295,7 @@ extern "C" __global__ void evaluate(const ull seed, const FBOUND_T* X, const int
                                     const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
                                     const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
                                     int* patch_weights) {
-    const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
+    const FBOUND_T* Xe = &X[sample_offset(e)];
 #if (N_PATCHES > 1)
     evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
                   clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);

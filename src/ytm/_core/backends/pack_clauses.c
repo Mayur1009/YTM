@@ -67,7 +67,7 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
         if (is_clause_synced[clause])
             continue;
 
-        const TA_STATE_T* ta_state = &global_ta_states[clause * (ull)N_LITERALS];
+        const TA_STATE_T* ta_state = &global_ta_states[ta_offset(clause, 0)];
 
 #if POSITION_LITERALS
         PositionResult pr = scan_position_literals(ta_state, dont_skip);
@@ -76,7 +76,7 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
 #endif
 
 #if (N_PATCHES > 1)
-        PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         pos[0] = pr.pos0;
         pos[1] = pr.pos1;
         pos[2] = pr.pos2;
@@ -90,8 +90,8 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
             continue;
         }
 
-        NFEAT_T* cfids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-        FBOUND_T* cfb = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
+        NFEAT_T* cfids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+        FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
 
         FeatureResult fr = scan_feature_literals(ta_state, therm_bits, literal_offsets, cfids, cfb, dont_skip);
 

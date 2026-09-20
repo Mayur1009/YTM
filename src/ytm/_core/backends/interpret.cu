@@ -20,19 +20,18 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
         if (has_contra[clause_id])
             continue;
 
-        ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
-        float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+        float w = clause_weights[weight_offset(class_id, clause_id)];
         if ((polarity > 0 && w <= 0.0f) || (polarity < 0 && w >= 0.0f))
             continue;
 
         int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
 
 #if (N_PATCHES > 1)
-        const PBOUND_T* pos = &clause_position_bounds[clause_id * 4];
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause_id, 0)];
         if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])
             continue;
 
-        float pwv = patch_weights_norm[clause_id * (ull)N_PATCHES + p];
+        float pwv = patch_weights_norm[patch_weights_offset(clause_id, p)];
         if (pwv <= pw_th)
             continue;
 #else
@@ -40,14 +39,14 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
 #endif
 
         float wm = fabsf(w) * pwv;
-        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause_id, 0, 0)];
+        const NFEAT_T* cfids = &clause_feat_ids[feat_ids_offset(clause_id, 0)];
         const int n_feats = (int)clause_n_feats[clause_id];
 
         for (int i = 0; i < n_feats; ++i) {
             int k = (int)cfids[i];
             float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-            atomicAdd(&output[flat_index(k, py, px)], cp * wm);
+            atomicAdd(&output[feature_offset(k, py, px)], cp * wm);
         }
     }
 }
@@ -72,27 +71,26 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
         if (has_contra[clause_id])
             continue;
 
-        ull rel_clause = clause_id % (ull)CLAUSES_PER_CLASS;
-        float w = clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
+        float w = clause_weights[weight_offset(class_id, clause_id)];
         if ((polarity > 0 && w <= 0.0f) || (polarity < 0 && w >= 0.0f))
             continue;
 
-        ull act_idx = e * (ull)TOTAL_CLAUSES * N_PATCHES + clause_id * (ull)N_PATCHES + p;
+        ull act_idx = patch_output_offset(e, clause_id, p);
         if (patch_output[act_idx] <= 0)
             continue;
 
         float wm = fabsf(w);
-        const FBOUND_T* cfb = &clause_feat_bounds[clause_id * (ull)N_RAW_PATCH_FEATS * 2];
-        const NFEAT_T* cfids = &clause_feat_ids[clause_id * (ull)N_RAW_PATCH_FEATS];
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause_id, 0, 0)];
+        const NFEAT_T* cfids = &clause_feat_ids[feat_ids_offset(clause_id, 0)];
         const int n_feats = (int)clause_n_feats[clause_id];
-        float* out_e = &output[e * (ull)HEIGHT * WIDTH * DEPTH];
+        float* out_e = &output[sample_offset(e)];
 
         int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
 
         for (int i = 0; i < n_feats; ++i) {
             int k = (int)cfids[i];
             float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-            atomicAdd(&out_e[flat_index(k, py, px)], cp * wm);
+            atomicAdd(&out_e[feature_offset(k, py, px)], cp * wm);
         }
     }
 }
