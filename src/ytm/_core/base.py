@@ -35,7 +35,7 @@ class BaseTM(abc.ABC):
         assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
 
         # Check if values are in provided bounds
-        if cfg._n_patches == 1:
+        if cfg._patch_is_image:
             lo, hi, axes = cfg._feat_mins.reshape(cfg._dim), cfg._feat_maxs.reshape(cfg._dim), 0
         else:
             lo, hi, axes = cfg._feat_mins[: cfg._dim[2]], cfg._feat_maxs[: cfg._dim[2]], (0, 1, 2)

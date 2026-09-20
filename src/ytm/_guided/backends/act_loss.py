@@ -258,21 +258,22 @@ class FocalCE(ActLoss):
 {_fun_template} {{
     float loss_sum = 0.0f;
     float g[CLASSES];
-    float S = 0.0f;
+    float sum = 0.0f;
     for (int c = 0; c < CLASSES; c++) {{
         float p = y_hat[c];
+        float q = fmaxf(1.0f - p, {eps}f);
         if (loss)
-            loss_sum += {alpha}f * y[c] * powf(1.0f - p, {gamma}f) * logf(p + {eps}f);
+            loss_sum += {alpha}f * y[c] * powf(q, {gamma}f) * logf(p + {eps}f);
         if (grad) {{
-            g[c] = {alpha}f * y[c] * ({gamma}f * powf(1.0f - p, {gamma}f - 1.0f) * logf(p + {eps}f) - powf(1.0f - p, {gamma}f) / (p + {eps}f));
-            S += g[c] * p;
+            g[c] = {alpha}f * y[c] * ({gamma}f * powf(q, {gamma}f - 1.0f) * logf(p + {eps}f) - powf(q, {gamma}f) / (p + {eps}f));
+            sum += g[c] * p;
         }}
     }}
     if (loss)
         *loss = -loss_sum;
     if (grad) {{
         for (int c = 0; c < CLASSES; c++)
-            grad[c] = y_hat[c] * (S - g[c]);
+            grad[c] = y_hat[c] * (sum - g[c]);
     }}
 }}
 """

@@ -49,7 +49,7 @@ class TestUniform:
     def test_uniform_is_the_raw_bits_scaled(self):
         """The wrapper in `rng_harness` re-implements the hash; this ties it to `rand_uniform` so the two cannot drift apart."""
         u, raw = rng.uniforms(31, 1000, start=5), rng.raw32(31, 1000, start=5)
-        assert np.array_equal(u, (raw.astype(np.float32) * np.float32(2.0**-32)).astype(np.float32))
+        assert np.array_equal(u, ((raw >> 8).astype(np.float32) * np.float32(2.0**-24)).astype(np.float32))
 
     def test_never_returns_exactly_one(self):
         """Key 12345, counter 6574832 has x >> 32 == 4294967237, which the float32 cast rounds up to 2^32, so u == 1.0.

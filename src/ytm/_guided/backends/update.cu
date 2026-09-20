@@ -86,7 +86,7 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
                 int dir = polarity * sign_grad;
                 float update_prob = 1.0f - expf(-lambda_ * fabsf(g));
 
-                if (rand_uniform(rng_k, &rng_counter) <= update_prob) {
+                if (rand_uniform(rng_k, &rng_counter) < update_prob) {
                     bool t1a = (ck == 1 && dir > 0 && has_space);
                     bool t1b = ((ck == 0 && dir > 0) || (ck == 1 && dir > 0 && !has_space));
                     bool t2 = (ck == 1 && dir < 0);
@@ -104,7 +104,7 @@ __device__ inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float up
     uint rng_counter = 0;
 
     uint8_t fb;
-    if (rand_uniform(rng_k, &rng_counter) > uprob) {
+    if (rand_uniform(rng_k, &rng_counter) >= uprob) {
         fb = FB_NONE;
     } else {
         // T1a -> ck = 1, and deltaL < 0, meaning turning ck=0 increased the loss

@@ -122,7 +122,9 @@ CASES = [
     ("asl", ASL(), "sigmoid", MULTI, _asl, False),
     ("sce", SCE(), "softmax", ONE_HOT, _sce, False),
     ("tversky", Tversky(), "sigmoid", MULTI, _tversky, False),
-    ("focal_ce", FocalCE(), "softmax", ONE_HOT, _focal_ce, False),  # red: act_loss.py:261 `float S` collides with the S macro
+    ("focal_ce", FocalCE(), "softmax", ONE_HOT, _focal_ce, False),
+    # gamma=0 is plain cross-entropy, so this one has an independent library reference
+    ("focal_ce_gamma0", FocalCE(gamma=0.0), "softmax", ONE_HOT, lambda z, y: F.cross_entropy(z[None], y[None], reduction="sum"), True),
 ]
 
 
@@ -166,10 +168,8 @@ def test_saturated_bce_loss_is_bounded_by_eps_and_the_gradient_is_still_exact(de
     assert np.array_equal(grad, [1.0, -1.0])
 
 
-# The FocalCE cases below are red because act_loss.py:261 declares a local `float S`, which collides with the config macro
-# `#define S <s>f` (config.py:221), so the generated C source does not compile.
-# Once that is fixed, FocalCE(gamma=0.5) at the `split` votes pattern (EXTREME_VOTES[1]) is still expected to stay red:
-# powf(1 - p, gamma - 1) = powf(0, -0.5) = inf, then 0 * inf = NaN in g[c] poisons S += g[c] * p.
+# FocalCE with gamma < 1 (including 0) has the exponent gamma - 1 < 0 on (1 - p); at a saturated p = 1 that is powf(0, negative) = inf,
+# and 0 * inf = NaN would poison the softmax backward sum. The `split` votes pattern (EXTREME_VOTES[1]) reaches p = 1 exactly.
 ALL_LOSSES = [
     pytest.param(SoftmaxCE(), ONE_HOT, id="softmax_ce"),
     pytest.param(SoftmaxCE(weights=PW), ONE_HOT, id="softmax_ce_weighted"),
@@ -184,6 +184,7 @@ ALL_LOSSES = [
     pytest.param(FocalBCE(), MULTI, id="focal_bce"),
     pytest.param(FocalCE(), ONE_HOT, id="focal_ce"),
     pytest.param(FocalCE(gamma=0.5), ONE_HOT, id="focal_ce_gamma0.5"),
+    pytest.param(FocalCE(gamma=0.0), ONE_HOT, id="focal_ce_gamma0"),
     pytest.param(ASL(gamma_pos=0.5), MULTI, id="asl_gamma_pos0.5"),
 ]
 EXTREME_VOTES = [

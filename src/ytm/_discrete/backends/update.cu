@@ -40,8 +40,8 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
             if (!dropped) {
                 int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
 
-                if (!(rand_uniform(rng_k, &rng_counter) > label_probs_e[class_id] || target == 0 ||
-                      rand_uniform(rng_k, &rng_counter) > fabsf(prob[class_id]))) {
+                if (!(rand_uniform(rng_k, &rng_counter) >= label_probs_e[class_id] || target == 0 ||
+                      rand_uniform(rng_k, &rng_counter) >= fabsf(prob[class_id]))) {
                     float weight = clause_weights[weight_offset(class_id, clause)];
                     int sign = (weight >= 0) - (weight < 0);
 

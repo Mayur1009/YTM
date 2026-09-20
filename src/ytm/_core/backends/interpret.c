@@ -48,7 +48,7 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
         for (int i = 0; i < n_feats; i++) {
             int k = (int)cfids[i];
             float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-            output[k] += cp * wm;
+            output[feature_offset(k, 0, 0)] += cp * wm;
         }
 #endif
     }

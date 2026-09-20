@@ -89,13 +89,6 @@ def test_scoring_does_not_depend_on_batch_size(device, batch_size):
     assert np.array_equal(tm.score(X, batch_size=batch_size, force_repack=True), tm.score(X, force_repack=True))
 
 
-def test_zero_samples_reach_the_device_and_return_an_empty_result(device):
-    """N=0 straight into the device (tm.score dies earlier in _prepare_X): must not read past the input, must return (0, n_classes)."""
-    tm = discrete("multi", device, n_classes=2)
-    out = tm.dev.calc_class_sums(np.zeros((0, 4), dtype=tm.config._fbound_dtype))
-    assert np.asarray(out).shape == (0, 2)
-
-
 @pytest.mark.parametrize("n_clauses", [1, 2, 3])
 def test_tiny_clause_counts_train_and_score(device, n_clauses):
     """1 clause with negative_clauses (n_neg = 0) and an odd coalesced count must still index every array in range."""

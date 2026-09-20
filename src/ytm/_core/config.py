@@ -102,6 +102,9 @@ class BaseTMConfig:
                 self._dim[1] if self.patch_dim[1] <= 0 or self.patch_dim[1] > self._dim[1] else self.patch_dim[1],
             )
 
+        # True when the patch covers the whole image (one window, feature k sits at pixel k)
+        self._patch_is_image = self._patch_dim == (self._dim[0], self._dim[1])
+
         # Stride
         assert len(self.stride) == 2, f"stride must be a tuple of length 2, got {self.stride}"
         assert all(isinstance(st, (int, np.integer)) and st > 0 for st in self.stride), (
@@ -148,7 +151,7 @@ class BaseTMConfig:
 
         arr = np.asarray(value, dtype=np.int32, order="C")
 
-        if self._n_patches > 1:
+        if not self._patch_is_image:
             assert arr.shape == (depth,), f"{name} should either be a scalar, or tuple of length dim[2]."
             return np.tile(arr, self._patch_dim[0] * self._patch_dim[1])
 

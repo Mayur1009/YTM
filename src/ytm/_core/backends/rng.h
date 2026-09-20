@@ -22,7 +22,7 @@ INLINE_FN ull rng_hash(ull seed, ull a, ull b) { return hash_combine(hash_combin
 INLINE_FN float rand_uniform(ull key, uint* counter) {
     ull x = key ^ (ull)((*counter)++);
     x = mix64(x);
-    return (float)(x >> 32) * 0x1p-32f;
+    return (float)(x >> 40) * 0x1p-24f;
 }
 
 // Geometric sampling for getting the number of trials after which there will be success.
