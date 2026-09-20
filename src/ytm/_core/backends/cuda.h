@@ -19,3 +19,22 @@ typedef unsigned char uint8_t;
 #define INLINE_FN __device__ inline
 #define RESTRICT __restrict__
 #define LANE_COUNT WARP_SIZE
+
+#define WARP_STRIDE_LOOP(var, count) for (ull var = warp_id; var < (ull)(count); var += total_warps)
+
+#define GRID_STRIDE_LOOP(var, count)                                                                                   \
+    for (ull var = blockIdx.x * (ull)blockDim.x + threadIdx.x; var < (ull)(count); var += (ull)blockDim.x * gridDim.x)
+
+struct WarpGrid {
+    warp_t warp;
+    int lane;
+    ull warp_id;
+    ull total_warps;
+};
+
+__device__ inline WarpGrid warp_grid() {
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+    auto grid = cg::this_grid();
+    return {warp, (int)warp.thread_rank(), grid.thread_rank() / warp.size(), grid.size() / warp.size()};
+}
+
