@@ -10,10 +10,10 @@ import pathlib
 
 import numpy as np
 
-from ytm._core.backends.cpu import read_file
 from ytm._core.device_config import DeviceConfig
+from ytm._core.utils import read_file
 
-CORE = pathlib.Path(__file__).parents[2] / "src" / "ytm" / "_core" / "backends"
+CORE = pathlib.Path(__file__).parents[1] / "src" / "ytm" / "_core" / "backends"
 
 # Only the defines the shared headers actually reference.
 STUB = """
@@ -32,8 +32,12 @@ STUB = """
 #define N_PATCHES_X 19
 #define N_PATCHES 361
 #define N_RAW_PATCH_FEATS 100
-#define N_PATCHES 361
-#define N_RAW_PATCH_FEATS 100
+#define N_LITERALS 272
+#define PATCH_HEIGHT 10
+#define FBOUND_T uint32_t
+#define NFEAT_T uint32_t
+#define PBOUND_T uint32_t
+#define NLITS_T uint32_t
 """
 
 WRAPPERS = """
@@ -97,21 +101,29 @@ def _lib() -> ctypes.CDLL:
 def uniforms(key: int, n: int, start: int = 0) -> np.ndarray:
     """`n` consecutive draws from one key, as `rand_uniform` would produce them in a loop."""
     out = np.empty(n, dtype=np.float32)
-    _lib().w_draw_uniform(ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+    _lib().w_draw_uniform(
+        ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    )
     return out
 
 
 def raw32(key: int, n: int, start: int = 0) -> np.ndarray:
     """The top 32 bits of the hash, before the float conversion."""
     out = np.empty(n, dtype=np.uint32)
-    _lib().w_draw_raw(ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)))
+    _lib().w_draw_raw(
+        ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+    )
     return out
 
 
 def geom(key: int, n: int, p: float, start: int = 0) -> np.ndarray:
     out = np.empty(n, dtype=np.float32)
     _lib().w_draw_geom(
-        ctypes.c_uint64(key), ctypes.c_uint32(start), ctypes.c_int(n), ctypes.c_float(p), out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        ctypes.c_uint64(key),
+        ctypes.c_uint32(start),
+        ctypes.c_int(n),
+        ctypes.c_float(p),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     return out
 

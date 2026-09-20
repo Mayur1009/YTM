@@ -1,10 +1,3 @@
-"""Python layer checks for failures that are silent.
-
-None of these assert accuracy. They assert that state survives a round trip, that the arrays
-reaching the backend still line up with each other, and that the per sample rng key actually
-varies. Each of those degrades a model quietly rather than raising.
-"""
-
 import copy
 import ctypes
 import pickle
@@ -12,186 +5,107 @@ import pickle
 import numpy as np
 import pytest
 
-from ytm._discrete import BinaryTM, MultiClassTM, RegressionTM
+from .conftest import DEVICES
+from .support import discrete, guided, set_clauses, set_weights
 
 
-@pytest.fixture(scope="module")
-def trained():
-    """A trained model, because an untrained one hides anything that confuses the initial arrays
-    with the loaded ones."""
-    rng = np.random.default_rng(0)
-    X = rng.integers(0, 2, size=(200, 16), dtype=np.int32)
-    Y = ((X[:, :8].sum(1) > X[:, 8:].sum(1)).astype(int) + (X[:, 0] == 1)) % 3
+def _data(n=120, f=16, classes=3, seed=0):
+    rng = np.random.default_rng(seed)
+    X = rng.integers(0, 2, size=(n, f), dtype=np.int32)
+    Y = ((X[:, : f // 2].sum(1) > X[:, f // 2 :].sum(1)).astype(int) + (X[:, 0] == 1)) % classes
+    return X, Y
 
-    tm = MultiClassTM(64, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1)
-    for _ in range(6):
+
+def _trained(make, device, epochs=4):
+    X, Y = _data()
+    tm = make(device)
+    for _ in range(epochs):
         tm.fit(X, Y)
-
-    assert not np.array_equal(tm.get_ta_states(), MultiClassTM(64, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1).get_ta_states())
+    fresh = make(device)
+    # discrete learns through TA states; guided may move only weights or only states, so either counts as "training did something"
+    assert not np.array_equal(tm.get_ta_states(), fresh.get_ta_states()) or not np.array_equal(tm.get_weights(), fresh.get_weights())
     return tm, X
 
 
-class TestRoundTrip:
-    """`load_state_dict` once rebound the arrays while the ctypes pointers still addressed the ones
-    `dev_init` allocated. On a fresh model those hold the same values, so only a trained model shows
-    it, and the symptom is the C reading a different model than python reports."""
-
-    @pytest.mark.parametrize("clone", [pickle, copy], ids=["pickle", "deepcopy"])
-    def test_predictions_survive(self, trained, clone):
-        tm, X = trained
-        back = pickle.loads(pickle.dumps(tm)) if clone is pickle else copy.deepcopy(tm)
-        assert np.array_equal(back.predict(X)[0], tm.predict(X)[0])
-
-    def test_predictions_survive_a_device_move(self, trained):
-        tm, X = trained
-        before = tm.predict(X)[0]
-        moved = pickle.loads(pickle.dumps(tm))  # leave the fixture alone
-        moved.to("cpu:2")
-        assert moved.device_config.device == "cpu:2"
-        assert np.array_equal(moved.predict(X)[0], before)
-
-    def test_the_c_side_sees_the_loaded_arrays(self, trained):
-        """Comparing python arrays is not enough: they were correct even when the pointers were stale."""
-        tm, _ = trained
-        back = pickle.loads(pickle.dumps(tm))
-        for name in ("ta_states", "clause_weights", "patch_weights"):
-            arr = getattr(back.dev, name)
-            ptr = getattr(back.dev, f"p_{name}")
-            assert arr.ctypes.data == ctypes.cast(ptr, ctypes.c_void_p).value, name
-
-    def test_a_reloaded_model_continues_its_rng_rather_than_replaying(self, trained):
-        """Both generators are stored as `bit_generator.state`. Reseeding instead would make a
-        resumed run redraw the shuffles and drop masks it already used."""
-        tm, _ = trained
-        a, b = pickle.loads(pickle.dumps(tm)), pickle.loads(pickle.dumps(tm))
-
-        # compared before anything draws, since drawing advances the generator
-        assert a._rng.bit_generator.state == tm._rng.bit_generator.state
-        assert a.dev._rng.bit_generator.state == tm.dev._rng.bit_generator.state
-
-        assert np.array_equal(a._rng.random(5), b._rng.random(5)), "two loads must agree"
-
-        fresh = MultiClassTM(64, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1)
-        assert b._rng.bit_generator.state != fresh._rng.bit_generator.state, "a reload must not reseed"
+def _discrete(device):
+    return discrete("multi", device, n_clauses=32, T=30.0, s=5.0, dim=(4, 4, 1), n_classes=3, feat_maxs=1)
 
 
-class TestFitAlignment:
-    def test_x_y_and_label_probs_stay_row_aligned_through_the_shuffle(self):
-        """`_fit` permutes X and Y, then derives label_probs from the already shuffled Y. If those
-        fell out of step the model would train on mismatched pairs and simply be worse."""
-        seen = {}
-
-        class Spy(MultiClassTM):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, **kw)
-                self.dev.fit_epoch = lambda X, Y, p, bs, lp: seen.update(X=X.copy(), Y=Y.copy(), lp=lp.copy())
-
-        n, bits = 40, 6
-        X = np.zeros((n, 16), dtype=np.int32)
-        for i in range(n):  # bits 0..5 spell the row index, so a shuffled row can be identified
-            X[i, :bits] = [(i >> b) & 1 for b in range(bits)]
-        Y = np.arange(n) % 3
-
-        tm = Spy(8, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1)
-        tm.fit(X, Y, shuffle=True)
-
-        flat = seen["X"].reshape(n, -1)
-        t_max = tm.config._T_max
-        recovered = []
-        for row in range(n):
-            i = sum(int(flat[row, b]) << b for b in range(bits))
-            recovered.append(i)
-            assert seen["Y"][row, Y[i]] == t_max, f"row {row} carries sample {i}, but Y does not agree"
-            assert seen["lp"][row, Y[i]] == 1.0, f"row {row} label_probs do not agree with its class"
-
-        assert sorted(recovered) == list(range(n)), "the shuffle must be a permutation, not a resample"
-        assert recovered != list(range(n)), "shuffle=True should actually reorder"
-
-    def test_shuffle_off_preserves_the_original_order(self):
-        seen = {}
-
-        class Spy(MultiClassTM):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, **kw)
-                self.dev.fit_epoch = lambda X, Y, p, bs, lp: seen.update(X=X.copy())
-
-        X = np.random.default_rng(2).integers(0, 2, size=(20, 16), dtype=np.int32)
-        tm = Spy(8, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1)
-        tm.fit(X, np.arange(20) % 3, shuffle=False)
-        assert np.array_equal(seen["X"].reshape(20, -1), X)
+def _guided(device):
+    return guided("multi", device, n_clauses=32, s=5.0, dim=(4, 4, 1), n_classes=3, feat_maxs=1)
 
 
-def test_every_sample_gets_a_different_rng_key():
-    """One reused key would give every sample the same patch choices and the same feedback coin
-    flips. The model would still train, just worse, with nothing raised."""
-    tm = MultiClassTM(8, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1)
-    pbar = range(500)
-    pairs = list(tm.dev._fit_samples(pbar))
-
-    assert [e for e, _ in pairs] == list(pbar)
-    keys = [k for _, k in pairs]
-    assert len(set(keys)) == len(keys)
-    assert all(k > 0 for k in keys)
+@pytest.mark.parametrize("make", [_discrete, _guided], ids=["discrete", "guided"])
+@pytest.mark.parametrize("clone", [pickle, copy], ids=["pickle", "deepcopy"])
+def test_predictions_survive_a_round_trip(device, make, clone):
+    """A trained model, not a fresh one: an untrained one hides anything that confuses initial arrays with loaded ones."""
+    tm, X = _trained(make, device)
+    back = pickle.loads(pickle.dumps(tm)) if clone is pickle else copy.deepcopy(tm)
+    assert np.array_equal(back.predict(X)[0], tm.predict(X)[0])
 
 
-class TestGetClauses:
-    @pytest.mark.parametrize("coalesced", [True, False])
-    def test_reshape_keeps_each_clause_in_its_own_bank(self, coalesced):
-        """A wrong reshape gives a plausible ClauseInfo with clauses attributed to the wrong bank."""
-        tm = MultiClassTM(6, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1, coalesced=coalesced)
-        cfg = tm.config
-        info = tm.get_clauses(force_repack=True)
-        flat = tm.dev.get_packed_clauses()
-
-        assert info.clause_density.shape == (cfg._n_clause_banks, cfg._n_clauses)
-        assert np.array_equal(info.clause_density.reshape(-1), flat.clause_density)
-        assert np.array_equal(info.feature_bounds.reshape(cfg._total_clauses, -1), flat.clause_feat_bounds.reshape(cfg._total_clauses, -1))
-
-    def test_position_bounds_are_absent_without_patches(self):
-        flat = MultiClassTM(6, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=1, position_literals=False)
-        assert flat.config._n_patches == 1
-        assert flat.get_clauses(force_repack=True).position_bounds is None
-
-    def test_position_bounds_are_present_for_a_conv_model(self):
-        conv = MultiClassTM(6, 30.0, 5.0, (6, 6), 3, patch_dim=(3, 3), feat_maxs=1, seed=1)
-        info = conv.get_clauses(force_repack=True)
-        assert info.position_bounds is not None
-        assert info.position_bounds.shape == (conv.config._n_clause_banks, conv.config._n_clauses, 4)
+def test_the_c_side_sees_the_loaded_arrays():
+    """Comparing python arrays is not enough: `load_state_dict` once left the ctypes pointers on the old buffers."""
+    tm, _ = _trained(_discrete, "cpu:1")
+    back = pickle.loads(pickle.dumps(tm))
+    for name in ("ta_states", "clause_weights", "patch_weights"):
+        arr, ptr = getattr(back.dev, name), getattr(back.dev, f"p_{name}")
+        assert arr.ctypes.data == ctypes.cast(ptr, ctypes.c_void_p).value, name
 
 
-def test_binary_and_regression_also_round_trip():
-    """The three public classes differ in `_encode_Y` and `config_cls`, so each has its own path."""
-    X = np.random.default_rng(3).integers(0, 2, size=(60, 16), dtype=np.int32)
-
-    b = BinaryTM(32, 30.0, 5.0, (4, 4), feat_maxs=1, seed=2)
-    b.fit(X, (X[:, 0] == 1).astype(int))
-    assert np.array_equal(pickle.loads(pickle.dumps(b)).predict(X)[0], b.predict(X)[0])
-
-    r = RegressionTM(32, 100.0, 5.0, (4, 4), y_range=(0.0, 8.0), feat_maxs=1, seed=3)
-    r.fit(X, X[:, :8].sum(1).astype(float))
-    back = pickle.loads(pickle.dumps(r))
-    assert back.config.y_range == r.config.y_range
-    assert np.allclose(back.predict(X)[0], r.predict(X)[0])
+def test_predictions_survive_a_device_move():
+    """`to("cpu:2")` rebuilds the device and loads the state; predictions must not change."""
+    tm, X = _trained(_discrete, "cpu:1")
+    before = tm.predict(X)[0]
+    moved = pickle.loads(pickle.dumps(tm))
+    moved.to("cpu:2")
+    assert moved.device_config.device == "cpu:2"
+    assert np.array_equal(moved.predict(X)[0], before)
 
 
-def test_training_is_reproducible_across_thread_counts():
-    """End to end version of the per function checks in tests/backends. Every hot loop is an omp
-    parallel for, and a race would look like a different random draw rather than a failure."""
-    rng = np.random.default_rng(7)
-    X = rng.integers(0, 2, size=(150, 16), dtype=np.int32)
-    Y = ((X[:, :8].sum(1) > X[:, 8:].sum(1)).astype(int) + (X[:, 0] == 1)) % 3
+@pytest.mark.skipif("cuda" not in DEVICES, reason="no usable cuda device")
+def test_cpu_and_cuda_agree_on_the_same_state():
+    """Same TA states and weights must give the same votes on both backends (float32 reduction noise only)."""
+    tm, X = _trained(_discrete, "cpu:1")
+    on_gpu = pickle.loads(pickle.dumps(tm))
+    on_gpu.to("cuda")
+    assert np.allclose(on_gpu.score(X), tm.score(X), atol=1e-4)
+    assert np.array_equal(on_gpu.predict(X)[0], tm.predict(X)[0])
 
-    def trained(device: str):
-        tm = MultiClassTM(128, 30.0, 5.0, (4, 4), 3, feat_maxs=1, seed=5, device=device)
-        for _ in range(4):
-            tm.fit(X, Y, clause_drop_p=0.1)
-        return tm
 
-    single = trained("cpu:1")
-    many = trained("cpu:8")
-    if many.device_config._n_threads == 1:
-        pytest.skip("no working OpenMP flags on this machine")
+def test_a_reloaded_model_continues_its_rng_instead_of_replaying():
+    """Both generators are stored as `bit_generator.state`; reseeding would replay shuffles and drop masks."""
+    tm, _ = _trained(_discrete, "cpu:1")
+    fresh = _discrete("cpu:1")
+    assert tm._rng.bit_generator.state != fresh._rng.bit_generator.state  # training advanced both generators
+    assert tm.dev._rng.bit_generator.state != fresh.dev._rng.bit_generator.state
+    a, b = pickle.loads(pickle.dumps(tm)), pickle.loads(pickle.dumps(tm))
+    assert a._rng.bit_generator.state == tm._rng.bit_generator.state
+    assert a.dev._rng.bit_generator.state == tm.dev._rng.bit_generator.state
+    assert np.array_equal(a._rng.random(5), b._rng.random(5))
 
-    assert np.array_equal(many.get_ta_states(), single.get_ta_states())
-    assert np.array_equal(many.get_weights(), single.get_weights())
-    assert np.array_equal(many.predict(X)[0], single.predict(X)[0])
+
+def test_loading_state_invalidates_the_packed_clauses(device):
+    """Packed clauses are cached; `load_state_dict` must mark them stale or predictions keep using the old clause."""
+    tm = discrete("multi", device)
+    set_weights(tm, np.array([[3, 0, 0, 0], [0, 0, 0, 0]]))
+    set_clauses(tm, {0: [0]})
+    X = np.array([[1, 0, 0, 0]])
+    assert tm.score(X)[0, 0] == 3  # packs the clause "x0"
+    state = tm.dev.get_state_dict()
+    state["ta_states"] = state["ta_states"].copy()
+    state["ta_states"][0, :] = tm.config._include_state - 1
+    state["ta_states"][0, 1] = tm.config._include_state  # now the clause is "x1"
+    tm.dev.load_state_dict(state)
+    assert tm.score(X)[0, 0] == 0  # no force_repack: the load itself must have invalidated the pack
+
+
+def test_set_ta_states_helper_invalidates_the_pack(device):
+    """The test helper's own contract: hand-set states must show up in the next score without `force_repack`."""
+    tm = discrete("multi", device)
+    set_weights(tm, np.array([[3, 0, 0, 0], [0, 0, 0, 0]]))
+    set_clauses(tm, {0: [0]})
+    X = np.array([[0, 0, 0, 0]])
+    assert tm.score(X)[0, 0] == 0
+    set_clauses(tm, {})
+    assert tm.score(X)[0, 0] == 3

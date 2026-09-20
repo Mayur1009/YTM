@@ -30,9 +30,11 @@ test = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not benchmark'"
+addopts = "-m 'not benchmark and not statistical and not sanitize'"
 markers = [
     "benchmark: long-running regression-guard tests, skipped by default (run with `pytest -m benchmark`)",
+    "statistical: slow distribution/frequency tests, skipped by default (run with `pytest -m statistical`)",
+    "sanitize: ASan/UBSan runs of tiny models, skipped by default (run with `pytest -m sanitize`)",
 ]
 
 [build-system]
