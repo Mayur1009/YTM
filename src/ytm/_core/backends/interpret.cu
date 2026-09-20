@@ -1,6 +1,6 @@
 #ifdef IS_NEOVIM_CLANGD_ENV
-#include "cuda.h"
 #include "common.h"
+#include "cuda.h"
 #endif
 
 extern "C" __global__ void wic(int class_id, int polarity, const float* clause_weights, const FBOUND_T* clause_feat_bounds,
@@ -28,17 +28,16 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
         if ((polarity > 0 && w <= 0.0f) || (polarity < 0 && w >= 0.0f))
             continue;
 
+        int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
+
 #if (N_PATCHES > 1)
         const PBOUND_T* pos = &clause_position_bounds[clause_id * 4];
-        int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
         if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])
             continue;
 
         float pwv = patch_weights_norm[clause_id * (ull)N_PATCHES + p];
         if (pwv <= pw_th)
             continue;
-
-        int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
 #else
         float pwv = 1.0f;
 #endif
@@ -51,16 +50,7 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
         for (int i = 0; i < n_feats; ++i) {
             int k = (int)cfids[i];
             float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-
-#if (N_PATCHES > 1)
-            int rel_y = k / (PATCH_WIDTH * DEPTH);
-            int rel_x = (k / DEPTH) % PATCH_WIDTH;
-            int d = k % DEPTH;
-            int out_idx = (y0 + rel_y) * (WIDTH * DEPTH) + (x0 + rel_x) * DEPTH + d;
-#else
-            int out_idx = k;
-#endif
-            atomicAdd(&output[out_idx], cp * wm);
+            atomicAdd(&output[flat_index(k, py, px)], cp * wm);
         }
     }
 }
@@ -103,24 +93,12 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
         const int n_feats = (int)clause_n_feats[clause_id];
         float* out_e = &output[e * (ull)HEIGHT * WIDTH * DEPTH];
 
-#if (N_PATCHES > 1)
         int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
-        int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
-#endif
 
         for (int i = 0; i < n_feats; ++i) {
             int k = (int)cfids[i];
             float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-
-#if (N_PATCHES > 1)
-            int rel_y = k / (PATCH_WIDTH * DEPTH);
-            int rel_x = (k / DEPTH) % PATCH_WIDTH;
-            int d = k % DEPTH;
-            int out_idx = (y0 + rel_y) * (WIDTH * DEPTH) + (x0 + rel_x) * DEPTH + d;
-#else
-            int out_idx = k;
-#endif
-            atomicAdd(&out_e[out_idx], cp * wm);
+            atomicAdd(&out_e[flat_index(k, py, px)], cp * wm);
         }
     }
 }

@@ -1,5 +1,6 @@
+#pragma once
+
 #ifdef IS_NEOVIM_CLANGD_ENV
-#include "cpu.h"
 #define TOTAL_CLAUSES 1000
 #define INCLUDE_STATE 128
 #define MAX_TA_STATE 255
@@ -42,10 +43,9 @@
 #define NPATCHES_T uint32_t
 #define NLITS_T uint32_t
 
+#include "cpu.h"
 #endif
 
-// Derived macros and patch helpers, shared by the C and CUDA builds.
-#pragma once
 
 #define S_INV (1.0f / (float)(S))
 #define N_POSITION_FEATS_Y (N_PATCHES_Y - 1)
@@ -64,14 +64,23 @@ INLINE_FN float clip(float val, float lo, float hi) { return (val < lo) ? lo : (
 // A literal is included in the clause once its TA has crossed into the include half.
 INLINE_FN bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
-// Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
-INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, int fid) {
+// Index of raw patch feature `fid` of the patch at (patch_idx_y, patch_idx_x) in the flat image.
+INLINE_FN int flat_index(int fid, int patch_idx_y, int patch_idx_x) {
+#if (PATCH_HEIGHT == HEIGHT && PATCH_WIDTH == WIDTH)
+    return fid;
+#else
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
     int abs_y = patch_idx_y * STRIDE_Y + rel_y;
     int abs_x = patch_idx_x * STRIDE_X + rel_x;
-    return X[abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z];
+    return abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z;
+#endif
+}
+
+// Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
+INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, int fid) {
+    return X[flat_index(fid, patch_idx_y, patch_idx_x)];
 }
 
 // True when the patch matches a clause (strict AND matching).

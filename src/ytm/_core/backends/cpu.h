@@ -1,4 +1,3 @@
-// Platform layer for the C build. Concatenated after the generated header, before common.h.
 #pragma once
 
 #include <math.h>

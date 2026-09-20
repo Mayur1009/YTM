@@ -36,16 +36,11 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
                     continue;
 
                 float wm = fabsf(w) * pwv;
-                int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
 
                 for (int i = 0; i < n_feats; i++) {
                     int k = (int)cfids[i];
                     float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-                    int rel_y = k / (PATCH_WIDTH * DEPTH);
-                    int rel_x = (k / DEPTH) % PATCH_WIDTH;
-                    int d = k % DEPTH;
-                    int out_idx = (y0 + rel_y) * (WIDTH * DEPTH) + (x0 + rel_x) * DEPTH + d;
-                    output[out_idx] += cp * wm;
+                    output[flat_index(k, py, px)] += cp * wm;
                 }
             }
         }
@@ -91,22 +86,12 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
             if (clause_act[p] <= 0)
                 continue;
 
-#if (N_PATCHES > 1)
             int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
-            int y0 = py * STRIDE_Y, x0 = px * STRIDE_X;
-#endif
+
             for (int i = 0; i < n_feats; i++) {
                 int k = (int)cfids[i];
                 float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-#if (N_PATCHES > 1)
-                int rel_y = k / (PATCH_WIDTH * DEPTH);
-                int rel_x = (k / DEPTH) % PATCH_WIDTH;
-                int d = k % DEPTH;
-                int out_idx = (y0 + rel_y) * (WIDTH * DEPTH) + (x0 + rel_x) * DEPTH + d;
-#else
-                int out_idx = k;
-#endif
-                out_e[out_idx] += cp * wm;
+                out_e[flat_index(k, py, px)] += cp * wm;
             }
         }
     }
