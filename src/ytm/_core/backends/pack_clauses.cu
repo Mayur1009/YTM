@@ -84,13 +84,9 @@ extern "C" __global__ void pack_clauses(const TA_STATE_T* global_ta_states, cons
                                         FBOUND_T* clause_feat_bounds, NFEAT_T* clause_feat_ids, NFEAT_T* clause_n_feats,
                                         int8_t* has_contra, NLITS_T* clause_len, int8_t* is_clause_synced,
                                         int dont_skip) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
 
-    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         if (is_clause_synced[clause])
             continue;
 

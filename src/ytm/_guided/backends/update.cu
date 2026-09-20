@@ -26,10 +26,7 @@ extern "C" __global__ void votes_activation(const float* votes, float* y_hat) {
 }
 
 extern "C" __global__ void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for (int e = tid; e < n_samples; e += stride)
+    GRID_STRIDE_LOOP(e, n_samples)
         compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
 }
 
@@ -40,10 +37,7 @@ extern "C" __global__ void loss_gradient(const float* y_hat, const float* y, flo
 
 extern "C" __global__ void compute_votes_neg_ck(const float* votes, const float* clause_weights,
                                                 const int8_t* clause_output, float* votes_neg_ck) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause_class = tid; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class += stride) {
+    GRID_STRIDE_LOOP(clause_class, (ull)TOTAL_CLAUSES * (ull)CLASSES) {
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
 
@@ -61,10 +55,7 @@ extern "C" __global__ void compute_votes_neg_ck(const float* votes, const float*
 }
 
 extern "C" __global__ void compute_loss_neg_ck(const float* y_hat_neg_ck, const float* y, float* loss_neg_ck) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause_id = tid; clause_id < (ull)TOTAL_CLAUSES; clause_id += stride) {
+    GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         float loss = 0.0f;
         compute_loss(y, &y_hat_neg_ck[clause_id * (ull)CLASSES], nullptr, &loss);
         loss_neg_ck[clause_id] = loss;
@@ -75,10 +66,7 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
                                                 const NLITS_T* clause_len, const int8_t* clause_output,
                                                 const int8_t* clause_drop_mask, const float lambda_,
                                                 uint8_t* feedback_type) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+    GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -137,10 +125,7 @@ extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* 
                                                    const NLITS_T* clause_len, const int8_t* clause_output,
                                                    const int8_t* clause_drop_mask, const float lambda_,
                                                    uint8_t* feedback_type) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause_id = tid; clause_id < (ull)TOTAL_CLAUSES; clause_id += stride) {
+    GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause_id] == 1) {
             feedback_type[clause_id] = FB_NONE;
             continue;
@@ -160,15 +145,11 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
                                           const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
                                           const uint8_t* feedback_type, TA_STATE_T* global_ta_states,
                                           int8_t* is_clause_synced) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     const FBOUND_T* Xe = &X[(ull)e * HEIGHT * WIDTH * DEPTH];
 
-    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         TA_STATE_T* ta_states = &global_ta_states[clause * (ull)N_LITERALS];
 
 #if (N_PATCHES > 1)
@@ -206,10 +187,7 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
 
 extern "C" __global__ void update_weights(const float* grad, const float lr, const int8_t* clause_output,
                                           const int8_t* clause_drop_mask, float* clause_weights) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = (ull)blockDim.x * gridDim.x;
-
-    for (ull clause = tid; clause < (ull)TOTAL_CLAUSES; clause += stride) {
+    GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;
 

@@ -7,14 +7,10 @@ __device__ void calc_clause_outputs_conv(const FBOUND_T* X, int8_t* clause_outpu
                                          const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
                                          const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
                                          const int8_t* has_contra, const NLITS_T* clause_len) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
     ull total_work = (ull)N * TOTAL_CLAUSES;
 
-    for (ull idx = warp_id; idx < total_work; idx += total_warps) {
+    WARP_STRIDE_LOOP(idx, total_work) {
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
 
@@ -57,14 +53,10 @@ __device__ void calc_clause_outputs_noconv(const FBOUND_T* X, int8_t* clause_out
                                            const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
                                            const NFEAT_T* clause_n_feats, const int8_t* has_contra,
                                            const NLITS_T* clause_len) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
     ull total_work = (ull)N * TOTAL_CLAUSES;
 
-    for (ull idx = warp_id; idx < total_work; idx += total_warps) {
+    WARP_STRIDE_LOOP(idx, total_work) {
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
 
@@ -113,14 +105,10 @@ extern "C" __global__ void calc_clause_outputs(const FBOUND_T* X, int8_t* clause
 
 extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums,
                                      const int N) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
     ull total_work = (ull)N * CLASSES;
 
-    for (ull idx = warp_id; idx < total_work; idx += total_warps) {
+    WARP_STRIDE_LOOP(idx, total_work) {
         ull e = idx / (ull)CLASSES;
         ull class_id = idx % (ull)CLASSES;
 
@@ -151,10 +139,7 @@ extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8
                                                          const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
                                                          const NFEAT_T* clause_n_feats, const int8_t* has_contra,
                                                          const NLITS_T* clause_len) {
-    ull tid = threadIdx.x + blockIdx.x * blockDim.x;
-    ull stride = blockDim.x * gridDim.x;
-
-    for (ull idx = tid; idx < (ull)N * TOTAL_CLAUSES * N_PATCHES; idx += stride) {
+    GRID_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES * N_PATCHES) {
         ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
         ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
         ull clause = clause_patch / (ull)N_PATCHES;
@@ -190,13 +175,9 @@ extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8
 __device__ void evaluate_noconv(const FBOUND_T* Xe, const int8_t* clause_drop_mask, const FBOUND_T* clause_feat_bounds,
                                 const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
                                 const NLITS_T* clause_len, int8_t* clause_output) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
 
-    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             if (lane == 0)
                 clause_output[clause] = 0;
@@ -236,13 +217,9 @@ __device__ void evaluate_conv(const ull seed, const FBOUND_T* Xe, const int8_t* 
                               const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
                               const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
                               int* patch_weights) {
-    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
-    auto grid = cg::this_grid();
-    int lane = warp.thread_rank();
-    ull warp_id = grid.thread_rank() / warp.size();
-    ull total_warps = grid.size() / warp.size();
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
 
-    for (ull clause = warp_id; clause < (ull)TOTAL_CLAUSES; clause += total_warps) {
+    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             if (lane == 0)
                 clause_output[clause] = 0;

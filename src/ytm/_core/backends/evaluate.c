@@ -32,8 +32,7 @@ void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restr
                                     clause_n_feats, has_contra[clause], clause_len[clause]);
 
             if (out) {
-                ull rel_clause = clause % (ull)CLAUSES_PER_CLASS;
-                ull class_id;
+                ull class_id, rel_clause = clause % (ull)CLAUSES_PER_CLASS;
                 LOOP_CLASS_ID(class_id, clause) {
                     sums_e[class_id] += clause_weights[class_id * (ull)CLAUSES_PER_CLASS + rel_clause];
                 }
