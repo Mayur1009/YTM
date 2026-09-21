@@ -85,11 +85,6 @@ class BaseDevice(abc.ABC):
     def set_threads(self, n: int):
         raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")
 
-    @staticmethod
-    def make_device(config: BaseTMConfig, device_config: DeviceConfig) -> "BaseDevice":
-        """Build the device for `device_config`. Each backends package sets this on its classes."""
-        raise NotImplementedError("the backends package must set `make_device` on its device classes.")
-
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
 
@@ -185,18 +180,3 @@ class BaseDevice(abc.ABC):
         self._rng.bit_generator.state = state["rng"]
         self.packed_clauses.is_clause_synced.fill(0)
 
-    def __getstate__(self) -> dict:
-        return {
-            "config": self.config,
-            "params": self.get_state_dict(),
-        }
-
-    def __setstate__(self, state: dict) -> None:
-        self.__init__(state["config"], DeviceConfig())
-        self.load_state_dict(state["params"])
-
-    def to(self, device_config: DeviceConfig) -> "BaseDevice":
-        """The same model on a different backend. Returns a new device, `self` is left alone."""
-        new = type(self).make_device(self.config, device_config)
-        new.load_state_dict(self.get_state_dict())
-        return new

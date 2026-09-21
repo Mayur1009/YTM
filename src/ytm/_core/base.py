@@ -9,6 +9,8 @@ from .utils import ClauseInfo
 
 
 class BaseTM(abc.ABC):
+    cpu_device_cls: type[BaseDevice]
+
     def __init__(self, dev: BaseDevice):
         self.dev = dev
         self._rng = np.random.default_rng(self.config.seed)
@@ -21,9 +23,19 @@ class BaseTM(abc.ABC):
     def device_config(self) -> DeviceConfig:
         return self.dev.device_config
 
+    @abc.abstractmethod
     def to(self, device: str, **device_kwargs) -> None:
         """Move the model to another device, in place."""
-        self.dev = self.dev.to(DeviceConfig(device=device, **device_kwargs))
+        ...
+
+    def __getstate__(self) -> dict:
+        return {"config": self.config, "params": self.dev.get_state_dict(), "rng": self._rng}
+
+    def __setstate__(self, state: dict) -> None:
+        """Unpickling always lands on `cpu:1`; use `.to()` afterwards to move it."""
+        self.dev = self.cpu_device_cls(state["config"], DeviceConfig())
+        self.dev.load_state_dict(state["params"])
+        self._rng = state["rng"]
 
     @abc.abstractmethod
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
