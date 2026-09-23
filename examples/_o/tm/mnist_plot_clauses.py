@@ -7,7 +7,7 @@ from keras.datasets import mnist
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 
-from ytm.tm import MultiClassTM
+from ytm._o.tm import MultiClassTM
 from ytm.utils import Timer
 
 icefire = sns.color_palette("icefire", as_cmap=True)

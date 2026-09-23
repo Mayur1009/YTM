@@ -2,7 +2,7 @@ import io
 import h5py
 import numpy as np
 import pandas as pd
-from cutm import MultiOutputTM
+from ytm._o.cutm import MultiOutputTM
 from tqdm import tqdm
 from PIL import Image
 from ytm.utils import Timer

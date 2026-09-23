@@ -4,7 +4,7 @@ import numpy as np
 from medmnist import OCTMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
-from ytm.discrete.classifier import MultiClassTM
+from ytm._o.discrete.classifier import MultiClassTM
 from ytm.utils import Timer, print_table
 
 N_CLASSES = 4

@@ -1,6 +1,6 @@
 import numpy as np
 from ytm.utils import Timer
-from ytm.tm import MultiClassTM
+from ytm._o.tm import MultiClassTM
 from keras.datasets import mnist
 
 

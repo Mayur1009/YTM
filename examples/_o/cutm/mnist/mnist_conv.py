@@ -4,7 +4,7 @@ import numpy as np
 from keras.datasets import mnist
 
 from ytm.utils import Timer
-from cutm import MultiClassTM
+from ytm._o.cutm import MultiClassTM
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):

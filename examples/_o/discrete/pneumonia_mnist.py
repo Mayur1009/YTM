@@ -4,7 +4,7 @@ import numpy as np
 from medmnist import PneumoniaMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
-from ytm.discrete.classifier import BinaryTM
+from ytm._o.discrete.classifier import BinaryTM
 from ytm.utils import Timer, print_table
 
 

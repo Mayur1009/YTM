@@ -5,7 +5,7 @@ from sklearn.datasets import make_friedman1
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
-from ytm.discrete.regressor import RegressionTM
+from ytm._o.discrete.regressor import RegressionTM
 from ytm.utils import print_table
 
 

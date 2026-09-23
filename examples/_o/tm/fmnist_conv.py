@@ -2,7 +2,7 @@ import numpy as np
 from keras.datasets import fashion_mnist
 
 from ytm.utils import Timer, Binarizer
-from ytm.tm import MultiClassTM
+from ytm._o.tm import MultiClassTM
 
 
 def train(tm: MultiClassTM, X_train, Y_train, X_test, Y_test, epochs=1):

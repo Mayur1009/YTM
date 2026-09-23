@@ -5,7 +5,7 @@ import numpy as np
 from medmnist.dataset import PneumoniaMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
-from cutm import MultiClassTM
+from ytm._o.cutm import MultiClassTM
 from ytm.utils import Binarizer, Timer
 
 def load_dataset(ch=8):

@@ -3,7 +3,7 @@ import pickle
 from matplotlib.colors import Normalize
 import numpy as np
 from matplotlib import pyplot as plt
-from cutm import MultiClassTM
+from ytm._o.cutm import MultiClassTM
 from keras.datasets import mnist
 
 import seaborn as sns

@@ -1,5 +1,5 @@
 import numpy as np
-from cutm import BinaryTM
+from ytm._o.cutm import BinaryTM
 
 
 def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):

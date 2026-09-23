@@ -4,7 +4,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 # from sklearn.feature_selection import SelectKBest, chi2
-from ytm.tm import MultiClassTM
+from ytm._o.tm import MultiClassTM
 
 
 def load_dataset(num_words=10000, max_ngram=1, features=5000):

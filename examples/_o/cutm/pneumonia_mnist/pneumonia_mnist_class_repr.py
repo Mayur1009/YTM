@@ -4,7 +4,7 @@ from matplotlib.colors import Normalize
 from medmnist.dataset import PneumoniaMNIST
 import numpy as np
 from matplotlib import pyplot as plt
-from cutm import MultiClassTM
+from ytm._o.cutm import MultiClassTM
 from tqdm import tqdm
 
 import seaborn as sns

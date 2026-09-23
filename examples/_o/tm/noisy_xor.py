@@ -1,5 +1,5 @@
 import numpy as np
-from ytm.tm import MultiClassTM
+from ytm._o.tm import MultiClassTM
 
 
 def generate_NoisyXOR(num_samples: int, noise: float, seed: int = 42):

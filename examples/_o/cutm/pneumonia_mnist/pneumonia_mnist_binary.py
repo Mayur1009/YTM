@@ -5,7 +5,7 @@ import numpy as np
 from medmnist.dataset import PneumoniaMNIST
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
 
-from cutm import BinaryTM
+from ytm._o.cutm import BinaryTM
 from ytm.utils import Binarizer, Timer
 
 

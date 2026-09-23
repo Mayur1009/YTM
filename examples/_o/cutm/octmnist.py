@@ -1,7 +1,7 @@
 from medmnist.dataset import OCTMNIST
 import numpy as np
 from ytm.utils import Timer
-from cutm import MultiClassTM
+from ytm._o.cutm import MultiClassTM
 from ytm.utils.binarizer import ThermometerBinarizer
 
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score

@@ -5,7 +5,7 @@ import numpy as np
 from datasets import load_dataset
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
-from ytm.discrete.classifier import MultiOutputTM
+from ytm._o.discrete.classifier import MultiOutputTM
 from ytm.utils import Timer, print_table
 
 label_names = [

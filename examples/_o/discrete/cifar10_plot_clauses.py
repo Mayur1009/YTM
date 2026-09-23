@@ -4,8 +4,8 @@ import numpy as np
 from datasets import load_dataset
 from matplotlib import pyplot as plt
 
-from ytm.discrete.classifier import MultiClassTM
-from ytm.discrete.interpret import wac
+from ytm._o.discrete.classifier import MultiClassTM
+from ytm._o.discrete.interpret import wac
 from ytm.utils import Timer, print_table
 
 CIFAR10_LABELS = [

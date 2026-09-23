@@ -5,7 +5,7 @@ from datasets import load_dataset
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-from ytm.discrete import MultiClassTM
+from ytm._o.discrete import MultiClassTM
 from ytm.utils import print_table
 
 
