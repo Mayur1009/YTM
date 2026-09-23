@@ -14,7 +14,7 @@ from .config import T_Config, TMConfig
 def _build_device(config: BaseTMConfig, device_config: DeviceConfig) -> BaseDevice:
     if device_config._device_kind == "cpu":
         return CPUDevice(config, device_config)
-    from .backends.cuda import CUDADevice  # lazy: don't require cupy on cpu-only installs
+    from .backends.cuda import CUDADevice
 
     return CUDADevice(config, device_config)
 

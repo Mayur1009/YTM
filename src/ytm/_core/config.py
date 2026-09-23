@@ -22,7 +22,7 @@ def _get_unsinged_type(val: int):
 class BaseTMConfig:
     n_clauses: int
     s: float
-    dim: int | tuple[int] | tuple[int, int] | tuple[int, int, int]
+    dim: int | tuple[int, ...]
     n_classes: int
 
     # discrete input

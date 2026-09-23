@@ -19,7 +19,7 @@ class RegressionTM(BaseTM):
         y_range: tuple[float, float],
         **opt: Unpack[T_Config],
     ):
-        opt["negative_clauses"] = False
+        opt.setdefault("negative_clauses", False)
         super().__init__(n_clauses, (0.0, float(T)), s, dim, 1, y_range=y_range, **opt)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
