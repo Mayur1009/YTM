@@ -74,6 +74,7 @@ llvm-openmp = "*"
 jupyterlab = "*"
 ipdb = "*"
 marimo = "*"
+rich = "*"
 
 [tool.pixi.feature.cuda]
 platforms = ["linux-cuda", "win-cuda"]
