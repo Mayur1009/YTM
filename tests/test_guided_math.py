@@ -9,7 +9,7 @@ torch = pytest.importorskip("torch")
 F = torch.nn.functional
 scipy_special = pytest.importorskip("scipy.special")
 
-from ytm._guided.backends.act_loss import ASL, MAE, MSE, SCE, FocalBCE, FocalCE, Huber, SigmoidBCE, SoftmaxCE, Tversky
+from ytm.guided.backends.act_loss import ASL, MAE, MSE, SCE, FocalBCE, FocalCE, Huber, SigmoidBCE, SoftmaxCE, Tversky
 
 C = 4
 Z = np.array([-3.5, -1.0, 0.5, 2.0])

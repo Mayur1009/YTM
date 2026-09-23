@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..utils import norm_asymmetric
+from ...utils import norm_asymmetric
 from .base import BaseTM
 
 

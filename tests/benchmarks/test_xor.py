@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from scipy.stats import binomtest, bootstrap
 
-from ytm._discrete import BinaryTM as DiscreteBinaryTM
-from ytm._guided import BinaryTM as GuidedBinaryTM
+from ytm.discrete import BinaryTM as DiscreteBinaryTM
+from ytm.guided import BinaryTM as GuidedBinaryTM
 
 N_BITS = [2, 3, 4]
 MAX_EPOCHS = 10000

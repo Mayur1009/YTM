@@ -19,13 +19,13 @@ def build(spec: dict, device: str):
     kw = {k: tuple(v) if isinstance(v, list) else v for k, v in spec["kw"].items()}
     extra = {"compile_flags": _flags()} if device.startswith("cpu") else {}
     if spec["backend"] == "discrete":
-        from ytm._discrete import BinaryTM, MultiClassTM
+        from ytm.discrete import BinaryTM, MultiClassTM
 
         if spec.get("kind") == "binary":
             kw.pop("n_classes", None)
             return BinaryTM(**kw, T=10.0, device=device, **extra)
         return MultiClassTM(**kw, T=10.0, device=device, **extra)
-    from ytm._guided import MultiClassTM
+    from ytm.guided import MultiClassTM
 
     return MultiClassTM(**kw, device=device, **extra)
 

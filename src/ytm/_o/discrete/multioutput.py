@@ -1,3 +1,3 @@
-from ytm.discrete.classifier import MultiOutputTM
+from .classifier import MultiOutputTM
 
 __all__ = ["MultiOutputTM"]

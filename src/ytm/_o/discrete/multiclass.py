@@ -1,3 +1,3 @@
-from ytm.discrete.classifier import MultiClassTM
+from .classifier import MultiClassTM
 
 __all__ = ["MultiClassTM"]
