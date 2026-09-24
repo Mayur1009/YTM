@@ -1,15 +1,12 @@
 import pathlib
-import platform
-import subprocess
-import tempfile
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint64
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
-from .._device_checks import run_compiler
 from ..utils import FitBuffers, read_file, tqdm_bar
+from ._compiler_cache import load_library
 from .base import BaseDevice
 
 int8_p = POINTER(c_int8)
@@ -59,19 +56,7 @@ class CPUDevice(BaseDevice):
     def _compile_code(self, code: str) -> CDLL:
         dev = self.device_config
         assert dev._compiler is not None, "a cpu device always resolves a compiler"
-
-        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-            f.write(code)
-            c_file = f.name
-
-        so_file = c_file.replace(".c", ".dll" if platform.system() == "Windows" else ".so")
-
-        try:
-            run_compiler([dev._compiler] + dev._compiler_flags + dev._omp_flags + [c_file, "-o", so_file])
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to compile. Compiler output:\n{e.stdout.decode()}\nError: {e.stderr.decode()}") from None
-
-        return CDLL(so_file)
+        return load_library(code, dev._compiler, [*dev._compiler_flags, *dev._omp_flags])
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
