@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 
 from ..utils import FitBuffers, read_file, tqdm_bar
-from ._compiler_cache import load_library
 from .base import BaseDevice
+from .toolchain import Toolchain
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
@@ -39,24 +39,26 @@ class CPUDevice(BaseDevice):
 
     def dev_init(self):
         self.xp = np
-
+        self._n_threads = self.device_config.n
+        self.toolchain = Toolchain()
+        if self._n_threads > 1 and not self.toolchain.is_openmp_working:
+            raise RuntimeError(
+                f"OpenMP is not usable with {' '.join(self.toolchain.compiler)}, so 'cpu:{self._n_threads}' cannot be built. "
+                f"Use 'cpu:1', or install an OpenMP runtime. Tried:\n" + "\n".join(self.toolchain.omp_failures)
+            )
         self._init_clauses()
         self._init_weights()
         self._init_patch_weights()
         self._init_packed_clauses()
-
         self._init_lib()
         self._init_pointers()
+        self.set_threads(self._n_threads)
 
-        self.set_threads(self.device_config._n_threads)
+    def _compile_code(self, code: str) -> CDLL:
+        return self.toolchain.compile(code)
 
     def _to_host(self, arr) -> np.ndarray:
         return arr.copy()
-
-    def _compile_code(self, code: str) -> CDLL:
-        dev = self.device_config
-        assert dev._compiler is not None, "a cpu device always resolves a compiler"
-        return load_library(code, dev._compiler, [*dev._compiler_flags, *dev._omp_flags])
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
