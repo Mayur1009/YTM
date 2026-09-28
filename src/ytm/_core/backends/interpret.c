@@ -8,7 +8,7 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
          const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
          const PBOUND_T* restrict clause_position_bounds, const int8_t* restrict has_contra, const float* restrict patch_weights_norm,
          const FBOUND_T* restrict therm_bits, float pw_th, float* restrict output) {
-#pragma omp parallel for schedule(dynamic) reduction(+ : output[ : HEIGHT * WIDTH * DEPTH])
+#pragma omp parallel for schedule(dynamic) reduction(+ : output[ : HEIGHT * WIDTH * DEPTH]) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
 #if COALESCED == 0
         if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
@@ -61,7 +61,7 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
     const int8_t* patch_e = &patch_output[patch_output_offset(e, 0, 0)];
     float* out_e = &output[sample_offset(e)];
 
-#pragma omp parallel for schedule(dynamic) reduction(+ : out_e[ : HEIGHT * WIDTH * DEPTH])
+#pragma omp parallel for schedule(dynamic) reduction(+ : out_e[ : HEIGHT * WIDTH * DEPTH]) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
 #if COALESCED == 0
         if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)

@@ -18,7 +18,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
                      uint8_t* restrict feedback_type) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -56,7 +56,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
                     int8_t* restrict is_clause_synced) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
 
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
@@ -85,7 +85,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
 
 void update_weights(const uint8_t* restrict feedback_type, float* restrict clause_weights) {
 #if WEIGHTED
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
 
         ull class_id;
@@ -134,7 +134,7 @@ void update_weights(const uint8_t* restrict feedback_type, float* restrict claus
 void calc_update_prob(const float* restrict votes, const float* restrict encoded_Y, const int e, float* restrict prob) {
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
 
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (int class_id = 0; class_id < CLASSES; class_id++) {
         float v = clip(votes[class_id], T_MIN, T_MAX);
         prob[class_id] = (encoded_Y_e[class_id] - v) / (T_MAX - T_MIN);

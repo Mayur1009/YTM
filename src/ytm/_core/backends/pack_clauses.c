@@ -62,7 +62,7 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
                   const NLITS_T* restrict literal_offsets, PBOUND_T* restrict clause_position_bounds,
                   FBOUND_T* restrict clause_feat_bounds, NFEAT_T* restrict clause_feat_ids, NFEAT_T* restrict clause_n_feats,
                   int8_t* restrict has_contra, NLITS_T* restrict clause_len, int8_t* restrict is_clause_synced, int dont_skip) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (is_clause_synced[clause])
             continue;

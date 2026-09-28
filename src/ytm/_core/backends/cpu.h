@@ -12,11 +12,12 @@ typedef unsigned long long ull;
 #define RESTRICT restrict
 #define LANE_COUNT 1
 
+static int ytm_n_threads = 1;
+void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
+
 #if _OPENMP
 #include <omp.h>
 #define GET_THREAD_ID omp_get_thread_num()
-void set_num_threads(int n) { omp_set_num_threads(n); }
 #else
 #define GET_THREAD_ID 0
-void set_num_threads(int n) {}
 #endif

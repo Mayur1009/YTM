@@ -21,7 +21,7 @@ INLINE_FN void compute_loss(const float* restrict y, const float* restrict y_hat
 void votes_activation(const float* restrict votes, float* restrict y_hat) { compute_act(votes, y_hat); }
 
 void votes_activation_batch(const float* restrict votes, int n_samples, float* restrict y_hat) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (int e = 0; e < n_samples; e++)
         compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
 }
@@ -32,7 +32,7 @@ void loss_gradient(const float* restrict y_hat, const float* restrict y, float* 
 
 void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights,
                           const int8_t* restrict clause_output, float* restrict votes_neg_ck) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_class = 0; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class++) {
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
@@ -50,7 +50,7 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
 }
 
 void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, float* restrict loss_neg_ck) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         float loss = 0.0f;
         compute_loss(y, &y_hat_neg_ck[clause_id * (ull)CLASSES], NULL, &loss);
@@ -62,7 +62,7 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                           const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                           const int8_t* restrict clause_drop_mask, const float lambda_,
                           uint8_t* restrict feedback_type) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -121,7 +121,7 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
                              const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                              const int8_t* restrict clause_drop_mask, const float lambda_,
                              uint8_t* restrict feedback_type) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         if (clause_drop_mask[clause_id] == 1) {
             feedback_type[clause_id] = FB_NONE;
@@ -142,7 +142,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
                     int8_t* restrict is_clause_synced) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
 
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
@@ -178,7 +178,7 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
 
 void update_weights(const float* restrict grad, const float lr, const int8_t* restrict clause_output,
                     const int8_t* restrict clause_drop_mask, float* restrict clause_weights) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;

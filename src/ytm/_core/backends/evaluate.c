@@ -18,7 +18,7 @@ void calc_clause_outputs(const PBOUND_T* restrict clause_position_bounds, const 
     const FBOUND_T* Xe = &X[sample_offset(e)];
     int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
 
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         out_e[clause] = (int8_t)clause_output(Xe, clause, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
                                               clause_n_feats, has_contra[clause], clause_len[clause]);
@@ -34,7 +34,7 @@ void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restr
         const FBOUND_T* Xe = &X[sample_offset(e)];
         float* sums_e = &class_sums[(ull)e * CLASSES];
 
-#pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES])
+#pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES]) num_threads(ytm_n_threads)
         for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
             int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
                                     clause_n_feats, has_contra[clause], clause_len[clause]);
@@ -53,7 +53,7 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
     const FBOUND_T* Xe = &X[sample_offset(e)];
     int8_t* out_e = &patch_output[patch_output_offset(e, 0, 0)];
 
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int8_t* clause_out = &out_e[clause * (ull)N_PATCHES];
 
@@ -97,7 +97,7 @@ INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restri
                                const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
                                const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
                                const NLITS_T* restrict clause_len, int8_t* restrict clause_output) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             clause_output[clause] = 0;
@@ -123,7 +123,7 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
                              const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
                              const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
                              NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
-#pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
             clause_output[clause] = 0;
@@ -195,7 +195,7 @@ void count_votes(const int8_t* restrict clause_output, const float* restrict cla
     for (int c = 0; c < CLASSES; c++)
         votes[c] = 0.0f;
 
-#pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES])
+#pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES]) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
         if (clause_output[clause])
             ADD_VOTE(clause, clause_weights, votes);
