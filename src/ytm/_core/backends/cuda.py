@@ -1,6 +1,10 @@
+try:
+    import cupy as cp
+except ImportError as e:
+    raise ImportError("`device='cuda'` requires `cupy` to be installed. But `cupy` is not installed.") from e
+
 import pathlib
 
-import cupy as cp
 import numpy as np
 
 from ..utils import read_file
@@ -12,9 +16,8 @@ class CUDADevice(BaseDevice):
     cu_mod: cp.RawModule
 
     def dev_init(self):
+        self._setup_gpu()
         self.xp = cp
-        self.cuda_dev = cp.cuda.Device(self.device_config._gpu_id)
-        self.cuda_dev.use()
 
         with self.cuda_dev:
             self._init_clauses()
@@ -23,6 +26,19 @@ class CUDADevice(BaseDevice):
             self._init_packed_clauses()
             self._init_device_arrays()
             self._init_kernels()
+
+    def _setup_gpu(self):
+        dev = self.device_config
+
+        self.cuda_dev = cp.cuda.Device(dev.n)
+        self.cuda_dev.use()
+
+        props = cp.cuda.runtime.getDeviceProperties(dev.n)
+        block_size = min(max(1, int(dev.block_size)), props["maxThreadsPerBlock"])
+        self._block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
+        self._max_grid_size = min(props["multiProcessorCount"] * 32, props["maxGridSize"][0])
+        self._grid_size = None if dev.grid_size is None else min(max(1, int(dev.grid_size)), self._max_grid_size)
+        self._warp_size = props["warpSize"]
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
@@ -49,10 +65,8 @@ class CUDADevice(BaseDevice):
             self.literal_offsets_gpu = cp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
 
     def _kernel_config(self, n: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-        dev = self.device_config
-        bs = dev._block_size
-        gs = dev._grid_size if dev._grid_size is not None else min((n + bs - 1) // bs, dev._max_grid_size)
-        return (gs, 1, 1), (bs, 1, 1)
+        gs = self._grid_size if self._grid_size is not None else min((n + self._block_size - 1) // self._block_size, self._max_grid_size)
+        return (gs, 1, 1), (self._block_size, 1, 1)
 
     def _to_host(self, arr) -> np.ndarray:
         with self.cuda_dev:
@@ -64,7 +78,7 @@ class CUDADevice(BaseDevice):
                 self.packed_clauses.is_clause_synced.fill(0)
 
             self.cu_pack_clauses(
-                *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
+                *self._kernel_config(self.config._total_clauses * self._warp_size),
                 (
                     self.ta_states,
                     self.therm_bits_gpu,
@@ -86,7 +100,7 @@ class CUDADevice(BaseDevice):
         pc = self.packed_clauses
 
         self.cu_evaluate(
-            *self._kernel_config(cfg._total_clauses * self.device_config._cuda_props["warp_size"]),
+            *self._kernel_config(cfg._total_clauses * self._warp_size),
             (
                 np.uint64(rng_key),
                 buf.X,
@@ -106,14 +120,13 @@ class CUDADevice(BaseDevice):
 
     def _fit_voting(self, buf):
         self.cu_sum_votes(
-            *self._kernel_config(self.config.n_classes * self.device_config._cuda_props["warp_size"]),
+            *self._kernel_config(self.config.n_classes * self._warp_size),
             (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
         )
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
-        warp_size = self.device_config._cuda_props["warp_size"]
         pc = self.packed_clauses
 
         with self.cuda_dev:
@@ -125,7 +138,7 @@ class CUDADevice(BaseDevice):
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu_calc_clause_outputs(
-                    *self._kernel_config(bs * cfg._total_clauses * warp_size),
+                    *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
                     (
                         Xb,
                         clause_outputs,
@@ -140,7 +153,7 @@ class CUDADevice(BaseDevice):
                 )
 
                 self.cu_sum_votes(
-                    *self._kernel_config(bs * cfg.n_classes * warp_size),
+                    *self._kernel_config(bs * cfg.n_classes * self._warp_size),
                     (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
                 )
 
@@ -149,7 +162,6 @@ class CUDADevice(BaseDevice):
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
-        warp_size = self.device_config._cuda_props["warp_size"]
         pc = self.packed_clauses
         out = np.empty((N, cfg._total_clauses), dtype=np.int8)
 
@@ -161,7 +173,7 @@ class CUDADevice(BaseDevice):
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu_calc_clause_outputs(
-                    *self._kernel_config(bs * cfg._total_clauses * warp_size),
+                    *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
                     (
                         Xb,
                         clause_outputs,
@@ -178,7 +190,7 @@ class CUDADevice(BaseDevice):
 
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
-    def _patch_outputs(self, X: np.ndarray, batch_size: int, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
+    def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
         pc = self.packed_clauses

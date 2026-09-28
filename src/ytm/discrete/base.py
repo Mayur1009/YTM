@@ -12,7 +12,7 @@ from .config import T_Config, TMConfig
 
 
 def _build_device(config: BaseTMConfig, device_config: DeviceConfig) -> BaseDevice:
-    if device_config._device_kind == "cpu":
+    if device_config.kind == "cpu":
         return CPUDevice(config, device_config)
     from .backends.cuda import CUDADevice
 

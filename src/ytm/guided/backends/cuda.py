@@ -168,7 +168,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
 
     def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         self.cu_update_clauses(
-            *self._kernel_config(self.config._total_clauses * self.device_config._cuda_props["warp_size"]),
+            *self._kernel_config(self.config._total_clauses * self._warp_size),
             (
                 np.uint64(rng_key),
                 buf.clause_output,
