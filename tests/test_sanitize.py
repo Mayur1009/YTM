@@ -81,10 +81,8 @@ def test_cpu_asan_ubsan_clean(name):
 
 
 @pytest.mark.parametrize("name", list(CONFIGS))
-def test_cuda_memcheck_clean(name, request):
-    """Same workload under compute-sanitizer memcheck (opt-in, slow)."""
-    if not request.config.getoption("--cuda-sanitizer"):
-        pytest.skip("pass --cuda-sanitizer to run")
+def test_cuda_memcheck_clean(name):
+    """Same workload under compute-sanitizer memcheck."""
     if "cuda" not in DEVICES:
         pytest.skip("no usable cuda device")
     tool = shutil.which("compute-sanitizer") or str(ROOT / ".pixi/envs/cuda/bin/compute-sanitizer")

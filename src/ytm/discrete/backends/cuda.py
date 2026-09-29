@@ -23,15 +23,6 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         sections["update.cu"] = read_file(pathlib.Path(__file__).parent / "update.cu")
         return sections
 
-    def _init_kernels(self):
-        super()._init_kernels()
-
-        with self.cuda_dev:
-            self.cu_calc_update_prob = self.cu_mod.get_function("calc_update_prob")
-            self.cu_decide_feedback = self.cu_mod.get_function("decide_feedback")
-            self.cu_update_clauses = self.cu_mod.get_function("update_clauses")
-            self.cu_update_weights = self.cu_mod.get_function("update_weights")
-
     def _fit_allocs(self, clause_drop_mask) -> DiscreteFitBuffers:
         cfg = self.config
         return DiscreteFitBuffers(
@@ -77,12 +68,12 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
 
-        self.cu_calc_update_prob(
+        self.cu.calc_update_prob(
             *self._kernel_config(cfg.n_classes),
             (buf.votes, buf.Y, np.int32(e), buf.prob),
         )
 
-        self.cu_decide_feedback(
+        self.cu.decide_feedback(
             *self._kernel_config(cfg._total_clauses),
             (
                 np.uint64(rng_key),
@@ -98,7 +89,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         )
 
     def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
-        self.cu_update_clauses(
+        self.cu.update_clauses(
             *self._kernel_config(self.config._total_clauses * self._warp_size),
             (
                 np.uint64(rng_key),
@@ -106,7 +97,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
                 buf.selected_pids,
                 buf.X,
                 np.int32(e),
-                self.literal_offsets_gpu,
+                self.literal_offsets,
                 buf.feedback_type,
                 self.ta_states,
                 self.packed_clauses.is_clause_synced,
@@ -114,7 +105,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         )
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
-        self.cu_update_weights(
+        self.cu.update_weights(
             *self._kernel_config(self.config._total_clauses),
             (buf.feedback_type, self.clause_weights),
         )

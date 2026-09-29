@@ -33,20 +33,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         sections["update.cu"] = read_file(here / "update.cu")
         return sections
 
-    def _init_kernels(self):
-        super()._init_kernels()
-
-        with self.cuda_dev:
-            self.cu_votes_activation = self.cu_mod.get_function("votes_activation")
-            self.cu_votes_activation_batch = self.cu_mod.get_function("votes_activation_batch")
-            self.cu_loss_gradient = self.cu_mod.get_function("loss_gradient")
-            self.cu_compute_votes_neg_ck = self.cu_mod.get_function("compute_votes_neg_ck")
-            self.cu_compute_loss_neg_ck = self.cu_mod.get_function("compute_loss_neg_ck")
-            self.cu_decide_feedback_grad = self.cu_mod.get_function("decide_feedback_grad")
-            self.cu_decide_feedback_delta_l = self.cu_mod.get_function("decide_feedback_delta_l")
-            self.cu_update_clauses = self.cu_mod.get_function("update_clauses")
-            self.cu_update_weights = self.cu_mod.get_function("update_weights")
-
     def _fit_allocs(self, clause_drop_mask, lr: float, lambda_: float) -> GuidedFitBuffers:
         cfg = self.config
 
@@ -125,11 +111,11 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         one = self._kernel_config(1)
         per_clause = self._kernel_config(cfg._total_clauses)
 
-        self.cu_votes_activation(*one, (buf.votes, buf.y_hat))
-        self.cu_loss_gradient(*one, (buf.y_hat, buf.Y[e], buf.grad, buf.loss))
+        self.cu.votes_activation(*one, (buf.votes, buf.y_hat))
+        self.cu.loss_gradient(*one, (buf.y_hat, buf.Y[e], buf.grad, buf.loss))
 
         if cfg._fb_signal == FbSignal.GRAD:
-            self.cu_decide_feedback_grad(
+            self.cu.decide_feedback_grad(
                 *per_clause,
                 (
                     np.uint64(rng_key),
@@ -143,16 +129,16 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                 ),
             )
         else:
-            self.cu_compute_votes_neg_ck(
+            self.cu.compute_votes_neg_ck(
                 *self._kernel_config(cfg._total_clauses * cfg.n_classes),
                 (buf.votes, self.clause_weights, buf.clause_output, buf.votes_neg_ck),
             )
-            self.cu_votes_activation_batch(
+            self.cu.votes_activation_batch(
                 *per_clause,
                 (buf.votes_neg_ck, np.int32(cfg._total_clauses), buf.y_hat_neg_ck),
             )
-            self.cu_compute_loss_neg_ck(*per_clause, (buf.y_hat_neg_ck, buf.Y[e], buf.loss_neg_ck))
-            self.cu_decide_feedback_delta_l(
+            self.cu.compute_loss_neg_ck(*per_clause, (buf.y_hat_neg_ck, buf.Y[e], buf.loss_neg_ck))
+            self.cu.decide_feedback_delta_l(
                 *per_clause,
                 (
                     np.uint64(rng_key),
@@ -167,7 +153,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             )
 
     def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
-        self.cu_update_clauses(
+        self.cu.update_clauses(
             *self._kernel_config(self.config._total_clauses * self._warp_size),
             (
                 np.uint64(rng_key),
@@ -175,7 +161,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                 buf.selected_pids,
                 buf.X,
                 np.int32(e),
-                self.literal_offsets_gpu,
+                self.literal_offsets,
                 buf.feedback_type,
                 self.ta_states,
                 self.packed_clauses.is_clause_synced,
@@ -183,7 +169,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         )
 
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
-        self.cu_update_weights(
+        self.cu.update_weights(
             *self._kernel_config(self.config._total_clauses),
             (buf.grad, np.float32(buf.lr), buf.clause_output, buf.clause_drop_mask, self.clause_weights),
         )
@@ -193,7 +179,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
         with self.cuda_dev:
             votes_gpu = cp.asarray(votes, dtype=np.float32)
             y_hat = cp.empty_like(votes_gpu)
-            self.cu_votes_activation_batch(
+            self.cu.votes_activation_batch(
                 *self._kernel_config(votes.shape[0]),
                 (votes_gpu, np.int32(votes.shape[0]), y_hat),
             )

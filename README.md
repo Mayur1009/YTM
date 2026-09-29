@@ -88,7 +88,7 @@ pixi install -e cuda      # CUDA
 pixi run pytest tests                     # CPU only
 pixi run -e cuda pytest tests             # CPU + CUDA (CUDA tests skip if no usable GPU)
 pixi run pytest tests -m statistical      # RNG and distribution/frequency tests
-pixi run pytest tests -m sanitize         # ASan/UBSan (add --cuda-sanitizer for compute-sanitizer)
+pixi run pytest tests -m sanitize         # ASan/UBSan, plus compute-sanitizer when CUDA is usable
 pixi run pytest tests -m benchmark        # full dataset benchmarks
 ```
 

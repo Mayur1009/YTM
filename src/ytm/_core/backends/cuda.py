@@ -11,20 +11,29 @@ from ..utils import read_file
 from .base import BaseDevice
 
 
+class Kernel:
+    def __init__(self, code: str, dev: cp.cuda.Device):
+        self._dev = dev
+        with dev:
+            self._mod = cp.RawModule(code=code, backend="nvrtc", options=())
+            self._mod.compile()
+
+    def __getattr__(self, name: str) -> cp.RawKernel:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        with self._dev:
+            try:
+                fn = self._mod.get_function(name)
+            except cp.cuda.driver.CUDADriverError as e:
+                raise AttributeError(name) from e
+        setattr(self, name, fn)
+        return fn
+
+
 class CUDADevice(BaseDevice):
-    cuda_dev: cp.cuda.Device
-    cu_mod: cp.RawModule
+    xp = cp
 
-    def dev_init(self):
-        self._setup_gpu()
-        self.xp = cp
-
-        with self.cuda_dev:
-            self._init_params()
-            self._init_device_arrays()
-            self._init_kernels()
-
-    def _setup_gpu(self):
+    def _setup(self):
         dev = self.device_config
 
         self.cuda_dev = cp.cuda.Device(dev.n)
@@ -36,7 +45,8 @@ class CUDADevice(BaseDevice):
         self._block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
         self._max_grid_size = min(props["multiProcessorCount"] * 32, props["maxGridSize"][0])
         self._grid_size = None if dev.grid_size is None else min(max(1, int(dev.grid_size)), self._max_grid_size)
-        self._warp_size = props["warpSize"]
+
+        self.cu = Kernel(self._build_code(), self.cuda_dev)
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
@@ -44,23 +54,8 @@ class CUDADevice(BaseDevice):
         names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
         return {name: read_file(core / name) for name in names}
 
-    def _init_kernels(self):
-        with self.cuda_dev:
-            self.cu_mod = cp.RawModule(code=self._build_code(), backend="nvrtc", options=())
-
-            self.cu_pack_clauses = self.cu_mod.get_function("pack_clauses")
-            self.cu_calc_clause_outputs = self.cu_mod.get_function("calc_clause_outputs")
-            self.cu_calc_clause_outputs_patchwise = self.cu_mod.get_function("calc_clause_outputs_patchwise")
-            self.cu_sum_votes = self.cu_mod.get_function("sum_votes")
-            self.cu_evaluate = self.cu_mod.get_function("evaluate")
-            self.cu_wic = self.cu_mod.get_function("wic")
-            self.cu_wac = self.cu_mod.get_function("wac")
-
-    def _init_device_arrays(self):
-        cfg = self.config
-        with self.cuda_dev:
-            self.therm_bits_gpu = cp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
-            self.literal_offsets_gpu = cp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
+    def _bind(self):
+        pass
 
     def _kernel_config(self, n: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         gs = self._grid_size if self._grid_size is not None else min((n + self._block_size - 1) // self._block_size, self._max_grid_size)
@@ -70,17 +65,33 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             return arr.get()
 
+    def _to_dev(self, arr: np.ndarray) -> cp.ndarray:
+        with self.cuda_dev:
+            return cp.asarray(arr)
+
+    def _init_consts(self):
+        with self.cuda_dev:
+            super()._init_consts()
+
+    def _init_params(self):
+        with self.cuda_dev:
+            super()._init_params()
+
+    def load_state_dict(self, state: dict) -> None:
+        with self.cuda_dev:
+            super().load_state_dict(state)
+
     def pack_clauses(self, force_repack: bool = False, full: bool = False):
         with self.cuda_dev:
             if force_repack:
                 self.packed_clauses.is_clause_synced.fill(0)
 
-            self.cu_pack_clauses(
+            self.cu.pack_clauses(
                 *self._kernel_config(self.config._total_clauses * self._warp_size),
                 (
                     self.ta_states,
-                    self.therm_bits_gpu,
-                    self.literal_offsets_gpu,
+                    self.therm_bits,
+                    self.literal_offsets,
                     self.packed_clauses.clause_position_bounds,
                     self.packed_clauses.clause_feat_bounds,
                     self.packed_clauses.clause_feat_ids,
@@ -97,7 +108,7 @@ class CUDADevice(BaseDevice):
         cfg = self.config
         pc = self.packed_clauses
 
-        self.cu_evaluate(
+        self.cu.evaluate(
             *self._kernel_config(cfg._total_clauses * self._warp_size),
             (
                 np.uint64(rng_key),
@@ -117,7 +128,7 @@ class CUDADevice(BaseDevice):
         )
 
     def _fit_voting(self, buf):
-        self.cu_sum_votes(
+        self.cu.sum_votes(
             *self._kernel_config(self.config.n_classes * self._warp_size),
             (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
         )
@@ -135,7 +146,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.cu_calc_clause_outputs(
+                self.cu.calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
                     (
                         Xb,
@@ -150,7 +161,7 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                self.cu_sum_votes(
+                self.cu.sum_votes(
                     *self._kernel_config(bs * cfg.n_classes * self._warp_size),
                     (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
                 )
@@ -170,7 +181,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.cu_calc_clause_outputs(
+                self.cu.calc_clause_outputs(
                     *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
                     (
                         Xb,
@@ -201,7 +212,7 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
-                self.cu_calc_clause_outputs_patchwise(
+                self.cu.calc_clause_outputs_patchwise(
                     *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
                     (
                         Xb,
@@ -230,7 +241,7 @@ class CUDADevice(BaseDevice):
             pw_norm = cp.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
             output = cp.zeros(cfg._dim, dtype=np.float32)
 
-            self.cu_wic(
+            self.cu.wic(
                 *self._kernel_config(cfg._total_clauses * cfg._n_patches),
                 (
                     np.int32(class_id),
@@ -242,7 +253,7 @@ class CUDADevice(BaseDevice):
                     pc.clause_position_bounds,
                     pc.has_contra,
                     pw_norm,
-                    self.therm_bits_gpu,
+                    self.therm_bits,
                     np.float32(pw_th),
                     output,
                 ),
@@ -263,7 +274,7 @@ class CUDADevice(BaseDevice):
                 target_classes_gpu = cp.asarray(target_classes[i:end], dtype=np.int32)
                 out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
 
-                self.cu_wac(
+                self.cu.wac(
                     *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
                     (
                         target_classes_gpu,
@@ -275,7 +286,7 @@ class CUDADevice(BaseDevice):
                         pc.clause_n_feats,
                         patch_output_gpu,
                         pc.has_contra,
-                        self.therm_bits_gpu,
+                        self.therm_bits,
                         out_b,
                     ),
                 )

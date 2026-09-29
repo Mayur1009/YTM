@@ -17,13 +17,22 @@ class BaseDevice(abc.ABC):
         self.config = config
         self.device_config = device_config
         self._rng = np.random.default_rng(self.config.seed + 1)
-        self.dev_init()
+        self._setup()
+        self._init_consts()
+        self._init_params()
+        self._bind()
 
     @abc.abstractmethod
-    def dev_init(self): ...
+    def _setup(self): ...
+
+    @abc.abstractmethod
+    def _bind(self): ...
 
     @abc.abstractmethod
     def _to_host(self, arr) -> np.ndarray: ...
+
+    @abc.abstractmethod
+    def _to_dev(self, arr: np.ndarray): ...
 
     @abc.abstractmethod
     def _code_sections(self) -> dict[str, str]: ...
@@ -104,6 +113,11 @@ class BaseDevice(abc.ABC):
         self._init_clauses()
         self._init_packed_clauses()
         self._init_patch_weights()
+
+    def _init_consts(self):
+        cfg = self.config
+        self.therm_bits = self.xp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
+        self.literal_offsets = self.xp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
 
     def _init_clauses(self):
         cfg = self.config

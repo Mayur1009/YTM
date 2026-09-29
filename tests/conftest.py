@@ -22,7 +22,6 @@ DEVICES = ["cpu:1"] + (["cuda"] if _cuda_usable() else [])
 
 
 def pytest_addoption(parser):
-    parser.addoption("--cuda-sanitizer", action="store_true", default=False, help="also run the sanitize tier under compute-sanitizer")
     parser.addoption(
         "--seed",
         type=int,

@@ -36,8 +36,9 @@ class CPUFitBuffers(FitBuffers):
 
 
 class CPUDevice(BaseDevice):
-    def dev_init(self):
-        self.xp = np
+    xp = np
+
+    def _setup(self):
         self._n_threads = self.device_config.n
         self.toolchain = Toolchain(openmp=self._n_threads > 1)
         if self._n_threads > 1 and not self.toolchain.is_openmp_working:
@@ -48,26 +49,22 @@ class CPUDevice(BaseDevice):
                 stacklevel=2,
             )
             self._n_threads = 1
-        self._init_params()
-        self._init_lib()
-        self._init_pointers()
-        self.set_threads(self._n_threads)
 
-    def _compile_code(self, code: str) -> CDLL:
-        return self.toolchain.compile(code)
+        self.lib: CDLL = self.toolchain.compile(self._build_code())
+        self.set_threads(self._n_threads)
 
     def _to_host(self, arr) -> np.ndarray:
         return arr.copy()
+
+    def _to_dev(self, arr: np.ndarray) -> np.ndarray:
+        return np.asarray(arr, order="C")
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
         return {name: read_file(core / name) for name in names}
 
-    def _init_lib(self):
-        self.lib = self._compile_code(self._build_code())
-
-    def _init_pointers(self):
+    def _bind(self):
         cfg = self.config
         pc = self.packed_clauses
 
@@ -89,8 +86,8 @@ class CPUDevice(BaseDevice):
         self.p_clause_weights = self.clause_weights.ctypes.data_as(float_p)
         self.p_patch_weights = self.patch_weights.ctypes.data_as(int32_p)
 
-        self.p_therm_bits = cfg._therm_bits.ctypes.data_as(fbound_p)
-        self.p_literal_offsets = cfg._literal_offsets.ctypes.data_as(nlits_p)
+        self.p_therm_bits = self.therm_bits.ctypes.data_as(fbound_p)
+        self.p_literal_offsets = self.literal_offsets.ctypes.data_as(nlits_p)
 
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(max(1, n)))
