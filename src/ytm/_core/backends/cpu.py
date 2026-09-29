@@ -1,4 +1,5 @@
 import pathlib
+import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint64
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,17 +36,18 @@ class CPUFitBuffers(FitBuffers):
 
 
 class CPUDevice(BaseDevice):
-    lib: CDLL
-
     def dev_init(self):
         self.xp = np
         self._n_threads = self.device_config.n
-        self.toolchain = Toolchain()
+        self.toolchain = Toolchain(openmp=self._n_threads > 1)
         if self._n_threads > 1 and not self.toolchain.is_openmp_working:
-            raise RuntimeError(
-                f"OpenMP is not usable with {' '.join(self.toolchain.compiler)}, so 'cpu:{self._n_threads}' cannot be built. "
-                f"Use 'cpu:1', or install an OpenMP runtime. Tried:\n" + "\n".join(self.toolchain.omp_failures)
+            warnings.warn(
+                f"OpenMP is not usable with {' '.join(self.toolchain.comp)}, continuing with single thread. "
+                f"Install an OpenMP runtime (`pixi add llvm-openmp`, `conda install llvm-openmp`, `brew install libomp`), point $OMP_PREFIX "
+                f"at one, or set $CC to a compiler that has it. Tried:\n" + "\n".join(self.toolchain.omp_failures),
+                stacklevel=2,
             )
+            self._n_threads = 1
         self._init_clauses()
         self._init_weights()
         self._init_patch_weights()
