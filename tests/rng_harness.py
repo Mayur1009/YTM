@@ -10,7 +10,7 @@ import pathlib
 
 import numpy as np
 
-from ytm._core.device_config import DeviceConfig
+from ytm._core.backends.toolchain import Toolchain
 from ytm._core.utils import read_file
 
 CORE = pathlib.Path(__file__).parents[1] / "src" / "ytm" / "_core" / "backends"
@@ -72,26 +72,8 @@ unsigned long long w_mix64(ull x) { return mix64(x); }
 
 @functools.cache
 def _lib() -> ctypes.CDLL:
-    import subprocess
-    import tempfile
-
-    from ytm._core._device_checks import run_compiler
-
-    dev = DeviceConfig(device="cpu:1")
-    assert dev._compiler is not None
     code = STUB + "".join(read_file(CORE / f) for f in ("cpu.h", "common.h", "rng.h")) + WRAPPERS
-
-    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
-        f.write(code)
-        c_file = f.name
-    so_file = c_file.replace(".c", ".so")
-
-    try:
-        run_compiler([dev._compiler] + dev._compiler_flags + [c_file, "-o", so_file])
-    except subprocess.CalledProcessError as e:  # pragma: no cover
-        raise RuntimeError(f"rng harness failed to compile:\n{e.stderr.decode()}") from None
-
-    lib = ctypes.CDLL(so_file)
+    lib = Toolchain(openmp=False).compile(code)
     lib.w_rng_hash.restype = ctypes.c_uint64
     lib.w_geom_counter.restype = ctypes.c_uint32
     lib.w_mix64.restype = ctypes.c_uint64

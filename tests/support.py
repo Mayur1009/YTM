@@ -18,7 +18,7 @@ _float_p = POINTER(c_float)
 
 
 def is_cuda(tm) -> bool:
-    return tm.device_config._device_kind == "cuda"
+    return tm.device_config.kind == "cuda"
 
 
 def _ctx(tm):
@@ -32,7 +32,7 @@ def host(tm, arr) -> np.ndarray:
 def discrete(kind: str, device: str = "cpu:1", **kw):
     from ytm.discrete import BinaryTM, MultiClassTM
 
-    cfg = dict(n_clauses=4, T=10.0, s=1.0, dim=(4, 1, 1), seed=1)
+    cfg: dict = {"n_clauses": 4, "T": 10.0, "s": 1.0, "dim": (4, 1, 1), "seed": 1}
     if kind == "multi":
         cfg["n_classes"] = 2
     cfg.update(kw)
@@ -42,7 +42,7 @@ def discrete(kind: str, device: str = "cpu:1", **kw):
 def guided(kind: str, device: str = "cpu:1", **kw):
     from ytm.guided import BinaryTM, MultiClassTM
 
-    cfg = dict(n_clauses=4, s=1.0, dim=(4, 1, 1), seed=1)
+    cfg: dict = {"n_clauses": 4, "s": 1.0, "dim": (4, 1, 1), "seed": 1}
     if kind == "multi":
         cfg["n_classes"] = 3
     cfg.update(kw)

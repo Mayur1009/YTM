@@ -34,6 +34,7 @@ class CUDADevice(BaseDevice):
         self.cuda_dev.use()
 
         props = cp.cuda.runtime.getDeviceProperties(dev.n)
+        self._warp_size = props["warpSize"]
         block_size = min(max(1, int(dev.block_size)), props["maxThreadsPerBlock"])
         self._block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
         self._max_grid_size = min(props["multiProcessorCount"] * 32, props["maxGridSize"][0])

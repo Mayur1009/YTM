@@ -14,6 +14,8 @@ pytestmark = pytest.mark.sanitize
 
 ROOT = pathlib.Path(__file__).parents[1]
 
+SAN = "-fsanitize=address,undefined,float-divide-by-zero,float-cast-overflow -fno-sanitize-recover=all -fno-omit-frame-pointer"
+
 CONFIGS = {
     "discrete_flat_binary": dict(backend="discrete", kw=dict(n_clauses=6, s=3.0, dim=[4, 1, 1], n_classes=3)),
     "discrete_flat_therm_uncoalesced": dict(
@@ -41,20 +43,20 @@ def _run(cmd, env_extra=None):
 
 
 def _libs():
-    from ytm._core.device_config import DeviceConfig
+    from ytm._core.backends.toolchain import compiler_cmd
 
-    cc = DeviceConfig(device="cpu:1")._compiler
-    name = os.path.basename(cc)
+    cc = compiler_cmd()
+    name = os.path.basename(cc[0])
     if "gcc" in name:
         libs = [f"lib{n}.so" for n in ("asan", "ubsan")]
     elif "clang" in name:
         # The shared clang ASan runtime bundles the UBSan one, so a single preload covers both.
         libs = [f"libclang_rt.asan-{platform.machine()}.so"]
     else:
-        pytest.skip(f"ASan preload is only wired for gcc and clang, compiler is {cc}")
-    paths = [subprocess.check_output([cc, f"-print-file-name={n}"], text=True).strip() for n in libs]
+        pytest.skip(f"ASan preload is only wired for gcc and clang, compiler is {name}")
+    paths = [subprocess.check_output([*cc, f"-print-file-name={n}"], text=True).strip() for n in libs]
     if not all(os.path.isabs(p) and os.path.exists(p) for p in paths):
-        pytest.skip(f"{cc} did not report {libs}")
+        pytest.skip(f"{name} did not report {libs}")
     return ":".join(paths)
 
 
@@ -67,7 +69,14 @@ def _check(proc):
 @pytest.mark.parametrize("name", list(CONFIGS))
 def test_cpu_asan_ubsan_clean(name):
     """Out-of-bounds writes and bad indexing leave plausible-looking numbers; only the sanitizer sees them."""
-    env = {"LD_PRELOAD": _libs(), "ASAN_OPTIONS": "detect_leaks=0", "UBSAN_OPTIONS": "print_stacktrace=1"}
+    env = {
+        "CFLAGS": f"-O1 -g {SAN}",
+        "LDFLAGS": SAN,
+        "LD_PRELOAD": _libs(),
+        "ASAN_OPTIONS": "detect_leaks=0",
+        "UBSAN_OPTIONS": "print_stacktrace=1",
+        "YTM_NO_CACHE": "1",
+    }
     _check(_run([sys.executable, "-m", "tests.sanitize_worker", json.dumps(CONFIGS[name]), "cpu:2"], env))
 
 

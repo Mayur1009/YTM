@@ -84,6 +84,15 @@ def _omp_flag_candidates():
     return ret
 
 
+def compiler_cmd() -> list[str]:
+    if cc := os.environ.get("CC"):
+        return shlex.split(cc)
+    for name in ("clang", "gcc", "cc"):
+        if shutil.which(name):
+            return [name]
+    raise OSError("`device='cpu'` needs a C compiler. Set $CC, or put `clang` or `gcc` on the PATH.")
+
+
 class Toolchain:
     def __init__(self, openmp: bool = True):
         self.openmp = openmp
@@ -117,7 +126,7 @@ class Toolchain:
                 except OSError:
                     self.cachedir = None
 
-        self.comp = self._get_compiler_cmd()
+        self.comp = compiler_cmd()
 
         if (cached := self._load_decision()) is not None:
             self.cflags, self.ldflags, self.omp_runtime, self.is_openmp_working = cached
@@ -135,14 +144,6 @@ class Toolchain:
             base_cf, base_lf = self._base_flags[system][0]
             self.cflags, self.ldflags, self.omp_runtime = found or (list(base_cf), list(base_lf), None)
             self._cache_toolchain()
-
-    def _get_compiler_cmd(self) -> list[str]:
-        if cc := os.environ.get("CC"):
-            return shlex.split(cc)
-        for name in ("clang", "gcc", "cc"):
-            if shutil.which(name):
-                return [name]
-        raise OSError("`device='cpu'` needs a C compiler. Set $CC, or put `clang` or `gcc` on the PATH.")
 
     def _cache_key(self) -> str:
         found = shutil.which(self.comp[0])

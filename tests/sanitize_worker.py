@@ -5,29 +5,18 @@ import sys
 
 import numpy as np
 
-SAN = ["-fsanitize=address,undefined,float-divide-by-zero,float-cast-overflow", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
-
-
-def _flags():
-    from ytm._core._device_checks import DEFAULT_COMPILE_FLAGS, resolve_link_flags, select_compiler
-
-    base = [f for f in DEFAULT_COMPILE_FLAGS if not f.startswith(("-O", "-march", "-mtune"))]
-    return base + ["-O1", "-g"] + SAN + resolve_link_flags(select_compiler())
-
-
 def build(spec: dict, device: str):
     kw = {k: tuple(v) if isinstance(v, list) else v for k, v in spec["kw"].items()}
-    extra = {"compile_flags": _flags()} if device.startswith("cpu") else {}
     if spec["backend"] == "discrete":
         from ytm.discrete import BinaryTM, MultiClassTM
 
         if spec.get("kind") == "binary":
             kw.pop("n_classes", None)
-            return BinaryTM(**kw, T=10.0, device=device, **extra)
-        return MultiClassTM(**kw, T=10.0, device=device, **extra)
+            return BinaryTM(**kw, T=10.0, device=device)
+        return MultiClassTM(**kw, T=10.0, device=device)
     from ytm.guided import MultiClassTM
 
-    return MultiClassTM(**kw, device=device, **extra)
+    return MultiClassTM(**kw, device=device)
 
 
 def main() -> None:
