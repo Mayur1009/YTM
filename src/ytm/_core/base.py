@@ -6,7 +6,7 @@ import numpy as np
 from .backends.base import BaseDevice
 from .config import BaseTMConfig
 from .device_config import DeviceConfig
-from .utils import ClauseInfo
+from .utils import ClauseInfo, prepare_X
 
 
 class BaseTM(abc.ABC):
@@ -57,22 +57,7 @@ class BaseTM(abc.ABC):
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
 
     def _prepare_X(self, X: np.ndarray) -> np.ndarray:
-        cfg = self.config
-
-        # number of features match
-        assert np.prod(X.shape[1:]) == np.prod(cfg._dim), f"Expected input features to match dim {cfg._dim}, but got {X.shape[1:]}"
-
-        # Check if values are in provided bounds
-        if cfg._patch_is_image:
-            lo, hi, axes = cfg._feat_mins.reshape(cfg._dim), cfg._feat_maxs.reshape(cfg._dim), 0
-        else:
-            lo, hi, axes = cfg._feat_mins[: cfg._dim[2]], cfg._feat_maxs[: cfg._dim[2]], (0, 1, 2)
-        Xv = np.asarray(X).reshape(X.shape[0], *cfg._dim)
-        assert np.all(Xv.min(axis=axes) >= lo), f"X has values below feat_mins, min is {int(Xv.min())}"
-        assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
-
-        # Shift X, so that the model always sees X in [0, therm_bits]
-        return np.asarray((Xv - lo) if np.any(lo) else Xv, dtype=cfg._fbound_dtype, order="C")
+        return prepare_X(self.config, X)
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
