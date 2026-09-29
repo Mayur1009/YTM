@@ -102,20 +102,7 @@ class BaseDevice(abc.ABC):
     def _init_clauses(self):
         cfg = self.config
         shape = (cfg._total_clauses, cfg._n_literals)
-
-        if cfg.ta_init == "middle":
-            states = np.full(shape, cfg._include_state - 1)
-        elif cfg.ta_init == "random":
-            states = self._rng.integers(0, cfg.n_states, size=shape)
-        elif cfg.ta_init == "random_include":
-            states = np.where(self._rng.integers(0, 2, size=shape) == 1, cfg._include_state, cfg._include_state - 1)
-        elif isinstance(cfg.ta_init, str):
-            band = int(cfg.ta_init[len("random:") :])
-            mid = cfg._include_state - 1
-            states = self._rng.integers(max(0, mid - band), min(cfg.n_states - 1, mid + band) + 1, size=shape)
-        else:
-            states = np.full(shape, int(cfg.ta_init))
-
+        states = cfg._ta_init(self._rng, shape, cfg.n_states)
         self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
 
     def _init_patch_weights(self):

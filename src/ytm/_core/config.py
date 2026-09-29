@@ -4,6 +4,7 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
+from .initializer import TAInit, ConstTAInit, UniformTAInit
 from .utils import Feedback, enum_to_header
 
 
@@ -48,7 +49,7 @@ class BaseTMConfig:
     # TA states
     n_states: int = 256
     include_state: int | None = None
-    ta_init: Literal["random", "middle", "random_include"] | str | int = "middle"
+    ta_init: Literal["random", "middle", "random_include"] | str | int | TAInit = "middle"
 
     # clause weights
     weighted: bool = True
@@ -131,15 +132,41 @@ class BaseTMConfig:
             self._include_state = self.include_state
 
         # TA initial state
-        if isinstance(self.ta_init, str) and self.ta_init.startswith("random:"):
-            band = self.ta_init[len("random:") :]
-            assert band.isdigit(), f"ta_init 'random:N' needs a non negative int N, got {self.ta_init!r}"
+        if isinstance(self.ta_init, int) and not isinstance(self.ta_init, bool):
+            assert 0 <= self.ta_init < self.n_states, f"ta_init int must be in [0, {self.n_states}), got {self.ta_init}"
+            self._ta_init = ConstTAInit(self.ta_init)
+
+        elif isinstance(self.ta_init, TAInit):
+            self._ta_init = self.ta_init
+
+        elif isinstance(self.ta_init, str):
+            if self.ta_init == "middle":
+                self._ta_init = ConstTAInit(self._include_state - 1)
+
+            elif self.ta_init == "random":
+                self._ta_init = UniformTAInit()
+
+            elif self.ta_init == "random_include":
+                self._ta_init = UniformTAInit(low=self._include_state - 1, high=self._include_state + 1)
+
+            elif self.ta_init.startswith("random:"):
+                band = self.ta_init[len("random:") :]
+                assert band.isdigit(), f"ta_init = 'random:N' needs a non negative int N, got {self.ta_init!r}"
+                b = int(band)
+                self._ta_init = UniformTAInit(
+                    low=max(0, self._include_state - 1 - b),
+                    high=min(self.n_states, self._include_state - 1 + b + 1),
+                )
+
+            else:
+                raise ValueError(
+                    f"Unknown string ta_init: {self.ta_init!r}. Possible values are: "
+                    f"['middle', 'random', 'random_include', str of form 'random:N'] "
+                )
         else:
-            assert self.ta_init in ("middle", "random", "random_include") or (
-                isinstance(self.ta_init, int) and 0 <= self.ta_init <= self.n_states - 1
-            ), (
-                f"ta_init must be 'middle', 'random', 'random_include', 'random:N', "
-                f"or an int within 0 and n_states - 1 ({self.n_states - 1}), got {self.ta_init}"
+            raise TypeError(
+                f"ta_init must be int, str (one of 'middle', 'random', 'random_include', or of form 'random:N')"
+                f", or TAInit, got {type(self.ta_init).__name__}"
             )
 
     def _resolve_feat_bound(self, name: str, value: int | Sequence[int] | np.ndarray) -> np.ndarray:
@@ -294,7 +321,7 @@ class T_BaseTMConfig(TypedDict, total=False):
     # TA states
     n_states: int
     include_state: int | None
-    ta_init: Literal["random", "middle", "random_include"] | str | int
+    ta_init: Literal["random", "middle", "random_include"] | str | int | TAInit
 
     # clause weights
     weighted: bool
