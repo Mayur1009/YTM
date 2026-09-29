@@ -1,4 +1,5 @@
 import abc
+from dataclasses import fields
 
 import numpy as np
 
@@ -9,6 +10,7 @@ from .utils import ClauseInfo
 
 
 class BaseTM(abc.ABC):
+    config_cls: type[BaseTMConfig]
     cpu_device_cls: type[BaseDevice]
 
     def __init__(self, dev: BaseDevice):
@@ -23,18 +25,32 @@ class BaseTM(abc.ABC):
     def device_config(self) -> DeviceConfig:
         return self.dev.device_config
 
+    @staticmethod
     @abc.abstractmethod
-    def to(self, device: str, **device_kwargs) -> None:
-        """Move the model to another device, in place."""
+    def _cuda_device_cls() -> type[BaseDevice]:
         ...
 
+    def _build_device(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None) -> BaseDevice:
+        cls = self.cpu_device_cls if device_config.kind == "cpu" else self._cuda_device_cls()
+        return cls(config, device_config, state)
+
+    def to(self, device: str, **device_kwargs) -> None:
+        """Move the model to another device, in place."""
+        self.dev = self._build_device(self.config, DeviceConfig(device=device, **device_kwargs), self.dev.get_state_dict())
+
     def __getstate__(self) -> dict:
-        return {"config": self.config, "params": self.dev.get_state_dict(), "rng": self._rng}
+        """Config is saved as its constructor arguments, minus `ta_init`: its only use is at construction."""
+        cfg = self.config
+        return {
+            "config": {f.name: getattr(cfg, f.name) for f in fields(cfg) if f.init and f.name != "ta_init"},
+            "params": self.dev.get_state_dict(),
+            "rng": self._rng,
+        }
 
     def __setstate__(self, state: dict) -> None:
         """Unpickling always lands on `cpu:1`; use `.to()` afterwards to move it."""
-        self.dev = self.cpu_device_cls(state["config"], DeviceConfig())
-        self.dev.load_state_dict(state["params"])
+        cfg = self.config_cls(**state["config"])
+        self.dev = self._build_device(cfg, DeviceConfig(), state["params"])
         self._rng = state["rng"]
 
     @abc.abstractmethod

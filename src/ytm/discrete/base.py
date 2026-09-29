@@ -2,27 +2,23 @@ from typing import Unpack
 
 import numpy as np
 
-from .._core.backends.base import BaseDevice
 from .._core.base import BaseTM as CoreBaseTM
-from .._core.config import BaseTMConfig
 from .._core.device_config import DeviceConfig
 from .._core.utils import split_device_kwargs
 from .backends.cpu import CPUDevice
 from .config import T_Config, TMConfig
 
 
-def _build_device(config: BaseTMConfig, device_config: DeviceConfig) -> BaseDevice:
-    if device_config.kind == "cpu":
-        return CPUDevice(config, device_config)
-    from .backends.cuda import CUDADevice
-
-    return CUDADevice(config, device_config)
-
-
 class BaseTM(CoreBaseTM):
     config: TMConfig
     config_cls: type[TMConfig] = TMConfig
     cpu_device_cls = CPUDevice
+
+    @staticmethod
+    def _cuda_device_cls():
+        from .backends.cuda import CUDADevice
+
+        return CUDADevice
 
     def __init__(
         self,
@@ -35,13 +31,7 @@ class BaseTM(CoreBaseTM):
     ):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
         config = self.config_cls(n_clauses=n_clauses, T=T, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
-        super().__init__(_build_device(config, DeviceConfig(**dev_kw)))
-
-    def to(self, device: str, **device_kwargs) -> None:
-        """Move the model to another device, in place."""
-        new = _build_device(self.config, DeviceConfig(device=device, **device_kwargs))
-        new.load_state_dict(self.dev.get_state_dict())
-        self.dev = new
+        super().__init__(self._build_device(config, DeviceConfig(**dev_kw)))
 
     def _fit(
         self,

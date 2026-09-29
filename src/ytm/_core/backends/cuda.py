@@ -77,6 +77,10 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             super()._init_params()
 
+    def _restore_params(self, state: dict):
+        with self.cuda_dev:
+            super()._restore_params(state)
+
     def load_state_dict(self, state: dict) -> None:
         with self.cuda_dev:
             super().load_state_dict(state)

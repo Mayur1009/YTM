@@ -1,4 +1,5 @@
 import abc
+import copy
 import types
 from collections.abc import Iterator
 
@@ -13,13 +14,16 @@ class BaseDevice(abc.ABC):
     xp: types.ModuleType
     clause_weights: np.ndarray
 
-    def __init__(self, config: BaseTMConfig, device_config: DeviceConfig):
+    def __init__(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None):
         self.config = config
         self.device_config = device_config
         self._rng = np.random.default_rng(self.config.seed + 1)
         self._setup()
         self._init_consts()
-        self._init_params()
+        if state is None:
+            self._init_params()
+        else:
+            self._restore_params(state)
         self._bind()
 
     @abc.abstractmethod
@@ -114,6 +118,14 @@ class BaseDevice(abc.ABC):
         self._init_packed_clauses()
         self._init_patch_weights()
 
+    def _restore_params(self, state: dict):
+        cfg = self.config
+        self.clause_weights = self.xp.array(state["clause_weights"], dtype=np.float32, order="C")
+        self.ta_states = self.xp.array(state["ta_states"], dtype=cfg._ta_dtype, order="C")
+        self.patch_weights = self.xp.array(state["patch_weights"], dtype=np.int32, order="C")
+        self._rng = copy.deepcopy(state["rng"])
+        self._init_packed_clauses()
+
     def _init_consts(self):
         cfg = self.config
         self.therm_bits = self.xp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
@@ -136,9 +148,7 @@ class BaseDevice(abc.ABC):
             clause_feat_ids=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats), dtype=cfg._nfeat_dtype),
             clause_feat_bounds=self.xp.empty((cfg._total_clauses, cfg._n_raw_patch_feats, 2), dtype=cfg._fbound_dtype),
             clause_n_feats=self.xp.empty(cfg._total_clauses, dtype=cfg._nfeat_dtype),
-            clause_position_bounds=self.xp.empty(
-                (cfg._total_clauses, 4) if cfg._n_patches > 1 else (1, 1), dtype=cfg._pbound_dtype
-            ),
+            clause_position_bounds=self.xp.empty((cfg._total_clauses, 4) if cfg._n_patches > 1 else (1, 1), dtype=cfg._pbound_dtype),
             has_contra=self.xp.empty(cfg._total_clauses, dtype=np.int8),
             clause_len=self.xp.empty(cfg._total_clauses, dtype=cfg._nlits_dtype),
             is_clause_synced=self.xp.zeros(cfg._total_clauses, dtype=np.int8),
@@ -176,7 +186,7 @@ class BaseDevice(abc.ABC):
             "ta_states": self._to_host(self.ta_states),
             "clause_weights": self._to_host(self.clause_weights),
             "patch_weights": self._to_host(self.patch_weights),
-            "rng": self._rng.bit_generator.state,
+            "rng": copy.deepcopy(self._rng),
         }
 
     def load_state_dict(self, state: dict) -> None:
@@ -184,6 +194,5 @@ class BaseDevice(abc.ABC):
         self.ta_states[:] = self.xp.asarray(state["ta_states"])
         self.clause_weights[:] = self.xp.asarray(state["clause_weights"])
         self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
-        self._rng.bit_generator.state = state["rng"]
+        self._rng = copy.deepcopy(state["rng"])
         self.packed_clauses.is_clause_synced.fill(0)
-
