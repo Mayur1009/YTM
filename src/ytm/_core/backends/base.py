@@ -99,10 +99,16 @@ class BaseDevice(abc.ABC):
         return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
 
     # == initializations ==
+    def _init_params(self):
+        self._init_weights()
+        self._init_clauses()
+        self._init_packed_clauses()
+        self._init_patch_weights()
+
     def _init_clauses(self):
         cfg = self.config
         shape = (cfg._total_clauses, cfg._n_literals)
-        states = cfg._ta_init(self._rng, shape, cfg.n_states)
+        states = cfg._ta_init(self._rng, shape, cfg.n_states, cfg=cfg, weights=self._to_host(self.clause_weights))
         self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
 
     def _init_patch_weights(self):

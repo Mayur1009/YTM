@@ -48,10 +48,7 @@ class CPUDevice(BaseDevice):
                 stacklevel=2,
             )
             self._n_threads = 1
-        self._init_clauses()
-        self._init_weights()
-        self._init_patch_weights()
-        self._init_packed_clauses()
+        self._init_params()
         self._init_lib()
         self._init_pointers()
         self.set_threads(self._n_threads)

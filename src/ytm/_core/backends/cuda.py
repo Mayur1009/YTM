@@ -20,10 +20,7 @@ class CUDADevice(BaseDevice):
         self.xp = cp
 
         with self.cuda_dev:
-            self._init_clauses()
-            self._init_weights()
-            self._init_patch_weights()
-            self._init_packed_clauses()
+            self._init_params()
             self._init_device_arrays()
             self._init_kernels()
 
