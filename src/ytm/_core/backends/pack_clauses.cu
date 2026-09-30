@@ -52,24 +52,18 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
         int fid = base + lane;
         bool in_range = (fid < N_RAW_PATCH_FEATS);
 
-        FeatScan fs;
-        fs.lb = 0;
-        fs.ub = 0;
-        fs.includes = 0;
-        fs.is_bounded = false;
+        FeatScan fs = {};
         if (in_range) {
             fs = calc_single_feat_bounds(ta_state, therm_bits, literal_offsets, fid);
             n_includes += fs.includes;
         }
 
-        uint mask = warp.ballot(fs.is_bounded);
-        int slot = write_offset + __popc(mask & ((1u << lane) - 1));
+        int slot = warp_compact_slot(warp, fs.is_bounded, &write_offset);
         if (fs.is_bounded) {
             feat_ids[slot] = (NFEAT_T)fid;
             feat_bounds[slot * 2 + 0] = fs.lb;
             feat_bounds[slot * 2 + 1] = fs.ub;
         }
-        write_offset += __popc(mask);
 
         all_valid = all_valid && warp.all(!(in_range && fs.lb > fs.ub));
         if (!all_valid && !dont_skip)

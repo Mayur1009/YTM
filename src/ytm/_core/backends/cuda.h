@@ -38,3 +38,10 @@ __device__ inline WarpGrid warp_grid() {
     return {warp, (int)warp.thread_rank(), grid.thread_rank() / warp.size(), grid.size() / warp.size()};
 }
 
+INLINE_FN int warp_compact_slot(const warp_t& warp, bool keep, int* offset) {
+    uint mask = warp.ballot(keep);
+    int slot = *offset + __popc(mask & ((1u << warp.thread_rank()) - 1));
+    *offset += __popc(mask);
+    return slot;
+}
+
