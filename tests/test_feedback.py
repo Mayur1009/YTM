@@ -128,6 +128,34 @@ def test_dropped_clauses_get_no_feedback(device):
     assert decide_feedback(tm, buf, [-10.0]).ravel()[0] == FB_NONE
 
 
+@pytest.mark.parametrize("coalesced", [True, False], ids=["coalesced", "per-class"])
+@pytest.mark.parametrize("threads", [1, 4])
+def test_decide_lists_each_clause_with_feedback_once(device, coalesced, threads):
+    """fb_ids[:fb_count] must be exactly the clauses with any non-NONE entry in feedback_type, no repeats, any order."""
+    if threads > 1 and not device.startswith("cpu"):
+        pytest.skip("thread count only applies to cpu")
+    dev = f"cpu:{threads}" if device.startswith("cpu") else device
+    tm = discrete("multi", dev, n_clauses=64, n_classes=3, coalesced=coalesced)
+    cfg = tm.config
+    rng = np.random.default_rng(0)
+    states = np.where(rng.random((cfg._total_clauses, cfg._n_literals)) < 0.2, cfg._include_state, cfg._include_state - 1)
+    set_ta_states(tm, states)
+    set_weights(tm, rng.choice([-2.0, 2.0], size=host(tm, tm.dev.clause_weights).shape))
+
+    buf = make_buffers(tm, [[1, 0, 1, 0]], [[50.0, -50.0, -50.0]])
+    for key in range(1, 6):
+        fb = decide_feedback(tm, buf, [-50.0, 50.0, 50.0], key=key) != FB_NONE  # |prob| = 0.5, a mix of fb and none
+        if coalesced:
+            expected = np.flatnonzero(fb.any(axis=1))
+        else:
+            rel, cls = np.nonzero(fb)
+            expected = np.sort(cls * cfg._n_clauses + rel)
+        count = int(host(tm, buf.fb_count)[0])
+        assert 0 < len(expected) < cfg._total_clauses
+        assert count == len(expected)
+        assert np.array_equal(np.sort(host(tm, buf.fb_ids)[:count]), expected)
+
+
 TRIALS = 4000
 ALPHA = 1e-4  # ~25 binomtests per device, keep the family-wise false-failure rate low
 

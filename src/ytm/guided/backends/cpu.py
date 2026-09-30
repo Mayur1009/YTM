@@ -79,6 +79,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=np.empty(cfg.n_classes, dtype=np.float32),
+            fb_count=np.zeros(1, dtype=np.uint32),
+            fb_ids=np.empty(cfg._total_clauses, dtype=np.uint32),
             grad=np.empty(cfg.n_classes, dtype=np.float32),
             y_hat=np.empty(cfg.n_classes, dtype=np.float32),
             loss=np.empty(1, dtype=np.float32),
@@ -126,6 +128,7 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
+        buf.fb_count[0] = 0
         p_Y_e = buf.Y[e].ctypes.data_as(float_p)
 
         self.lib.votes_activation(buf.p_votes, buf.p_y_hat)

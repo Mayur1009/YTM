@@ -32,6 +32,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
+            fb_count=cp.zeros(1, dtype=np.uint32),
+            fb_ids=cp.empty(cfg._total_clauses, dtype=np.uint32),
             feedback_type=cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=cp.zeros(cfg.n_classes, dtype=np.float32),
             label_probs=None,
@@ -67,6 +69,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
+        buf.fb_count.data.memset_async(0, buf.fb_count.nbytes)
 
         self.cu.calc_update_prob(
             cfg.n_classes,
@@ -85,6 +88,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
                 np.int32(e),
                 self.clause_weights,
                 buf.feedback_type,
+                buf.fb_count,
+                buf.fb_ids,
             ),
         )
 

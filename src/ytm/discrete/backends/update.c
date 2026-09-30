@@ -15,7 +15,7 @@
 void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
                      const int8_t* restrict clause_drop_mask, const float* restrict prob,
                      const float* restrict label_probs, const int e, const float* restrict clause_weights,
-                     uint8_t* restrict feedback_type) {
+                     uint8_t* restrict feedback_type, uint* restrict fb_count, uint* restrict fb_ids) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
@@ -23,6 +23,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
+        bool any_fb = false;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -46,7 +47,10 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
+            any_fb |= (fb != FB_NONE);
         }
+        if (any_fb)
+            fb_list_append(fb_count, fb_ids, clause);
     }
 }
 

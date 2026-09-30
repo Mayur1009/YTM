@@ -1,6 +1,6 @@
 import pathlib
 import warnings
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint64
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +12,7 @@ from .toolchain import Toolchain
 
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
+uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
 
@@ -25,6 +26,8 @@ class CPUFitBuffers(FitBuffers):
     p_clause_output: Any = field(init=False)
     p_selected_pids: Any = field(init=False)
     p_votes: Any = field(init=False)
+    p_fb_count: Any = field(init=False)
+    p_fb_ids: Any = field(init=False)
 
     def __post_init__(self):
         self.p_X = self.X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.X.dtype)))
@@ -33,6 +36,8 @@ class CPUFitBuffers(FitBuffers):
         self.p_clause_output = self.clause_output.ctypes.data_as(int8_p)
         self.p_selected_pids = self.selected_pids.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.selected_pids.dtype)))
         self.p_votes = self.votes.ctypes.data_as(float_p)
+        self.p_fb_count = self.fb_count.ctypes.data_as(uint32_p)
+        self.p_fb_ids = self.fb_ids.ctypes.data_as(uint32_p)
 
 
 class CPUDevice(BaseDevice):

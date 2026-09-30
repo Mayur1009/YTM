@@ -50,6 +50,8 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
             clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=np.empty(cfg.n_classes, dtype=np.float32),
+            fb_count=np.zeros(1, dtype=np.uint32),
+            fb_ids=np.empty(cfg._total_clauses, dtype=np.uint32),
             feedback_type=np.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=np.zeros(cfg.n_classes, dtype=np.float32),
             label_probs=label_probs,
@@ -71,6 +73,7 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         """Turn the votes into a per class update probability, then pick a feedback type per clause."""
+        buf.fb_count[0] = 0
         self.lib.calc_update_prob(buf.p_votes, buf.p_Y, c_int(e), buf.p_prob)
         self.lib.decide_feedback(
             c_uint64(rng_key),
@@ -82,6 +85,8 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
             c_int(e),
             self.p_clause_weights,
             buf.p_feedback_type,
+            buf.p_fb_count,
+            buf.p_fb_ids,
         )
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
