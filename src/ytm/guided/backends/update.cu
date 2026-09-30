@@ -64,11 +64,12 @@ extern "C" __global__ void compute_loss_neg_ck(const float* y_hat_neg_ck, const 
 extern "C" __global__ void decide_feedback_grad(const ull seed, const float* grad, const float* clause_weights,
                                                 const NLITS_T* clause_len, const int8_t* clause_output,
                                                 const int8_t* clause_drop_mask, const float lambda_,
-                                                uint8_t* feedback_type) {
+                                                uint8_t* feedback_type, uint* fb_count, uint* fb_ids) {
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
+        bool any_fb = false;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -94,7 +95,10 @@ extern "C" __global__ void decide_feedback_grad(const ull seed, const float* gra
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
+            any_fb |= (fb != FB_NONE);
         }
+        if (any_fb)
+            fb_list_append(fb_count, fb_ids, clause);
     }
 }
 
@@ -122,7 +126,7 @@ __device__ inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float up
 extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* loss, const float* loss_neg_ck,
                                                    const NLITS_T* clause_len, const int8_t* clause_output,
                                                    const int8_t* clause_drop_mask, const float lambda_,
-                                                   uint8_t* feedback_type) {
+                                                   uint8_t* feedback_type, uint* fb_count, uint* fb_ids) {
     GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause_id] == 1) {
             feedback_type[clause_id] = FB_NONE;
@@ -133,7 +137,10 @@ extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* 
         bool has_space = (clause_len[clause_id] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         float delta_L = *loss - loss_neg_ck[clause_id];
         float update_prob = 1.0f - expf(-lambda_ * fabsf(delta_L));
-        feedback_type[clause_id] = select_fb_delta_l(seed, clause_id, update_prob, delta_L, ck, has_space);
+        uint8_t fb = select_fb_delta_l(seed, clause_id, update_prob, delta_L, ck, has_space);
+        feedback_type[clause_id] = fb;
+        if (fb != FB_NONE)
+            fb_list_append(fb_count, fb_ids, clause_id);
     }
 }
 
@@ -141,13 +148,15 @@ extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* 
 // over the literals.
 extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_output, const NPATCHES_T* selected_patch_ids,
                                           const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
-                                          const uint8_t* feedback_type, TA_STATE_T* global_ta_states,
-                                          int8_t* is_clause_synced) {
+                                          const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
+                                          TA_STATE_T* global_ta_states, int8_t* is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     const FBOUND_T* Xe = &X[sample_offset(e)];
+    const uint n = *fb_count;
 
-    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
+    WARP_STRIDE_LOOP(i, n) {
+        ull clause = fb_ids[i];
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)

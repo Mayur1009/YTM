@@ -144,6 +144,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
+                buf.p_fb_count,
+                buf.p_fb_ids,
             )
         else:
             self.lib.compute_votes_neg_ck(buf.p_votes, self.p_clause_weights, buf.p_clause_output, buf.p_votes_neg_ck)
@@ -158,6 +160,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
+                buf.p_fb_count,
+                buf.p_fb_ids,
             )
 
     def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
@@ -169,6 +173,8 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             c_int(e),
             self.p_literal_offsets,
             buf.p_feedback_type,
+            buf.p_fb_count,
+            buf.p_fb_ids,
             self.p_ta_states,
             self.p_is_clause_synced,
         )

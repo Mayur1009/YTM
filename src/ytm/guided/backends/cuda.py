@@ -127,6 +127,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
+                    buf.fb_count,
+                    buf.fb_ids,
                 ),
             )
         else:
@@ -150,6 +152,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
+                    buf.fb_count,
+                    buf.fb_ids,
                 ),
             )
 
@@ -164,6 +168,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                 np.int32(e),
                 self.literal_offsets,
                 buf.feedback_type,
+                buf.fb_count,
+                buf.fb_ids,
                 self.ta_states,
                 self.packed_clauses.is_clause_synced,
             ),

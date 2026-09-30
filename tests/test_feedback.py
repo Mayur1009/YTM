@@ -13,6 +13,7 @@ from .support import (
     discrete,
     fb_ids_from_dense,
     fill,
+    guided,
     host,
     make_buffers,
     set_clauses,
@@ -133,21 +134,28 @@ def test_dropped_clauses_get_no_feedback(device):
 
 @pytest.mark.parametrize("coalesced", [True, False], ids=["coalesced", "per-class"])
 @pytest.mark.parametrize("threads", [1, 4])
-def test_decide_lists_each_clause_with_feedback_once(device, coalesced, threads):
+@pytest.mark.parametrize("model", ["discrete", "guided-grad", "guided-delta_l"])
+def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, threads):
     """fb_ids[:fb_count] must be exactly the clauses with any non-NONE entry in feedback_type, no repeats, any order."""
     if threads > 1 and not device.startswith("cpu"):
         pytest.skip("thread count only applies to cpu")
     dev = f"cpu:{threads}" if device.startswith("cpu") else device
-    tm = discrete("multi", dev, n_clauses=64, n_classes=3, coalesced=coalesced)
+    kw = dict(n_clauses=64, n_classes=3, coalesced=coalesced)
+    if model == "discrete":
+        tm = discrete("multi", dev, **kw)
+        Y, votes = [[50.0, -50.0, -50.0]], [-50.0, 50.0, 50.0]  # |prob| = 0.5, a mix of fb and none
+    else:
+        tm = guided("multi", dev, fb_signal=model.split("-")[1], lambda_=5.0, **kw)
+        Y, votes = [[1.0, 0.0, 0.0]], [-2.0, 2.0, 2.0]
     cfg = tm.config
     rng = np.random.default_rng(0)
     states = np.where(rng.random((cfg._total_clauses, cfg._n_literals)) < 0.2, cfg._include_state, cfg._include_state - 1)
     set_ta_states(tm, states)
     set_weights(tm, rng.choice([-2.0, 2.0], size=host(tm, tm.dev.clause_weights).shape))
 
-    buf = make_buffers(tm, [[1, 0, 1, 0]], [[50.0, -50.0, -50.0]])
+    buf = make_buffers(tm, [[1, 0, 1, 0]], Y)
     for key in range(1, 6):
-        fb = decide_feedback(tm, buf, [-50.0, 50.0, 50.0], key=key)  # |prob| = 0.5, a mix of fb and none
+        fb = decide_feedback(tm, buf, votes, key=key)
         expected = fb_ids_from_dense(tm, fb)
         count = int(host(tm, buf.fb_count)[0])
         assert 0 < len(expected) < cfg._total_clauses
@@ -155,24 +163,32 @@ def test_decide_lists_each_clause_with_feedback_once(device, coalesced, threads)
         assert np.array_equal(np.sort(host(tm, buf.fb_ids)[:count]), expected)
 
 
-def test_update_touches_only_listed_clauses(device):
-    """Every clause has Type I-a in feedback_type, but only the listed ones may change (TA states and weights)."""
-    tm = discrete("binary", device, n_clauses=4)
+@pytest.mark.parametrize("model", ["discrete", "guided-grad", "guided-delta_l"])
+def test_update_touches_only_listed_clauses(device, model):
+    """Every clause has Type I-a in feedback_type, but only the listed ones may change.
+
+    Checks TA states for all models, and weights for discrete (guided weights follow the gradient, not the list).
+    """
+    if model == "discrete":
+        tm = discrete("binary", device, n_clauses=4)
+    else:
+        tm = guided("binary", device, n_clauses=4, fb_signal=model.split("-")[1])
     cfg = tm.config
     states = np.tile(ROW, (cfg._total_clauses, 1))
-    all_t1a = [[FB_T1A]] * cfg._n_clauses
+    all_t1a = np.full(host(tm, make_buffers(tm, [[1, 0, 1, 0]], [[0.0]]).feedback_type).shape, FB_T1A)
 
     for ids in ([], [1, 3]):
         set_ta_states(tm, states)
         set_weights(tm, [[2.0, -2.0, 2.0, -2.0]])
         buf = make_buffers(tm, [[1, 0, 1, 0]], [[0.0]])
         apply_feedback(tm, buf, all_t1a, ids=ids)
-        update_weights(tm, buf)
 
         changed_states = np.flatnonzero((host(tm, tm.dev.ta_states) != states).any(axis=1))
-        changed_weights = np.flatnonzero(host(tm, tm.dev.clause_weights).ravel() != [2.0, -2.0, 2.0, -2.0])
         assert list(changed_states) == ids
-        assert list(changed_weights) == ids
+        if model == "discrete":
+            update_weights(tm, buf)
+            changed_weights = np.flatnonzero(host(tm, tm.dev.clause_weights).ravel() != [2.0, -2.0, 2.0, -2.0])
+            assert list(changed_weights) == ids
 
 
 def test_next_sample_does_not_reapply_the_previous_list(device):
