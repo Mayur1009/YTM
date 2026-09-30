@@ -69,12 +69,12 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         cfg = self.config
 
         self.cu.calc_update_prob(
-            *self._kernel_config(cfg.n_classes),
+            cfg.n_classes,
             (buf.votes, buf.Y, np.int32(e), buf.prob),
         )
 
         self.cu.decide_feedback(
-            *self._kernel_config(cfg._total_clauses),
+            cfg._total_clauses,
             (
                 np.uint64(rng_key),
                 buf.clause_output,
@@ -90,7 +90,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
     def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         self.cu.update_clauses(
-            *self._kernel_config(self.config._total_clauses * self._warp_size),
+            self.config._total_clauses * self._warp_size,
             (
                 np.uint64(rng_key),
                 buf.clause_output,
@@ -106,6 +106,6 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
         self.cu.update_weights(
-            *self._kernel_config(self.config._total_clauses),
+            self.config._total_clauses,
             (buf.feedback_type, self.clause_weights),
         )

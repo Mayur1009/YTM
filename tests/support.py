@@ -145,7 +145,7 @@ def activation(tm, votes) -> np.ndarray:
 
     with _ctx(tm):
         v, y = cp.asarray(votes), cp.zeros_like(cp.asarray(votes))
-        dev.cu.votes_activation(*dev._kernel_config(1), (v, y))
+        dev.cu.votes_activation(1, (v, y))
         return y.get()
 
 
@@ -163,5 +163,5 @@ def loss_and_grad(tm, y_hat, y) -> tuple[float, np.ndarray]:
 
     with _ctx(tm):
         a, b, g, l = cp.asarray(y_hat), cp.asarray(y), cp.zeros_like(cp.asarray(y_hat)), cp.zeros(1, dtype=cp.float32)
-        dev.cu.loss_gradient(*dev._kernel_config(1), (a, b, g, l))
+        dev.cu.loss_gradient(1, (a, b, g, l))
         return float(l.get()[0]), g.get()

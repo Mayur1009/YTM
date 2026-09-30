@@ -31,9 +31,7 @@ class DeviceConfig:
     device: Literal["cpu", "cuda"] | str = "cpu:1"
 
     # cuda
-    grid_size: int | None = None
     block_size: int = 256
-    warps_per_clause: int = 1
 
     def __post_init__(self):
         self.kind, self.n = parse_device(self.device)
@@ -43,6 +41,4 @@ class T_DeviceConfig(TypedDict, total=False):
     device: Literal["cpu", "cuda"] | str
 
     # cuda
-    grid_size: int | None
     block_size: int
-    warps_per_clause: int

@@ -11,14 +11,29 @@ from ..utils import read_file
 from .base import BaseDevice
 
 
-class Kernel:
-    def __init__(self, code: str, dev: cp.cuda.Device):
-        self._dev = dev
+class Launcher:
+    def __init__(self, fn: cp.RawKernel, dev: cp.cuda.Device, block_size: int, n_sms: int):
+        self.fn = fn
+        self.block_size = block_size
         with dev:
-            self._mod = cp.RawModule(code=code, backend="nvrtc", options=())
+            per_sm = cp.cuda.driver.occupancyMaxActiveBlocksPerMultiprocessor(fn.kernel.ptr, block_size, 0)
+        self.max_grid_size = max(1, n_sms * per_sm)
+
+    def __call__(self, n: int, args: tuple):
+        grid_size = min(max(1, (n + self.block_size - 1) // self.block_size), self.max_grid_size)
+        self.fn((grid_size, 1, 1), (self.block_size, 1, 1), args)
+
+
+class Kernel:
+    def __init__(self, code: str, dev: cp.cuda.Device, block_size: int, n_sms: int):
+        self._dev = dev
+        self._block_size = block_size
+        self._n_sms = n_sms
+        with dev:
+            self._mod = cp.RawModule(code=code)
             self._mod.compile()
 
-    def __getattr__(self, name: str) -> cp.RawKernel:
+    def __getattr__(self, name: str) -> Launcher:
         if name.startswith("_"):
             raise AttributeError(name)
         with self._dev:
@@ -26,8 +41,9 @@ class Kernel:
                 fn = self._mod.get_function(name)
             except cp.cuda.driver.CUDADriverError as e:
                 raise AttributeError(name) from e
-        setattr(self, name, fn)
-        return fn
+        launcher = Launcher(fn, self._dev, self._block_size, self._n_sms)
+        setattr(self, name, launcher)
+        return launcher
 
 
 class CUDADevice(BaseDevice):
@@ -42,11 +58,9 @@ class CUDADevice(BaseDevice):
         props = cp.cuda.runtime.getDeviceProperties(dev.n)
         self._warp_size = props["warpSize"]
         block_size = min(max(1, int(dev.block_size)), props["maxThreadsPerBlock"])
-        self._block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
-        self._max_grid_size = min(props["multiProcessorCount"] * 32, props["maxGridSize"][0])
-        self._grid_size = None if dev.grid_size is None else min(max(1, int(dev.grid_size)), self._max_grid_size)
+        block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
 
-        self.cu = Kernel(self._build_code(), self.cuda_dev)
+        self.cu = Kernel(self._build_code(), self.cuda_dev, block_size, props["multiProcessorCount"])
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
@@ -56,10 +70,6 @@ class CUDADevice(BaseDevice):
 
     def _bind(self):
         pass
-
-    def _kernel_config(self, n: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-        gs = self._grid_size if self._grid_size is not None else min((n + self._block_size - 1) // self._block_size, self._max_grid_size)
-        return (gs, 1, 1), (self._block_size, 1, 1)
 
     def _to_host(self, arr) -> np.ndarray:
         with self.cuda_dev:
@@ -91,7 +101,7 @@ class CUDADevice(BaseDevice):
                 self.packed_clauses.is_clause_synced.fill(0)
 
             self.cu.pack_clauses(
-                *self._kernel_config(self.config._total_clauses * self._warp_size),
+                self.config._total_clauses * self._warp_size,
                 (
                     self.ta_states,
                     self.therm_bits,
@@ -113,7 +123,7 @@ class CUDADevice(BaseDevice):
         pc = self.packed_clauses
 
         self.cu.evaluate(
-            *self._kernel_config(cfg._total_clauses * self._warp_size),
+            cfg._total_clauses * self._warp_size,
             (
                 np.uint64(rng_key),
                 buf.X,
@@ -133,7 +143,7 @@ class CUDADevice(BaseDevice):
 
     def _fit_voting(self, buf):
         self.cu.sum_votes(
-            *self._kernel_config(self.config.n_classes * self._warp_size),
+            self.config.n_classes * self._warp_size,
             (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
         )
 
@@ -151,7 +161,7 @@ class CUDADevice(BaseDevice):
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu.calc_clause_outputs(
-                    *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
+                    bs * cfg._total_clauses * self._warp_size,
                     (
                         Xb,
                         clause_outputs,
@@ -166,7 +176,7 @@ class CUDADevice(BaseDevice):
                 )
 
                 self.cu.sum_votes(
-                    *self._kernel_config(bs * cfg.n_classes * self._warp_size),
+                    bs * cfg.n_classes * self._warp_size,
                     (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
                 )
 
@@ -186,7 +196,7 @@ class CUDADevice(BaseDevice):
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
                 self.cu.calc_clause_outputs(
-                    *self._kernel_config(bs * cfg._total_clauses * self._warp_size),
+                    bs * cfg._total_clauses * self._warp_size,
                     (
                         Xb,
                         clause_outputs,
@@ -217,7 +227,7 @@ class CUDADevice(BaseDevice):
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
                 self.cu.calc_clause_outputs_patchwise(
-                    *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
+                    bs * cfg._total_clauses * cfg._n_patches,
                     (
                         Xb,
                         patch_output,
@@ -246,7 +256,7 @@ class CUDADevice(BaseDevice):
             output = cp.zeros(cfg._dim, dtype=np.float32)
 
             self.cu.wic(
-                *self._kernel_config(cfg._total_clauses * cfg._n_patches),
+                cfg._total_clauses * cfg._n_patches,
                 (
                     np.int32(class_id),
                     np.int32(polarity),
@@ -279,7 +289,7 @@ class CUDADevice(BaseDevice):
                 out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
 
                 self.cu.wac(
-                    *self._kernel_config(bs * cfg._total_clauses * cfg._n_patches),
+                    bs * cfg._total_clauses * cfg._n_patches,
                     (
                         target_classes_gpu,
                         np.int32(polarity),
