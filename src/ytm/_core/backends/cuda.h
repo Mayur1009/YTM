@@ -45,3 +45,12 @@ INLINE_FN int warp_compact_slot(const warp_t& warp, bool keep, int* offset) {
     return slot;
 }
 
+INLINE_FN void fb_list_append(uint* fb_count, uint* fb_ids, ull clause) {
+    auto g = cg::coalesced_threads();
+    uint base;
+    if (g.thread_rank() == 0)
+        base = atomicAdd(fb_count, g.size());
+    base = g.shfl(base, 0);
+    fb_ids[base + g.thread_rank()] = (uint)clause;
+}
+
