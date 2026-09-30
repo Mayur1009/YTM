@@ -56,12 +56,17 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
 
 void update_clauses(const ull seed, const int8_t* restrict clause_output, const NPATCHES_T* restrict selected_patch_ids,
                     const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
-                    const uint8_t* restrict feedback_type, TA_STATE_T* restrict global_ta_states,
+                    const uint8_t* restrict feedback_type, const uint* restrict fb_count,
+                    const uint* restrict fb_ids, TA_STATE_T* restrict global_ta_states,
                     int8_t* restrict is_clause_synced) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
+    const uint n = *fb_count;
+    if (n == 0)
+        return;
 
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+    for (ull i = 0; i < n; i++) {
+        ull clause = fb_ids[i];
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)
@@ -87,10 +92,16 @@ void update_clauses(const ull seed, const int8_t* restrict clause_output, const 
     }
 }
 
-void update_weights(const uint8_t* restrict feedback_type, float* restrict clause_weights) {
+void update_weights(const uint8_t* restrict feedback_type, const uint* restrict fb_count, const uint* restrict fb_ids,
+                    float* restrict clause_weights) {
 #if WEIGHTED
+    const uint n = *fb_count;
+    if (n == 0)
+        return;
+
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+    for (ull i = 0; i < n; i++) {
+        ull clause = fb_ids[i];
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {

@@ -90,7 +90,7 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
         )
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
-        self.lib.update_weights(buf.p_feedback_type, self.p_clause_weights)
+        self.lib.update_weights(buf.p_feedback_type, buf.p_fb_count, buf.p_fb_ids, self.p_clause_weights)
 
     def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         self.lib.update_clauses(
@@ -101,6 +101,8 @@ class CPUDevice(DiscreteBaseDevice, CoreCPUDevice):
             c_int(e),
             self.p_literal_offsets,
             buf.p_feedback_type,
+            buf.p_fb_count,
+            buf.p_fb_ids,
             self.p_ta_states,
             self.p_is_clause_synced,
         )

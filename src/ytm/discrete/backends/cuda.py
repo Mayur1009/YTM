@@ -104,6 +104,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
                 np.int32(e),
                 self.literal_offsets,
                 buf.feedback_type,
+                buf.fb_count,
+                buf.fb_ids,
                 self.ta_states,
                 self.packed_clauses.is_clause_synced,
             ),
@@ -112,5 +114,5 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
         self.cu.update_weights(
             self.config._total_clauses,
-            (buf.feedback_type, self.clause_weights),
+            (buf.feedback_type, buf.fb_count, buf.fb_ids, self.clause_weights),
         )

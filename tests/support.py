@@ -103,13 +103,37 @@ def make_buffers(tm, X, Y):
     return buf
 
 
-def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1) -> None:
-    """Pack, evaluate (so patch selection and clause outputs exist), then apply the given feedback."""
+def fb_ids_from_dense(tm, fb) -> np.ndarray:
+    """Global clause ids with any feedback in a dense `feedback_type`, sorted: the list `decide` builds, in order."""
+    cfg = tm.config
+    has_fb = np.asarray(fb) != FB_NONE
+    if has_fb.ndim == 1:  # guided delta_l: one entry per global clause
+        ids = np.flatnonzero(has_fb)
+    elif cfg._total_clauses == cfg._n_clauses:  # coalesced: row is the clause, columns are classes
+        ids = np.flatnonzero(has_fb.any(axis=1))
+    else:  # one bank per class: row is the clause within its bank, column is the bank
+        rel, cls = np.nonzero(has_fb)
+        ids = cls * cfg._n_clauses + rel
+    return np.sort(ids).astype(np.uint32)
+
+
+def fill_fb_list(tm, buf, ids) -> None:
+    ids = np.asarray(ids, dtype=np.uint32)
+    fill(tm, buf.fb_ids[: len(ids)], ids)
+    fill(tm, buf.fb_count, [len(ids)])
+
+
+def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
+    """Pack, evaluate (so patch selection and clause outputs exist), then apply the given feedback.
+
+    The feedback list comes from `fb` unless `ids` overrides it.
+    """
     dev = tm.dev
     with _ctx(tm):
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(buf, e, key)
         fill(tm, buf.feedback_type, fb)
+        fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
         dev._fit_apply_fb(buf, e, key)
 
 
@@ -124,11 +148,12 @@ def decide_feedback(tm, buf, votes, e: int = 0, key: int = 1) -> np.ndarray:
     return host(tm, buf.feedback_type)
 
 
-def update_weights(tm, buf, fb=None) -> None:
+def update_weights(tm, buf, fb=None, ids=None) -> None:
     dev = tm.dev
     with _ctx(tm):
         if fb is not None:
             fill(tm, buf.feedback_type, fb)
+            fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
         dev._fit_update_weights(buf)
 
 

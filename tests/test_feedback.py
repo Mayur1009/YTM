@@ -7,15 +7,18 @@ from .support import (
     FB_T1A,
     FB_T1B,
     FB_T2,
+    _ctx,
     apply_feedback,
     decide_feedback,
     discrete,
+    fb_ids_from_dense,
     fill,
     host,
     make_buffers,
     set_clauses,
     set_ta_states,
     set_weights,
+    update_weights,
 )
 
 ROW = [10, 20, 30, 40, 50, 60, 70, 80]  # x0..x3 then not x0..not x3
@@ -144,16 +147,48 @@ def test_decide_lists_each_clause_with_feedback_once(device, coalesced, threads)
 
     buf = make_buffers(tm, [[1, 0, 1, 0]], [[50.0, -50.0, -50.0]])
     for key in range(1, 6):
-        fb = decide_feedback(tm, buf, [-50.0, 50.0, 50.0], key=key) != FB_NONE  # |prob| = 0.5, a mix of fb and none
-        if coalesced:
-            expected = np.flatnonzero(fb.any(axis=1))
-        else:
-            rel, cls = np.nonzero(fb)
-            expected = np.sort(cls * cfg._n_clauses + rel)
+        fb = decide_feedback(tm, buf, [-50.0, 50.0, 50.0], key=key)  # |prob| = 0.5, a mix of fb and none
+        expected = fb_ids_from_dense(tm, fb)
         count = int(host(tm, buf.fb_count)[0])
         assert 0 < len(expected) < cfg._total_clauses
         assert count == len(expected)
         assert np.array_equal(np.sort(host(tm, buf.fb_ids)[:count]), expected)
+
+
+def test_update_touches_only_listed_clauses(device):
+    """Every clause has Type I-a in feedback_type, but only the listed ones may change (TA states and weights)."""
+    tm = discrete("binary", device, n_clauses=4)
+    cfg = tm.config
+    states = np.tile(ROW, (cfg._total_clauses, 1))
+    all_t1a = [[FB_T1A]] * cfg._n_clauses
+
+    for ids in ([], [1, 3]):
+        set_ta_states(tm, states)
+        set_weights(tm, [[2.0, -2.0, 2.0, -2.0]])
+        buf = make_buffers(tm, [[1, 0, 1, 0]], [[0.0]])
+        apply_feedback(tm, buf, all_t1a, ids=ids)
+        update_weights(tm, buf)
+
+        changed_states = np.flatnonzero((host(tm, tm.dev.ta_states) != states).any(axis=1))
+        changed_weights = np.flatnonzero(host(tm, tm.dev.clause_weights).ravel() != [2.0, -2.0, 2.0, -2.0])
+        assert list(changed_states) == ids
+        assert list(changed_weights) == ids
+
+
+def test_next_sample_does_not_reapply_the_previous_list(device):
+    """A sample where every clause is dropped must end with an empty list, whatever the sample before left there."""
+    tm = _decide_setup(device)
+    buf = make_buffers(tm, X_DEC, [[10.0]])
+    decide_feedback(tm, buf, [-10.0])
+    assert int(host(tm, buf.fb_count)[0]) > 0
+
+    fill(tm, buf.clause_drop_mask, np.ones(6, dtype=np.int8))
+    before = host(tm, tm.dev.ta_states)
+    decide_feedback(tm, buf, [-10.0])
+    assert int(host(tm, buf.fb_count)[0]) == 0
+    with _ctx(tm):
+        tm.dev._fit_apply_fb(buf, 0, 1)
+    assert np.array_equal(host(tm, tm.dev.ta_states), before)
 
 
 TRIALS = 4000

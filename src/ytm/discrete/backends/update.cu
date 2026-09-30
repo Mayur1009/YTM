@@ -65,13 +65,15 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
 // over the literals.
 extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_output, const NPATCHES_T* selected_patch_ids,
                                           const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
-                                          const uint8_t* feedback_type, TA_STATE_T* global_ta_states,
-                                          int8_t* is_clause_synced) {
+                                          const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
+                                          TA_STATE_T* global_ta_states, int8_t* is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     const FBOUND_T* Xe = &X[sample_offset(e)];
+    const uint n = *fb_count;
 
-    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
+    WARP_STRIDE_LOOP(i, n) {
+        ull clause = fb_ids[i];
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
 #if (N_PATCHES > 1)
@@ -98,9 +100,13 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
     }
 }
 
-extern "C" __global__ void update_weights(const uint8_t* feedback_type, float* clause_weights) {
+extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
+                                          float* clause_weights) {
 #if WEIGHTED
-    GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
+    const uint n = *fb_count;
+
+    GRID_STRIDE_LOOP(i, n) {
+        ull clause = fb_ids[i];
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
