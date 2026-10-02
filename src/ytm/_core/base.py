@@ -62,6 +62,10 @@ class BaseTM(abc.ABC):
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
 
+    @abc.abstractmethod
+    def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
+        """Map class sums from `score`/`predict` to [0, 1]."""
+
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.transform(self._prepare_X(X), batch_size, force_repack)
 

@@ -23,7 +23,7 @@ from io import BytesIO
 import numpy as np
 import PIL.Image
 from datasets import Image, load_dataset
-from sklearn.metrics import f1_score
+from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
 from ytm.discrete import MultiOutputTM as DiscreteTM
 from ytm.guided import MultiOutputTM as GuidedTM
@@ -68,6 +68,16 @@ def load_celeba(levels: int, gray: bool):
     )
 
 
+def multilabel_metrics(y, pred, scores):
+    # Scores rank the samples per label, so raw votes (discrete) and probabilities (guided) both work for the AUCs.
+    return {
+        "Macro F1": f"{f1_score(y, pred, average='macro', zero_division=0) * 100:.2f}%",
+        "Weighted F1": f"{f1_score(y, pred, average='weighted', zero_division=0) * 100:.2f}%",
+        "ROC AUC": f"{roc_auc_score(y, scores, average='macro') * 100:.2f}%",
+        "PR AUC": f"{average_precision_score(y, scores, average='macro') * 100:.2f}%",
+    }
+
+
 def train_model(tm, xtrain, ytrain, xtest, ytest, epochs: int, clause_drop_p: float, seed: int, model_name: str):
     rng = np.random.default_rng(seed)
     for epoch in range(epochs):
@@ -80,22 +90,17 @@ def train_model(tm, xtrain, ytrain, xtest, ytest, epochs: int, clause_drop_p: fl
             loss = tm.fit(xtrain_epoch, ytrain, clause_drop_p=clause_drop_p)
 
         with (test_timer := Timer()):
-            test_pred, _ = tm.predict(xtest)
+            test_pred, test_scores = tm.predict(xtest)
 
         with (train_timer := Timer()):
-            train_pred, _ = tm.predict(xtrain)
+            train_pred, train_scores = tm.predict(xtrain)
 
         train_log = {
-            "Macro F1": f"{f1_score(ytrain, train_pred, average='macro', zero_division=0) * 100:.2f}%",
-            "Acc": f"{(train_pred == ytrain).mean() * 100:.2f}%",
+            **multilabel_metrics(ytrain, train_pred, tm.to_prob(train_scores)),
             "Eval Time": f"{train_timer.elapsed:.2f}s",
             "Fit Time": f"{fit_timer.elapsed:.2f}s",
         }
-        test_log = {
-            "Macro F1": f"{f1_score(ytest, test_pred, average='macro', zero_division=0) * 100:.2f}%",
-            "Acc": f"{(test_pred == ytest).mean() * 100:.2f}%",
-            "Eval Time": f"{test_timer.elapsed:.2f}s",
-        }
+        test_log = {**multilabel_metrics(ytest, test_pred, tm.to_prob(test_scores)), "Eval Time": f"{test_timer.elapsed:.2f}s"}
 
         if loss is not None:  # Only loss-guided TM returns loss
             train_log["Loss"] = f"{loss:.4f}"

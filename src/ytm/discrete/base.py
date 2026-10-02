@@ -58,6 +58,10 @@ class BaseTM(CoreBaseTM):
             class_sums = np.clip(class_sums, self.config._T_min, self.config._T_max)
         return class_sums
 
+    def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
+        t_min, t_max = self.config._T_min, self.config._T_max
+        return (np.clip(class_sums, t_min, t_max) - t_min) / (t_max - t_min)
+
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"

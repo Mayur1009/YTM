@@ -53,3 +53,7 @@ class BaseTM(CoreBaseTM):
 
     def raw_votes(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.raw_votes(self._prepare_X(X), batch_size, force_repack)
+
+    def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
+        # `score`/`predict` already apply the activation.
+        return class_sums
