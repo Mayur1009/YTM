@@ -1,9 +1,4 @@
-"""Train discrete or guided regression TM on Diabetes (442 patients, disease progression after one year, 25-346).
-
-Features: age, sex, bmi, bp, s1-s6 (blood serum). Raw values, not sklearn's scaled version.
-`sex` is binary (1/2 -> 0/1) and kept as is; the other 9 features are discretized per feature into --bins levels
-(sklearn KBinsDiscretizer). Each feature therefore has its own range, passed to the TM as a per-feature feat_maxs array.
-Random 70/30 train/test split.
+"""Train discrete or guided regression TM on Diabetes (442 patients, disease progression after one year).
 
 Usage:
     python diabetes.py {discrete,guided} [options]
@@ -15,7 +10,7 @@ Examples:
 
 Options:
     - python diabetes.py <discrete/guided> --help shows all options.
-    - Common:    --epochs --bins --strategy uniform|quantile --n_clauses --s --max_includes --seed --device cpu:N|cuda:N
+    - Common:    --epochs --bins --strategy uniform|quantile --n_clauses --s --max_includes --boost_tp_inc 0|1 --boost_tp_dec 0|1 --seed --device cpu:N|cuda:N
     - discrete:  --T
     - guided:    --lr --lambda --act_loss mse|mae|huber
 """
@@ -31,9 +26,9 @@ from sklearn.preprocessing import KBinsDiscretizer
 from ytm.discrete import RegressionTM as DiscreteTM
 from ytm.guided import RegressionTM as GuidedTM
 from ytm.guided.backends.act_loss import MAE, MSE, Huber
+from ytm.utils import Timer, print_table
 
 ACT_LOSSES = {"mse": MSE, "mae": MAE, "huber": Huber}
-SEX = 1  # column index of the binary feature
 
 
 def load(bins: int, strategy: str, seed: int):
@@ -41,25 +36,63 @@ def load(bins: int, strategy: str, seed: int):
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y.astype(np.float32), test_size=0.3, random_state=seed)
 
     # Continuous features: per-feature bins. Sex: 1/2 -> 0/1.
-    cont = [i for i in range(X.shape[1]) if i != SEX]
+    cont = [i for i in range(X.shape[1]) if i != 1]
     d = KBinsDiscretizer(n_bins=bins, encode="ordinal", strategy=strategy)
     d.fit(X_train[:, cont])
 
     def encode(X):
         out = np.empty(X.shape, dtype=np.int32)
         out[:, cont] = d.transform(X[:, cont])
-        out[:, SEX] = X[:, SEX] - 1
+        out[:, 1] = X[:, 1] - 1  # feat: sex = 0|1
         return out
 
     # Highest level per feature: bins-1 for the discretized ones, 1 for sex.
     feat_maxs = np.empty(X.shape[1], dtype=np.int32)
     feat_maxs[cont] = d.n_bins_ - 1
-    feat_maxs[SEX] = 1
+    feat_maxs[1] = 1
     return encode(X_train), Y_train, encode(X_test), Y_test, feat_maxs
 
 
 def regression_metrics(y, pred):
-    return f"RMSE {root_mean_squared_error(y, pred):.3f}  MAE {mean_absolute_error(y, pred):.3f}  R2 {r2_score(y, pred):.3f}"
+    return {
+        "RMSE": f"{root_mean_squared_error(y, pred):.3f}",
+        "MAE": f"{mean_absolute_error(y, pred):.3f}",
+        "R2": f"{r2_score(y, pred):.3f}",
+    }
+
+
+def train_model(tm, xtrain, ytrain, xtest, ytest, epochs: int, model_name: str):
+    # Standardize targets with the training mean/std, metrics are reported in original units.
+    mu, sd = ytrain.mean(), ytrain.std()
+    ytrain_std = (ytrain - mu) / sd
+
+    for epoch in range(epochs):
+        with (fit_timer := Timer()):
+            loss = tm.fit(xtrain, ytrain_std)
+
+        with (test_timer := Timer()):
+            test_pred = tm.predict(xtest)[0] * sd + mu
+
+        with (train_timer := Timer()):
+            train_pred = tm.predict(xtrain)[0] * sd + mu
+
+        train_log = {
+            **regression_metrics(ytrain, train_pred),
+            "Eval Time": f"{train_timer.elapsed:.2f}s",
+            "Fit Time": f"{fit_timer.elapsed:.2f}s",
+        }
+        test_log = {**regression_metrics(ytest, test_pred), "Eval Time": f"{test_timer.elapsed:.2f}s"}
+
+        if loss is not None:  # Only loss-guided TM returns loss
+            train_log["Loss"] = f"{loss:.4f}"
+
+        print_table(
+            f"{model_name} epoch {epoch + 1}/{epochs}",
+            {
+                "Train": train_log,
+                "Test": test_log,
+            },
+        )
 
 
 if __name__ == "__main__":
@@ -70,21 +103,23 @@ if __name__ == "__main__":
     # Common args
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--epochs", type=int, default=50)
-    common.add_argument("--bins", type=int, default=8, help="discretization levels per continuous feature")
+    common.add_argument("--bins", type=int, default=6, help="discretization levels per continuous feature")
     common.add_argument("--strategy", choices=["uniform", "quantile"], default="quantile")
-    common.add_argument("--n_clauses", type=int, default=500)
+    common.add_argument("--n_clauses", type=int, default=100)
     common.add_argument("--s", type=float, default=2.0)
     common.add_argument("--max_includes", type=int, default=None, help="max literals per clause (default: no limit)")
+    common.add_argument("--boost_tp_inc", type=lambda v: bool(int(v)), default=False, metavar="0|1")
+    common.add_argument("--boost_tp_dec", type=lambda v: bool(int(v)), default=False, metavar="0|1")
     common.add_argument("--seed", type=int, default=10)
     common.add_argument("--device", type=str, default="cpu:1", help="cpu:N_THREADS or cuda:GPU_ID")
 
     # Discrete args
     discrete = models.add_parser("discrete", parents=[common])
-    discrete.add_argument("--T", type=float, default=1000)
+    discrete.add_argument("--T", type=float, default=300)
 
     # Guided args
     guided = models.add_parser("guided", parents=[common])
-    guided.add_argument("--lr", type=float, default=0.05)
+    guided.add_argument("--lr", type=float, default=0.03)
     guided.add_argument("--lambda", dest="lambda_", type=float, default=1.0)
     guided.add_argument("--act_loss", choices=list(ACT_LOSSES), default="mse")
 
@@ -100,20 +135,13 @@ if __name__ == "__main__":
 
     X_train, Y_train, X_test, Y_test, feat_maxs = load(bins, strategy, params["seed"])
 
-    # Standardize targets with the training mean/std, metrics are reported in original units.
-    mu, sd = Y_train.mean(), Y_train.std()
-    Y_train_std = (Y_train - mu) / sd
-
-    # Model Initialization. Discrete maps its votes [0, T] onto y_range.
+    # Model Initialization.
     n_features = X_train.shape[1]
     if model_name == "discrete":
-        tm = DiscreteTM(**params, dim=(n_features, 1, 1), y_range=(float(Y_train_std.min()), float(Y_train_std.max())), feat_maxs=feat_maxs)
+        y_std = (Y_train - Y_train.mean()) / Y_train.std()
+        tm = DiscreteTM(**params, dim=(n_features, 1, 1), y_range=(float(y_std.min()), float(y_std.max())), feat_maxs=feat_maxs)
     else:
         tm = GuidedTM(**params, dim=(n_features, 1, 1), feat_maxs=feat_maxs)
 
     # Training
-    for epoch in range(epochs):
-        loss = tm.fit(X_train, Y_train_std)
-        train_pred, test_pred = tm.predict(X_train)[0] * sd + mu, tm.predict(X_test)[0] * sd + mu
-        loss_str = f"  loss {loss:.4f}" if loss is not None else ""  # Only loss-guided TM returns loss
-        print(f"{model_name} epoch {epoch + 1}/{epochs}  train {regression_metrics(Y_train, train_pred)}  test {regression_metrics(Y_test, test_pred)}{loss_str}")
+    train_model(tm, X_train, Y_train, X_test, Y_test, epochs=epochs, model_name=model_name)
