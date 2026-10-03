@@ -84,31 +84,23 @@ INLINE_FN void t1a_therm(ull rng_key, uint* RESTRICT rng_counter, int lit_start,
 INLINE_FN void t1a_binary(ull rng_key, uint* RESTRICT rng_counter, int lit, int val, TA_STATE_T* RESTRICT ta_states) {
     if (val) {
         // Increment lit
-#if BOOST_TP_INC == 0
-        if (rand_uniform(rng_key, rng_counter) < 1.0f - S_INV)
-#endif
+        if (BOOST_TP_INC || rand_uniform(rng_key, rng_counter) < 1.0f - S_INV)
             safe_lit_inc(lit, ta_states);
 
 #if NEGATED_LITERALS
         // Decrement neg_lit
-#if BOOST_TP_DEC == 0
-        if (rand_uniform(rng_key, rng_counter) < S_INV)
-#endif
+        if (BOOST_TP_DEC || rand_uniform(rng_key, rng_counter) < S_INV)
             safe_lit_dec(lit + N_LITERALS / 2, ta_states);
 #endif
 
     } else {
         // Decrement lit
-#if BOOST_TP_DEC == 0
-        if (rand_uniform(rng_key, rng_counter) < S_INV)
-#endif
+        if (BOOST_TP_DEC || rand_uniform(rng_key, rng_counter) < S_INV)
             safe_lit_dec(lit, ta_states);
 
 #if NEGATED_LITERALS
         // Increment neg_lit
-#if BOOST_TP_INC == 0
-        if (rand_uniform(rng_key, rng_counter) < 1.0f - S_INV)
-#endif
+        if (BOOST_TP_INC || rand_uniform(rng_key, rng_counter) < 1.0f - S_INV)
             safe_lit_inc(lit + N_LITERALS / 2, ta_states);
 #endif
     }
