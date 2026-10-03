@@ -14,7 +14,7 @@ Examples:
 Options:
     - python xor.py <discrete/guided> --help shows all options.
     - Common:    --nbits --noisybits --noise --N --repeat_test --epochs --n_clauses --s --n_states --weighted 0|1 --coalesced 0|1
-                 --boost_tp_inc 0|1 --boost_tp_dec 0|1 --seed --device cpu:N|cuda:N --save PATH
+                 --boost_tp_inc 0|1 --boost_tp_dec 0|1 --seed --device cpu:N|cuda:N --save PATH --print
     - discrete:  --T
     - guided:    --lr --lambda
 """
@@ -53,10 +53,13 @@ if __name__ == "__main__":
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--N", type=int, default=1000, help="training set size")
     common.add_argument("--repeat_test", type=int, default=1, help="test set = all 2^nbits patterns, each repeated this many times")
+
     common.add_argument("--nbits", type=int, default=2, help="relevant bits, label is their parity")
     common.add_argument("--noisybits", type=int, default=0, help="extra random bits")
     common.add_argument("--noise", type=float, default=0.1, help="add noise to training labels")
-    common.add_argument("--epochs", type=int, default=50)
+
+    common.add_argument("--epochs", type=int, default=1)
+
     common.add_argument("--n_clauses", type=int, default=4)
     common.add_argument("--s", type=float, default=4.0)
     common.add_argument("--n_states", type=int, default=10)
@@ -67,6 +70,7 @@ if __name__ == "__main__":
     common.add_argument("--seed", type=int, default=10)
     common.add_argument("--device", type=str, default="cpu:1", help="cpu:N_THREADS or cuda:GPU_ID")
     common.add_argument("--save", type=str, default=None, help="pickle the trained model to this path, e.g. xor.ytm")
+    common.add_argument("--print", dest="print_clauses", action="store_true", help="print the learned clauses after training")
 
     # Discrete args
     discrete = models.add_parser("discrete", parents=[common])
@@ -84,7 +88,7 @@ if __name__ == "__main__":
     params = vars(args)
     model_name, epochs, save = params.pop("model"), params.pop("epochs"), params.pop("save")
     nbits, noisybits, noise, N = params.pop("nbits"), params.pop("noisybits"), params.pop("noise"), params.pop("N")
-    repeat_test = params.pop("repeat_test")
+    repeat_test, show_clauses = params.pop("repeat_test"), params.pop("print_clauses")
 
     # Data: noisy training labels, clean test labels
     rng = np.random.default_rng(params["seed"] + 50)
@@ -101,6 +105,10 @@ if __name__ == "__main__":
         train_acc = (tm.predict(X_train)[0].reshape(-1) == Y_train).mean()
         test_acc = (tm.predict(X_test)[0].reshape(-1) == Y_test).mean()
         print(f"{model_name} epoch {epoch + 1}/{epochs}  train acc {train_acc * 100:.2f}%  test acc {test_acc * 100:.2f}%")
+
+    if show_clauses:
+        # Relevant bits are x0, x1, ..., the random ones n0, n1, ...
+        tm.print_clauses([f"x{i}" for i in range(nbits)] + [f"n{i}" for i in range(noisybits)], sort="w0,len")
 
     if save is not None:
         with open(save, "wb") as f:
