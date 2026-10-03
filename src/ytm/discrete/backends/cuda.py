@@ -5,8 +5,9 @@ from typing import Any
 import cupy as cp
 import numpy as np
 
+from ..._core.backends.base import FitBuffers
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
-from ..._core.utils import FitBuffers, read_file, tqdm_bar
+from ..._core.utils import read_file, tqdm_bar
 from .base import BaseDevice as DiscreteBaseDevice
 
 

@@ -1,12 +1,36 @@
 import abc
-from dataclasses import fields
+from dataclasses import dataclass, fields
 
 import numpy as np
 
 from .backends.base import BaseDevice
 from .config import BaseTMConfig
 from .device_config import DeviceConfig
-from .utils import ClauseInfo, prepare_X
+from .utils import prepare_X
+
+
+@dataclass
+class ClauseInfo:
+    """Packed clause representation returned by :meth:`BaseTM.get_clauses`.
+
+    Attributes
+    ----------
+    feature_bounds : ndarray of shape (n_clause_banks, n_clauses, n_raw_patch_feats * 2)
+        Closed ``[lower, upper]`` feature inclusion bounds per clause.
+    position_bounds : ndarray of shape (n_clause_banks, n_clauses, 4) or None
+        Closed ``[min_y, max_y, min_x, max_x]`` position bounds per clause.
+        ``None`` when the input has a single patch.
+    has_contra : ndarray of shape (n_clause_banks, n_clauses), dtype int8
+        ``1`` when the clause is unsatisfiable (contains a contradiction).
+    clause_len : ndarray of shape (n_clause_banks, n_clauses), dtype int
+        Number of included literals per clause. ``0`` means the clause is
+        vacuous and fires on every input.
+    """
+
+    feature_bounds: np.ndarray
+    position_bounds: np.ndarray | None
+    has_contra: np.ndarray
+    clause_len: np.ndarray
 
 
 class BaseTM(abc.ABC):
@@ -27,8 +51,7 @@ class BaseTM(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def _cuda_device_cls() -> type[BaseDevice]:
-        ...
+    def _cuda_device_cls() -> type[BaseDevice]: ...
 
     def _build_device(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None) -> BaseDevice:
         cls = self.cpu_device_cls if device_config.kind == "cpu" else self._cuda_device_cls()

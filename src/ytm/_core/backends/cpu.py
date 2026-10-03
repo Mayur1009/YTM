@@ -6,8 +6,8 @@ from typing import Any
 
 import numpy as np
 
-from ..utils import FitBuffers, read_file, tqdm_bar
-from .base import BaseDevice
+from ..utils import read_file, tqdm_bar
+from .base import BaseDevice, FitBuffers
 from .toolchain import Toolchain
 
 int8_p = POINTER(c_int8)
