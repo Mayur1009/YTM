@@ -197,7 +197,7 @@ class BaseTM(abc.ABC):
         sym = self._symbols(ascii)
         names = feat_names if feat_names is not None else [f"X{i}" for i in range(cfg._n_raw_patch_feats)]
         clauses = self.get_clauses(force_repack=False)
-        cells = [c for c in self._clause_cells(clauses, class_id, clause_id, names, sym) if c]
+        cells = [text for text, _ in self._clause_cells(clauses, class_id, clause_id, names, sym) if text]
         rule = f" {sym[0]} ".join(cells) if cells else "(empty)"
         if not include_weight:
             return rule
@@ -257,10 +257,24 @@ class BaseTM(abc.ABC):
                 pass
         render = self._render_rich if use_rich else self._render_plain
 
-        def join_slots(cell_lists: list[list[str]]) -> list[str]:
+        def join_slots(cell_lists: list[list[tuple[str, bool]]]) -> list[list[tuple[str, bool]]]:
             # Pad every slot to its widest cell so the `and` symbols line up, drop slots empty in every row.
-            widths = [max(len(cl[i]) for cl in cell_lists) for i in range(len(cell_lists[0]))]
-            return [f" {and_} ".join(cell.center(w) for cell, w in zip(cl, widths) if w > 0) for cl in cell_lists]
+            # Kept as (text, is_contra) segments so the renderer can mark contradictions.
+            widths = [max(len(cl[i][0]) for cl in cell_lists) for i in range(len(cell_lists[0]))]
+            out = []
+            for cl in cell_lists:
+                segs = []
+                for (text, bad), w in zip(cl, widths, strict=True):
+                    if w == 0:
+                        continue
+                    if segs:
+                        segs.append((f" {and_} ", False))
+                    segs.append((text.center(w), bad))
+                out.append(segs)
+            return out
+
+        def seg_len(segs: list[tuple[str, bool]]) -> int:
+            return sum(len(text) for text, _ in segs)
 
         for bank in range(cfg._n_clause_banks):
 
@@ -300,7 +314,7 @@ class BaseTM(abc.ABC):
 
             rows = {}
             for i, c in enumerate(shown):
-                row = [str(c), contra if clauses.has_contra[bank, c] else "_", str(int(clauses.clause_len[bank, c])), w_col[i]]
+                row = [str(c), [(contra, True)] if clauses.has_contra[bank, c] else "_", str(int(clauses.clause_len[bank, c])), w_col[i]]
                 if has_pos and positions is not None:
                     row.append(positions[i])
                 rows[c] = row + [rules[i]]
@@ -308,28 +322,29 @@ class BaseTM(abc.ABC):
             header = ["ci", contra, "|C|", "W[:, ci]" if cfg.coalesced else f"W[{bank}, ci]"]
             justify = ["right", "center", "right", "right"]
             if has_pos and positions is not None:
-                header.append("Position (row, col)".center(max(len(p) for p in positions)))
+                header.append("Position (row, col)".center(max(seg_len(p) for p in positions)))
                 justify.append("left")
-            header.append("C[ci]".center(max(len(r) for r in rules)))
+            header.append("C[ci]".center(max(seg_len(r) for r in rules)))
             justify.append("left")
 
             title = "Clauses (coalesced)" if cfg.coalesced else f"Class: {bank}"
             render(title, header, justify, [[rows[c] for c in s] for s in sections], footers)
 
-    def _clause_cells(self, clauses: ClauseInfo, class_id: int, clause_id: int, feat_names: list[str], sym: tuple[str, ...]) -> list[str]:
-        """Unpadded cells of one clause: [row, col] when there are patches, then one per feature, "" when unconstrained."""
+    def _clause_cells(self, clauses: ClauseInfo, class_id: int, clause_id: int, feat_names: list[str], sym: tuple[str, ...]) -> list[tuple[str, bool]]:
+        """Unpadded (text, is_contra) cells of one clause: [row, col] when there are patches, then one per feature, "" when unconstrained."""
         cfg = self.config
         bank = 0 if cfg.coalesced else class_id
         cells = []
 
         if clauses.position_bounds is not None:
             r0, r1, c0, c1 = (int(v) for v in clauses.position_bounds[bank, clause_id])
-            cells.append(self._bound_str("row", r0, r1, 0, cfg._n_patches_y - 1, sym, False))
-            cells.append(self._bound_str("col", c0, c1, 0, cfg._n_patches_x - 1, sym, False))
+            cells.append((self._bound_str("row", r0, r1, 0, cfg._n_patches_y - 1, sym, False), r0 > r1))
+            cells.append((self._bound_str("col", c0, c1, 0, cfg._n_patches_x - 1, sym, False), c0 > c1))
 
         bounds = clauses.feature_bounds[bank, clause_id].reshape(-1, 2)
         for name, (lo, hi), fmin, fmax in zip(feat_names, bounds, cfg._feat_mins, cfg._feat_maxs, strict=True):
-            cells.append(self._bound_str(name, int(lo), int(hi), int(fmin), int(fmax), sym, fmax - fmin == 1))
+            text = self._bound_str(name, int(lo), int(hi), int(fmin), int(fmax), sym, fmax - fmin == 1)
+            cells.append((text, bool(lo > hi)))
         return cells
 
     def _sections(self, sort: str) -> tuple[int, list[tuple[str, bool]]]:
@@ -377,20 +392,27 @@ class BaseTM(abc.ABC):
         return f"{w:+.0f}" if float(w).is_integer() else f"{w:+.3f}"
 
     @staticmethod
-    def _render_rich(title: str, header: list[str], justify: list[str], sections: list[list[list[str]]], footers: list[str | None]) -> None:
+    def _render_rich(title: str, header: list[str], justify: list[str], sections: list[list[list]], footers: list[str | None]) -> None:
+        """Cells are str, or (text, is_contra) segments whose contradictory parts are shown red."""
         from rich import box
         from rich.console import Console
         from rich.markup import escape
         from rich.table import Table
+        from rich.text import Text
 
-        table = Table(title=title, box=box.SIMPLE_HEAVY)
+        def cell(v):
+            if isinstance(v, str):
+                return escape(v)  # rich would read [ci] as markup
+            return Text.assemble(*((text, "red") if bad else text for text, bad in v))
+
+        table = Table(title=title, box=box.ASCII_DOUBLE_HEAD, header_style="bold dim", border_style="bright_black")
         for h, j in zip(header, justify, strict=True):
-            table.add_column(escape(h), justify=j, no_wrap=True)  # rich would read [ci] as markup
+            table.add_column(escape(h), justify=j, no_wrap=True)
         for rows, footer in zip(sections, footers, strict=True):
             if not rows:
                 continue
             for row in rows:
-                table.add_row(*(escape(v) for v in row), style="red" if row[1] != "_" else None)
+                table.add_row(*(cell(v) for v in row))
             if footer:
                 table.add_row(*[""] * (len(header) - 1), f"[dim]{footer}[/]")
             table.add_section()
@@ -398,8 +420,10 @@ class BaseTM(abc.ABC):
 
     @staticmethod
     def _render_plain(
-        title: str, header: list[str], justify: list[str], sections: list[list[list[str]]], footers: list[str | None]
+        title: str, header: list[str], justify: list[str], sections: list[list[list]], footers: list[str | None]
     ) -> None:
+        # (text, is_contra) segments are joined, contradictions are already visible in the text itself
+        sections = [[[v if isinstance(v, str) else "".join(text for text, _ in v) for v in r] for r in rows] for rows in sections]
         widths = [max(len(h), *(len(r[i]) for rows in sections for r in rows)) for i, h in enumerate(header)]
         align = {"left": str.ljust, "right": str.rjust, "center": str.center}
 
