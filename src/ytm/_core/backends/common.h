@@ -42,6 +42,7 @@
 #define NFEAT_T uint32_t
 #define NPATCHES_T uint32_t
 #define NLITS_T uint32_t
+#define NCLASSES_T uint32_t
 
 #include "cpu.h"
 #endif

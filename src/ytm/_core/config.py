@@ -241,6 +241,9 @@ class BaseTMConfig:
         # number of literals
         self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals + 1)
 
+        # number of classes, per clause feedback counts go 0..n_classes
+        self._nclasses_dtype, self._nclasses_ctype = _get_unsinged_type(self.n_classes + 1)
+
         self._therm_bits = self._therm_bits.astype(self._fbound_dtype)
         self._literal_offsets = self._literal_offsets.astype(self._nlits_dtype)
 
@@ -292,6 +295,7 @@ class BaseTMConfig:
 #define NFEAT_T {self._nfeat_ctype}
 #define NPATCHES_T {self._npatches_ctype}
 #define NLITS_T {self._nlits_ctype}
+#define NCLASSES_T {self._nclasses_ctype}
 
 {enum_to_header("FB", Feedback)}
 """
