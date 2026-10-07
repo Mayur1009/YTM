@@ -79,8 +79,6 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=np.empty(cfg.n_classes, dtype=np.float32),
-            fb_count=np.zeros(1, dtype=np.uint32),
-            fb_ids=np.empty(cfg._total_clauses, dtype=np.uint32),
             grad=np.empty(cfg.n_classes, dtype=np.float32),
             y_hat=np.empty(cfg.n_classes, dtype=np.float32),
             loss=np.empty(1, dtype=np.float32),
@@ -88,6 +86,7 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             lr=lr,
             lambda_=lambda_,
             **extra,
+            **self._fb_list_allocs(),
         )
 
     def fit_epoch(
@@ -109,9 +108,10 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
         )
 
         running_loss = 0.0
+        keys = self._fit_keys(X.shape[0])
         pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
-        for e, rng_key in self._fit_samples(pbar):
-            self.fit_sample(rng_key, buf, e)
+        for e in pbar:
+            self.fit_sample(int(keys[e]), buf, e)
             running_loss += float(buf.loss[0])
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
 
@@ -128,10 +128,11 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
-        buf.fb_count[0] = 0
         p_Y_e = buf.Y[e].ctypes.data_as(float_p)
 
         self.lib.votes_activation(buf.p_votes, buf.p_y_hat)
+        buf.t1b_n[0] = 0
+        buf.t1a_t2_n[0] = 0
         self.lib.loss_gradient(buf.p_y_hat, p_Y_e, buf.p_grad, buf.p_loss)
 
         if cfg._fb_signal == FbSignal.GRAD:
@@ -144,8 +145,13 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
-                buf.p_fb_count,
-                buf.p_fb_ids,
+                buf.p_t1b_n,
+                buf.p_t1b_cid,
+                buf.p_t1b_cnt,
+                buf.p_t1a_t2_n,
+                buf.p_t1a_t2_cid,
+                buf.p_t1a_cnt,
+                buf.p_t2_cnt,
             )
         else:
             self.lib.compute_votes_neg_ck(buf.p_votes, self.p_clause_weights, buf.p_clause_output, buf.p_votes_neg_ck)
@@ -160,24 +166,14 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
                 buf.p_feedback_type,
-                buf.p_fb_count,
-                buf.p_fb_ids,
+                buf.p_t1b_n,
+                buf.p_t1b_cid,
+                buf.p_t1b_cnt,
+                buf.p_t1a_t2_n,
+                buf.p_t1a_t2_cid,
+                buf.p_t1a_cnt,
+                buf.p_t2_cnt,
             )
-
-    def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
-        self.lib.update_clauses(
-            c_uint64(rng_key),
-            buf.p_clause_output,
-            buf.p_selected_pids,
-            buf.p_X,
-            c_int(e),
-            self.p_literal_offsets,
-            buf.p_feedback_type,
-            buf.p_fb_count,
-            buf.p_fb_ids,
-            self.p_ta_states,
-            self.p_is_clause_synced,
-        )
 
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
         self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_clause_output, buf.p_clause_drop_mask, self.p_clause_weights)

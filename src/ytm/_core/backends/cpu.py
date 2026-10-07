@@ -26,8 +26,13 @@ class CPUFitBuffers(FitBuffers):
     p_clause_output: Any = field(init=False)
     p_selected_pids: Any = field(init=False)
     p_votes: Any = field(init=False)
-    p_fb_count: Any = field(init=False)
-    p_fb_ids: Any = field(init=False)
+    p_t1b_n: Any = field(init=False)
+    p_t1b_cid: Any = field(init=False)
+    p_t1b_cnt: Any = field(init=False)
+    p_t1a_t2_n: Any = field(init=False)
+    p_t1a_t2_cid: Any = field(init=False)
+    p_t1a_cnt: Any = field(init=False)
+    p_t2_cnt: Any = field(init=False)
 
     def __post_init__(self):
         self.p_X = self.X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.X.dtype)))
@@ -36,8 +41,14 @@ class CPUFitBuffers(FitBuffers):
         self.p_clause_output = self.clause_output.ctypes.data_as(int8_p)
         self.p_selected_pids = self.selected_pids.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.selected_pids.dtype)))
         self.p_votes = self.votes.ctypes.data_as(float_p)
-        self.p_fb_count = self.fb_count.ctypes.data_as(uint32_p)
-        self.p_fb_ids = self.fb_ids.ctypes.data_as(uint32_p)
+        self.p_t1b_n = self.t1b_n.ctypes.data_as(uint32_p)
+        self.p_t1b_cid = self.t1b_cid.ctypes.data_as(uint32_p)
+        nclasses_p = POINTER(np.ctypeslib.as_ctypes_type(self.t1b_cnt.dtype))
+        self.p_t1b_cnt = self.t1b_cnt.ctypes.data_as(nclasses_p)
+        self.p_t1a_t2_n = self.t1a_t2_n.ctypes.data_as(uint32_p)
+        self.p_t1a_t2_cid = self.t1a_t2_cid.ctypes.data_as(uint32_p)
+        self.p_t1a_cnt = self.t1a_cnt.ctypes.data_as(nclasses_p)
+        self.p_t2_cnt = self.t2_cnt.ctypes.data_as(nclasses_p)
 
 
 class CPUDevice(BaseDevice):
@@ -66,8 +77,45 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "update_fb.c")
         return {name: read_file(core / name) for name in names}
+
+    def _fb_list_allocs(self) -> dict[str, np.ndarray]:
+        """The T1b list and the T1a/T2 list that decide_feedback fills, for the FitBuffers."""
+        n, cnt = self.config._total_clauses, self.config._nclasses_dtype
+        return dict(
+            t1b_n=np.zeros(1, dtype=np.uint32),
+            t1b_cid=np.empty(n, dtype=np.uint32),
+            t1b_cnt=np.empty(n, dtype=cnt),
+            t1a_t2_n=np.zeros(1, dtype=np.uint32),
+            t1a_t2_cid=np.empty(n, dtype=np.uint32),
+            t1a_cnt=np.empty(n, dtype=cnt),
+            t2_cnt=np.empty(n, dtype=cnt),
+        )
+
+    def _fit_apply_fb(self, buf: CPUFitBuffers, e: int, rng_key: int) -> None:
+        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
+        self.lib.update_t1b(
+            c_uint64(rng_key),
+            buf.p_t1b_n,
+            buf.p_t1b_cid,
+            buf.p_t1b_cnt,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
+        self.lib.update_t1a_t2(
+            c_uint64(rng_key),
+            buf.p_selected_pids,
+            buf.p_X,
+            c_int(e),
+            self.p_literal_offsets,
+            buf.p_t1a_t2_n,
+            buf.p_t1a_t2_cid,
+            buf.p_t1a_cnt,
+            buf.p_t2_cnt,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
 
     def _bind(self):
         cfg = self.config

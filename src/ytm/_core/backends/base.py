@@ -1,7 +1,6 @@
 import abc
 import copy
 import types
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +26,8 @@ class FitBuffers:
     t1a_t2_cid: Any  # (total_clauses,) uint32, clauses with T1a or T2 on the current sample
     t1a_cnt: Any  # (total_clauses,) T1a count over classes
     t2_cnt: Any  # (total_clauses,) T2 count over classes
+    keys: Any = None  # (batch,) uint64 rng key per sample, cuda only
+    e_dev: Any = None  # (1,) int32 index of the current sample in the batch, cuda only
 
 
 @dataclass
@@ -131,9 +132,9 @@ class BaseDevice(abc.ABC):
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
 
-    def _fit_samples(self, pbar) -> Iterator[tuple[int, int]]:
-        for e in pbar:
-            yield e, int(self._rng.integers(1, 1 << 62, dtype=np.uint64))
+    def _fit_keys(self, n: int) -> np.ndarray:
+        """Per sample rng keys for an epoch, drawn up front so the progress bar only tracks the samples."""
+        return self._rng.integers(1, 1 << 62, size=n, dtype=np.uint64)
 
     def _fit_drop_mask(self, clause_drop_p: float):
         cfg = self.config

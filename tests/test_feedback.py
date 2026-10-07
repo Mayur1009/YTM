@@ -3,6 +3,7 @@ import pytest
 from scipy import stats
 
 from .support import (
+    set_sample,
     FB_NONE,
     FB_T1A,
     FB_T1B,
@@ -11,6 +12,7 @@ from .support import (
     apply_feedback,
     decide_feedback,
     discrete,
+    fb_counts_from_dense,
     fb_ids_from_dense,
     fill,
     guided,
@@ -136,7 +138,8 @@ def test_dropped_clauses_get_no_feedback(device):
 @pytest.mark.parametrize("threads", [1, 4])
 @pytest.mark.parametrize("model", ["discrete", "guided-grad", "guided-delta_l"])
 def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, threads):
-    """fb_ids[:fb_count] must be exactly the clauses with any non-NONE entry in feedback_type, no repeats, any order."""
+    """The T1b list and the T1a/T2 list hold exactly the clauses with that feedback in feedback_type, once each,
+    any order, with their counts over classes."""
     if threads > 1 and not device.startswith("cpu"):
         pytest.skip("thread count only applies to cpu")
     dev = f"cpu:{threads}" if device.startswith("cpu") else device
@@ -157,10 +160,23 @@ def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, t
     for key in range(1, 6):
         fb = decide_feedback(tm, buf, votes, key=key)
         expected = fb_ids_from_dense(tm, fb)
-        count = int(host(tm, buf.fb_count)[0])
         assert 0 < len(expected) < cfg._total_clauses
-        assert count == len(expected)
-        assert np.array_equal(np.sort(host(tm, buf.fb_ids)[:count]), expected)
+        _assert_fb_lists(tm, buf, fb)
+
+
+def _assert_fb_lists(tm, buf, fb):
+    n1a, n1b, n2 = (fb_counts_from_dense(tm, fb, t) for t in (FB_T1A, FB_T1B, FB_T2))
+    lists = (
+        (buf.t1b_n, buf.t1b_cid, n1b > 0, ((buf.t1b_cnt, n1b),)),
+        (buf.t1a_t2_n, buf.t1a_t2_cid, (n1a + n2) > 0, ((buf.t1a_cnt, n1a), (buf.t2_cnt, n2))),
+    )
+    for size, cid, listed, counts in lists:
+        n = int(host(tm, size)[0])
+        ids = host(tm, cid)[:n]
+        order = np.argsort(ids)
+        assert np.array_equal(ids[order], np.flatnonzero(listed))
+        for cnt, want in counts:
+            assert np.array_equal(host(tm, cnt)[:n][order], want[listed])
 
 
 @pytest.mark.parametrize("model", ["discrete", "guided-grad", "guided-delta_l"])
@@ -196,13 +212,14 @@ def test_next_sample_does_not_reapply_the_previous_list(device):
     tm = _decide_setup(device)
     buf = make_buffers(tm, X_DEC, [[10.0]])
     decide_feedback(tm, buf, [-10.0])
-    assert int(host(tm, buf.fb_count)[0]) > 0
+    assert int(host(tm, buf.t1b_n)[0]) + int(host(tm, buf.t1a_t2_n)[0]) > 0
 
     fill(tm, buf.clause_drop_mask, np.ones(6, dtype=np.int8))
     before = host(tm, tm.dev.ta_states)
     decide_feedback(tm, buf, [-10.0])
-    assert int(host(tm, buf.fb_count)[0]) == 0
+    assert int(host(tm, buf.t1b_n)[0]) + int(host(tm, buf.t1a_t2_n)[0]) == 0
     with _ctx(tm):
+        set_sample(tm, buf, 0, 1)
         tm.dev._fit_apply_fb(buf, 0, 1)
     assert np.array_equal(host(tm, tm.dev.ta_states), before)
 

@@ -13,7 +13,8 @@
 #define FB_T2 3
 #endif
 
-extern "C" __global__ void calc_update_prob(const float* votes, const float* encoded_Y, const int e, float* prob) {
+extern "C" __global__ void calc_update_prob(const float* votes, const float* encoded_Y, const int* e_dev, float* prob) {
+    const int e = *e_dev;
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(class_id, CLASSES) {
         float v = clip(votes[class_id], T_MIN, T_MAX);
@@ -21,16 +22,20 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
     }
 }
 
-extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_output_arr, const NLITS_T* clause_len,
+extern "C" __global__ void decide_feedback(const ull* keys, const int* e_dev, const int8_t* clause_output_arr, const NLITS_T* clause_len,
                                            const int8_t* clause_drop_mask, const float* prob, const float* label_probs,
-                                           const int e, const float* clause_weights, uint8_t* feedback_type,
-                                           uint* fb_count, uint* fb_ids) {
+                                           const float* clause_weights, uint8_t* feedback_type,
+                                           uint* t1b_n, uint* t1b_cid,
+                                           NCLASSES_T* t1b_cnt, uint* t1a_t2_n, uint* t1a_t2_cid, NCLASSES_T* t1a_cnt,
+                                           NCLASSES_T* t2_cnt) {
+    const int e = *e_dev;
+    const ull seed = keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
-        bool any_fb = false;
+        NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -54,59 +59,21 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
-            any_fb |= (fb != FB_NONE);
+            n1a += (fb == FB_T1A);
+            n1b += (fb == FB_T1B);
+            n2 += (fb == FB_T2);
         }
-        if (any_fb)
-            fb_list_append(fb_count, fb_ids, clause);
+        fb_lists_append(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
-// A whole warp owns one clause, so `fb` is warp uniform and `apply_feedback` can stride its lanes
-// over the literals.
-extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_output, const NPATCHES_T* selected_patch_ids,
-                                          const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
-                                          const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
-                                          TA_STATE_T* global_ta_states, int8_t* is_clause_synced) {
-    auto [warp, lane, warp_id, total_warps] = warp_grid();
-
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    const uint n = *fb_count;
-
-    WARP_STRIDE_LOOP(i, n) {
-        ull clause = fb_ids[i];
-        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
-
-#if (N_PATCHES > 1)
-        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
-        int patch_idx_y = patch_id / N_PATCHES_X;
-        int patch_idx_x = patch_id % N_PATCHES_X;
-#else
-        int patch_idx_y = 0, patch_idx_x = 0;
-#endif
-
-        ull rng_k = rng_hash(seed, clause * (ull)WARP_SIZE + (ull)lane, 0xCAFEBABEULL);
-        uint rng_counter = 0;
-
-        ull class_id;
-        LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
-            if (fb == FB_NONE)
-                continue;
-
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, lane);
-            if (lane == 0)
-                is_clause_synced[clause] = 0;
-        }
-    }
-}
-
-extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
+extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
                                           float* clause_weights) {
 #if WEIGHTED
-    const uint n = *fb_count;
+    const uint n = *t1a_t2_n;
 
     GRID_STRIDE_LOOP(i, n) {
-        ull clause = fb_ids[i];
+        ull clause = t1a_t2_cid[i];
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {

@@ -40,6 +40,17 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
     return {pos0, pos1, pos2, pos3, includes, (valid && pos0 <= pos1 && pos2 <= pos3)};
 }
 
+// Features each lane scans per round. More independent loads in flight per lane and fewer warp syncs per feature,
+// a warp otherwise mostly waits on the latency of two one byte loads per feature. Only as many as keeps every lane
+// busy: with few features per patch one feature per lane is faster.
+#ifndef PACK_FEATS_PER_LANE_MAX
+#define PACK_FEATS_PER_LANE_MAX 8
+#endif
+#define PACK_FEATS_PER_LANE                                                                                            \
+    (N_RAW_PATCH_FEATS / WARP_SIZE < 1                          ? 1                                                    \
+     : N_RAW_PATCH_FEATS / WARP_SIZE > PACK_FEATS_PER_LANE_MAX ? PACK_FEATS_PER_LANE_MAX                              \
+                                                                : N_RAW_PATCH_FEATS / WARP_SIZE)
+
 __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const TA_STATE_T* ta_state,
                                                       const FBOUND_T* therm_bits, const NLITS_T* literal_offsets,
                                                       NFEAT_T* feat_ids, FBOUND_T* feat_bounds, int dont_skip) {
@@ -48,24 +59,38 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
     int write_offset = 0;
     bool all_valid = true;
 
-    for (int base = 0; base < N_RAW_PATCH_FEATS; base += WARP_SIZE) {
-        int fid = base + lane;
-        bool in_range = (fid < N_RAW_PATCH_FEATS);
+    // Each lane takes PACK_FEATS_PER_LANE consecutive features, so lane order then feature order is fid order and
+    // the compacted list keeps the same order as one feature per lane.
+    for (int base = 0; base < N_RAW_PATCH_FEATS; base += WARP_SIZE * PACK_FEATS_PER_LANE) {
+        const int first = base + lane * PACK_FEATS_PER_LANE;
+        FeatScan fs[PACK_FEATS_PER_LANE];
+        int n_bounded = 0;
+        bool lane_valid = true;
 
-        FeatScan fs = {};
-        if (in_range) {
-            fs = calc_single_feat_bounds(ta_state, therm_bits, literal_offsets, fid);
-            n_includes += fs.includes;
+#pragma unroll
+        for (int k = 0; k < PACK_FEATS_PER_LANE; ++k) {
+            fs[k] = FeatScan{};
+            if (first + k < N_RAW_PATCH_FEATS) {
+                fs[k] = calc_single_feat_bounds(ta_state, therm_bits, literal_offsets, first + k);
+                n_includes += fs[k].includes;
+                n_bounded += fs[k].is_bounded ? 1 : 0;
+                lane_valid = lane_valid && !(fs[k].lb > fs[k].ub);
+            }
         }
 
-        int slot = warp_compact_slot(warp, fs.is_bounded, &write_offset);
-        if (fs.is_bounded) {
-            feat_ids[slot] = (NFEAT_T)fid;
-            feat_bounds[slot * 2 + 0] = fs.lb;
-            feat_bounds[slot * 2 + 1] = fs.ub;
+        int slot = write_offset + cg::exclusive_scan(warp, n_bounded, cg::plus<int>());
+        write_offset += cg::reduce(warp, n_bounded, cg::plus<int>());
+#pragma unroll
+        for (int k = 0; k < PACK_FEATS_PER_LANE; ++k) {
+            if (first + k < N_RAW_PATCH_FEATS && fs[k].is_bounded) {
+                feat_ids[slot] = (NFEAT_T)(first + k);
+                feat_bounds[slot * 2 + 0] = fs[k].lb;
+                feat_bounds[slot * 2 + 1] = fs[k].ub;
+                ++slot;
+            }
         }
 
-        all_valid = all_valid && warp.all(!(in_range && fs.lb > fs.ub));
+        all_valid = all_valid && warp.all(lane_valid);
         if (!all_valid && !dont_skip)
             break;
     }

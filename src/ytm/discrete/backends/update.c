@@ -15,7 +15,10 @@
 void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
                      const int8_t* restrict clause_drop_mask, const float* restrict prob,
                      const float* restrict label_probs, const int e, const float* restrict clause_weights,
-                     uint8_t* restrict feedback_type, uint* restrict fb_count, uint* restrict fb_ids) {
+                     uint8_t* restrict feedback_type,
+                     uint* restrict t1b_n, uint* restrict t1b_cid, NCLASSES_T* restrict t1b_cnt,
+                     uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid, NCLASSES_T* restrict t1a_cnt,
+                     NCLASSES_T* restrict t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
@@ -23,7 +26,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
-        bool any_fb = false;
+        NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -47,61 +50,24 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
-            any_fb |= (fb != FB_NONE);
+            n1a += (fb == FB_T1A);
+            n1b += (fb == FB_T1B);
+            n2 += (fb == FB_T2);
         }
-        if (any_fb)
-            fb_list_append(fb_count, fb_ids, clause);
+        fb_lists_append(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
-void update_clauses(const ull seed, const int8_t* restrict clause_output, const NPATCHES_T* restrict selected_patch_ids,
-                    const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
-                    const uint8_t* restrict feedback_type, const uint* restrict fb_count,
-                    const uint* restrict fb_ids, TA_STATE_T* restrict global_ta_states,
-                    int8_t* restrict is_clause_synced) {
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    const uint n = *fb_count;
-    if (n == 0)
-        return;
-
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull i = 0; i < n; i++) {
-        ull clause = fb_ids[i];
-        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
-
-#if (N_PATCHES > 1)
-        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
-        int patch_idx_y = patch_id / N_PATCHES_X;
-        int patch_idx_x = patch_id % N_PATCHES_X;
-#else
-        int patch_idx_y = 0, patch_idx_x = 0;
-#endif
-
-        ull rng_k = rng_hash(seed, clause, 0xCAFEBABEULL);
-        uint rng_counter = 0;
-
-        ull class_id;
-        LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
-            if (fb == FB_NONE)
-                continue;
-
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
-            is_clause_synced[clause] = 0;
-        }
-    }
-}
-
-void update_weights(const uint8_t* restrict feedback_type, const uint* restrict fb_count, const uint* restrict fb_ids,
-                    float* restrict clause_weights) {
+void update_weights(const uint8_t* restrict feedback_type, const uint* restrict t1a_t2_n,
+                    const uint* restrict t1a_t2_cid, float* restrict clause_weights) {
 #if WEIGHTED
-    const uint n = *fb_count;
+    const uint n = *t1a_t2_n;
     if (n == 0)
         return;
 
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull i = 0; i < n; i++) {
-        ull clause = fb_ids[i];
+        ull clause = t1a_t2_cid[i];
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {

@@ -117,10 +117,37 @@ def fb_ids_from_dense(tm, fb) -> np.ndarray:
     return np.sort(ids).astype(np.uint32)
 
 
+def fb_counts_from_dense(tm, fb, fb_type) -> np.ndarray:
+    """Per global clause, how many classes gave `fb_type` in a dense `feedback_type`."""
+    cfg = tm.config
+    is_type = np.asarray(fb) == fb_type
+    if is_type.ndim == 1:  # guided delta_l: one entry per global clause
+        return is_type.astype(np.int64)
+    if cfg._total_clauses == cfg._n_clauses:  # coalesced: row is the clause, columns are classes
+        return is_type.sum(axis=1)
+    return is_type.T.reshape(-1).astype(np.int64)  # one bank per class: global id is bank * n_clauses + row
+
+
 def fill_fb_list(tm, buf, ids) -> None:
     ids = np.asarray(ids, dtype=np.uint32)
-    fill(tm, buf.fb_ids[: len(ids)], ids)
-    fill(tm, buf.fb_count, [len(ids)])
+    # Split into the T1b list and the T1a/T2 list, each with per clause counts over classes.
+    fb = host(tm, buf.feedback_type)
+    n1a, n1b, n2 = (fb_counts_from_dense(tm, fb, t)[ids] for t in (FB_T1A, FB_T1B, FB_T2))
+    t1b = n1b > 0
+    fill(tm, buf.t1b_cid[: t1b.sum()], ids[t1b])
+    fill(tm, buf.t1b_cnt[: t1b.sum()], n1b[t1b])
+    fill(tm, buf.t1b_n, [t1b.sum()])
+    t12 = (n1a + n2) > 0
+    fill(tm, buf.t1a_t2_cid[: t12.sum()], ids[t12])
+    fill(tm, buf.t1a_cnt[: t12.sum()], n1a[t12])
+    fill(tm, buf.t2_cnt[: t12.sum()], n2[t12])
+    fill(tm, buf.t1a_t2_n, [t12.sum()])
+
+
+def set_sample(tm, buf, e: int, key: int) -> None:
+    """CUDA kernels read the sample index and rng key from device buffers, set them for direct stage calls."""
+    if is_cuda(tm):
+        tm.dev._set_sample(buf, e, key)
 
 
 def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
@@ -130,6 +157,7 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
     """
     dev = tm.dev
     with _ctx(tm):
+        set_sample(tm, buf, e, key)
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(buf, e, key)
         fill(tm, buf.feedback_type, fb)
@@ -141,6 +169,7 @@ def decide_feedback(tm, buf, votes, e: int = 0, key: int = 1) -> np.ndarray:
     """Evaluate, overwrite the votes with `votes`, let the device decide feedback, return it."""
     dev = tm.dev
     with _ctx(tm):
+        set_sample(tm, buf, e, key)
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(buf, e, key)
         fill(tm, buf.votes, votes)
@@ -188,5 +217,6 @@ def loss_and_grad(tm, y_hat, y) -> tuple[float, np.ndarray]:
 
     with _ctx(tm):
         a, b, g, l = cp.asarray(y_hat), cp.asarray(y), cp.zeros_like(cp.asarray(y_hat)), cp.zeros(1, dtype=cp.float32)
-        dev.cu.loss_gradient(1, (a, b, g, l))
+        e0 = cp.zeros(1, dtype=cp.int32)  # y is a single row, sample 0
+        dev.cu.loss_gradient(1, (a, b, e0, g, l))
         return float(l.get()[0]), g.get()

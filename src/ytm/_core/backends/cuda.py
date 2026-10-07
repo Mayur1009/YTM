@@ -61,12 +61,124 @@ class CUDADevice(BaseDevice):
         block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
 
         self.cu = Kernel(self._build_code(), self.cuda_dev, block_size, props["multiProcessorCount"])
+        # Fit runs on its own stream, CUDA graphs cannot capture the legacy default stream.
+        self._fit_stream = cp.cuda.Stream(non_blocking=True)
+
+        # sum_votes splits each class row over every resident warp, its partials and row counters need
+        # 2 x that many entries. The counters start at zero and the kernel resets each one it finishes.
+        votes = self.cu.sum_votes
+        self._votes_launch = votes.max_grid_size * votes.block_size
+        with self.cuda_dev:
+            self._vote_partials = cp.zeros(2 * self._votes_launch // self._warp_size, dtype=np.float32)
+            self._vote_row_done = cp.zeros(2 * self._votes_launch // self._warp_size, dtype=np.uint32)
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "update_fb.cu")
         return {name: read_file(core / name) for name in names}
+
+    def _fb_list_allocs(self) -> dict:
+        """The T1b list and the T1a/T2 list that decide_feedback fills, for the FitBuffers."""
+        n, cnt = self.config._total_clauses, self.config._nclasses_dtype
+        return dict(
+            t1b_n=cp.zeros(1, dtype=np.uint32),
+            t1b_cid=cp.empty(n, dtype=np.uint32),
+            t1b_cnt=cp.empty(n, dtype=cnt),
+            t1a_t2_n=cp.zeros(1, dtype=np.uint32),
+            t1a_t2_cid=cp.empty(n, dtype=np.uint32),
+            t1a_cnt=cp.empty(n, dtype=cnt),
+            t2_cnt=cp.empty(n, dtype=cnt),
+            keys=cp.zeros(1, dtype=np.uint64),
+            e_dev=cp.zeros(1, dtype=np.int32),
+        )
+
+    def _fit_apply_fb(self, buf, e: int, rng_key: int) -> None:
+        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
+        # The kernel tiles its own work to fill the device, so launch every resident warp.
+        t1b = self.cu.update_t1b
+        t1b(
+            t1b.max_grid_size * t1b.block_size,
+            (
+                buf.keys,
+                buf.e_dev,
+                buf.t1b_n,
+                buf.t1b_cid,
+                buf.t1b_cnt,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
+        t1a_t2 = self.cu.update_t1a_t2
+        t1a_t2(
+            t1a_t2.max_grid_size * t1a_t2.block_size,
+            (
+                buf.keys,
+                buf.e_dev,
+                buf.selected_pids,
+                buf.X,
+                self.literal_offsets,
+                buf.t1a_t2_n,
+                buf.t1a_t2_cid,
+                buf.t1a_cnt,
+                buf.t2_cnt,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
+
+    def _set_sample(self, buf, e: int, rng_key: int) -> None:
+        """Direct launches: what prep_iter does in the batch loop, put sample e's index and rng key where the kernels
+        read them and empty the feedback lists."""
+        if buf.keys.size <= e:
+            keys = cp.zeros(e + 1, dtype=np.uint64)
+            keys[: buf.keys.size] = buf.keys
+            buf.keys = keys
+        buf.keys[e] = np.uint64(rng_key)
+        buf.e_dev[0] = e
+        buf.t1b_n.fill(0)
+        buf.t1a_t2_n.fill(0)
+
+    def _run_batch(self, buf, keys: np.ndarray, sample_kernels, pbar=None) -> None:
+        """Run one batch, one sample per call of `sample_kernels`, on the fit stream.
+
+        The kernels read the sample index from `buf.e_dev` and its rng key from `buf.keys`. Each sample starts with
+        `prep_iter`, which moves the index on and empties the feedback lists, so the index starts at -1.
+        With `cuda_graphs` the first sample runs as direct launches, which also loads every kernel, and the rest
+        replay a graph captured from that same sequence: one host call per sample. `pbar` moves on as each
+        sample is issued, the host runs ahead of the GPU by at most its launch queue.
+        """
+        n = len(keys)
+        if n == 0:
+            return
+        buf.keys = cp.asarray(keys, dtype=np.uint64)
+        buf.e_dev.fill(-1)
+
+        def one_sample():
+            self.cu.prep_iter(1, (buf.e_dev, buf.t1b_n, buf.t1a_t2_n))
+            sample_kernels()
+
+        def tick():
+            if pbar is not None:
+                pbar.update(1)
+
+        one_sample()
+        tick()
+        if n == 1:
+            return
+        if not self.device_config.cuda_graphs:
+            for _ in range(n - 1):
+                one_sample()
+                tick()
+            return
+
+        stream = self._fit_stream
+        stream.begin_capture()
+        one_sample()
+        graph = stream.end_capture()
+        for _ in range(n - 1):
+            graph.launch(stream)
+            tick()
 
     def _bind(self):
         pass
@@ -125,9 +237,9 @@ class CUDADevice(BaseDevice):
         self.cu.evaluate(
             cfg._total_clauses * self._warp_size,
             (
-                np.uint64(rng_key),
+                buf.keys,
+                buf.e_dev,
                 buf.X,
-                np.int32(e),
                 buf.clause_drop_mask,
                 pc.clause_position_bounds,
                 pc.clause_feat_bounds,
@@ -143,8 +255,8 @@ class CUDADevice(BaseDevice):
 
     def _fit_voting(self, buf):
         self.cu.sum_votes(
-            self.config.n_classes * self._warp_size,
-            (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
+            self._votes_launch,
+            (buf.clause_output, self.clause_weights, buf.votes, np.int32(1), self._vote_partials, self._vote_row_done),
         )
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
@@ -176,8 +288,8 @@ class CUDADevice(BaseDevice):
                 )
 
                 self.cu.sum_votes(
-                    bs * cfg.n_classes * self._warp_size,
-                    (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
+                    self._votes_launch,
+                    (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs), self._vote_partials, self._vote_row_done),
                 )
 
             return class_sums.get()

@@ -4,6 +4,7 @@
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cooperative_groups/scan.h>
 namespace cg = cooperative_groups;
 using warp_t = cg::thread_block_tile<WARP_SIZE>;
 
@@ -11,6 +12,7 @@ typedef unsigned int uint;
 typedef unsigned long long ull;
 typedef signed char int8_t;
 typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
 
 #ifndef INFINITY
 #define INFINITY __int_as_float(0x7f800000)
@@ -45,12 +47,24 @@ INLINE_FN int warp_compact_slot(const warp_t& warp, bool keep, int* offset) {
     return slot;
 }
 
-INLINE_FN void fb_list_append(uint* fb_count, uint* fb_ids, ull clause) {
+// Lane primitives for warp cooperative loops. All 32 lanes must call them together.
+INLINE_FN float lane_scan_add(float v) {
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+    return cg::inclusive_scan(warp, v);
+}
+
+INLINE_FN float lane_last(float v) { return __shfl_sync(0xffffffffu, v, WARP_SIZE - 1); }
+
+INLINE_FN int lane_id() { return (int)(threadIdx.x & (WARP_SIZE - 1)); }
+
+INLINE_FN uint fb_list_append(uint* fb_count, uint* fb_ids, ull clause) {
     auto g = cg::coalesced_threads();
     uint base;
     if (g.thread_rank() == 0)
         base = atomicAdd(fb_count, g.size());
     base = g.shfl(base, 0);
-    fb_ids[base + g.thread_rank()] = (uint)clause;
+    uint i = base + g.thread_rank();
+    fb_ids[i] = (uint)clause;
+    return i;
 }
 

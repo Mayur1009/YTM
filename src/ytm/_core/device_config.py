@@ -32,6 +32,7 @@ class DeviceConfig:
 
     # cuda
     block_size: int = 256
+    cuda_graphs: bool = True  # replay each sample's kernels as one captured CUDA graph during fit
 
     def __post_init__(self):
         self.kind, self.n = parse_device(self.device)
@@ -42,3 +43,4 @@ class T_DeviceConfig(TypedDict, total=False):
 
     # cuda
     block_size: int
+    cuda_graphs: bool

@@ -22,9 +22,17 @@ void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
 #define GET_THREAD_ID 0
 #endif
 
-INLINE_FN void fb_list_append(uint* RESTRICT fb_count, uint* RESTRICT fb_ids, ull clause) {
+// Lane primitives, a single lane on CPU so both are the identity.
+INLINE_FN float lane_scan_add(float v) { return v; }
+
+INLINE_FN float lane_last(float v) { return v; }
+
+INLINE_FN int lane_id(void) { return 0; }
+
+INLINE_FN uint fb_list_append(uint* RESTRICT fb_count, uint* RESTRICT fb_ids, ull clause) {
     uint i;
 #pragma omp atomic capture
     i = (*fb_count)++;
     fb_ids[i] = (uint)clause;
+    return i;
 }

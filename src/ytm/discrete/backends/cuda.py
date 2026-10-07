@@ -33,11 +33,10 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
-            fb_count=cp.zeros(1, dtype=np.uint32),
-            fb_ids=cp.empty(cfg._total_clauses, dtype=np.uint32),
             feedback_type=cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=cp.zeros(cfg.n_classes, dtype=np.float32),
             label_probs=None,
+            **self._fb_list_allocs(),
         )
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
@@ -46,74 +45,68 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         bs = N if batch_size == -1 else batch_size
 
         with self.cuda_dev:
-            buf = self._fit_allocs(self._fit_drop_mask(clause_drop_p))
-            samples = self._fit_samples(tqdm_bar(range(N), desc="Fit"))
+            # The fit stream does not wait on the default stream, so finish earlier work first.
+            self.cuda_dev.synchronize()
+            with self._fit_stream:
+                buf = self._fit_allocs(self._fit_drop_mask(clause_drop_p))
+                keys = self._fit_keys(N)
+                pbar = tqdm_bar(None, total=N, desc="Fit")
 
-            for i in range(0, N, bs):
-                end = min(i + bs, N)
-                buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
-                buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
-                buf.label_probs = cp.asarray(label_probs[i:end], dtype=np.float32)
+                for i in range(0, N, bs):
+                    end = min(i + bs, N)
+                    buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
+                    buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
+                    buf.label_probs = cp.asarray(label_probs[i:end], dtype=np.float32)
 
-                for e in range(end - i):
-                    _, rng_key = next(samples)
-                    self.fit_sample(rng_key, buf, e)
+                    self._run_batch(buf, keys[i:end], lambda: self._fit_sample_kernels(buf), pbar)
+                pbar.close()
+            self._fit_stream.synchronize()
 
     def fit_sample(self, rng_key: int, buf: DiscreteFitBuffers, e: int) -> None:
         with self.cuda_dev:
-            self.pack_clauses()
-            self._fit_eval(buf, e, rng_key)
-            self._fit_voting(buf)
-            self._fit_decide_fb(buf, e, rng_key)
-            self._fit_apply_fb(buf, e, rng_key)
-            self._fit_update_weights(buf)
+            self._set_sample(buf, e, rng_key)
+            self._fit_sample_kernels(buf)
+
+    def _fit_sample_kernels(self, buf: DiscreteFitBuffers) -> None:
+        """One sample's kernels. They read the sample index and rng key on the device, so the stage arguments are unused."""
+        self.pack_clauses()
+        self._fit_eval(buf, 0, 0)
+        self._fit_voting(buf)
+        self._fit_decide_fb(buf, 0, 0)
+        self._fit_apply_fb(buf, 0, 0)
+        self._fit_update_weights(buf)
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
-        buf.fb_count.data.memset_async(0, buf.fb_count.nbytes)
-
         self.cu.calc_update_prob(
             cfg.n_classes,
-            (buf.votes, buf.Y, np.int32(e), buf.prob),
+            (buf.votes, buf.Y, buf.e_dev, buf.prob),
         )
 
         self.cu.decide_feedback(
             cfg._total_clauses,
             (
-                np.uint64(rng_key),
+                buf.keys,
+                buf.e_dev,
                 buf.clause_output,
                 self.packed_clauses.clause_len,
                 buf.clause_drop_mask,
                 buf.prob,
                 buf.label_probs,
-                np.int32(e),
                 self.clause_weights,
                 buf.feedback_type,
-                buf.fb_count,
-                buf.fb_ids,
-            ),
-        )
-
-    def _fit_apply_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
-        self.cu.update_clauses(
-            self.config._total_clauses * self._warp_size,
-            (
-                np.uint64(rng_key),
-                buf.clause_output,
-                buf.selected_pids,
-                buf.X,
-                np.int32(e),
-                self.literal_offsets,
-                buf.feedback_type,
-                buf.fb_count,
-                buf.fb_ids,
-                self.ta_states,
-                self.packed_clauses.is_clause_synced,
+                buf.t1b_n,
+                buf.t1b_cid,
+                buf.t1b_cnt,
+                buf.t1a_t2_n,
+                buf.t1a_t2_cid,
+                buf.t1a_cnt,
+                buf.t2_cnt,
             ),
         )
 
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
         self.cu.update_weights(
             self.config._total_clauses,
-            (buf.feedback_type, buf.fb_count, buf.fb_ids, self.clause_weights),
+            (buf.feedback_type, buf.t1a_t2_n, buf.t1a_t2_cid, self.clause_weights),
         )
