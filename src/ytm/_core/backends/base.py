@@ -20,13 +20,8 @@ class FitBuffers:
     clause_output: Any  # (total_clauses,) 1 when the clause fired on this sample
     selected_pids: Any  # (total_clauses,) patch each clause matched on, only valid where it fired
     votes: Any  # (n_classes,) weighted vote sum for the current sample
-    t1b_n: Any  # (1,) uint32, valid entries of the T1b list
-    t1b_cid: Any  # (total_clauses,) uint32, clauses with T1b on the current sample
-    t1b_cnt: Any  # (total_clauses,) T1b count over classes, parallel to t1b_cid
-    t1a_t2_n: Any  # (1,) uint32, valid entries of the T1a/T2 list
-    t1a_t2_cid: Any  # (total_clauses,) uint32, clauses with T1a or T2 on the current sample
-    t1a_cnt: Any  # (total_clauses,) T1a count over classes
-    t2_cnt: Any  # (total_clauses,) T2 count over classes
+    fb_count: Any  # (1,) uint32, how many entries of fb_ids are valid for the current sample
+    fb_ids: Any  # (total_clauses,) uint32, clauses with any feedback on the current sample, unordered
 
 
 @dataclass
