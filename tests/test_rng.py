@@ -170,6 +170,41 @@ class TestGeomSample:
         assert rng.geom_counter(123, p) == draws
 
 
+class TestBinomAtLeastOne:
+    """Successes in n_trials Bernoulli(p), given at least one success, so the support is {1, ..., n_trials}."""
+
+    @pytest.mark.statistical
+    @pytest.mark.parametrize("n_trials, p", [(3, 0.1), (10, 0.1), (10, 0.5), (64, 0.05), (5, 0.9)])
+    def test_matches_the_truncated_binomial(self, n_trials, p):
+        """Chi square against Binomial(n, p) conditioned on k >= 1, small bins merged into a tail bin."""
+        d = rng.binom(4242, N, n_trials, p)
+        pmf = stats.binom(n_trials, p).pmf(np.arange(n_trials + 1))
+        pmf = pmf[1:] / (1.0 - pmf[0])
+
+        edges = [k for k in range(1, n_trials + 1) if pmf[k - 1] * N > 30]
+        obs = np.array([(d == e).sum() for e in edges] + [(d > edges[-1]).sum()], float)
+        exp = np.array([pmf[e - 1] for e in edges] + [pmf[edges[-1] :].sum()]) * N
+        if exp[-1] < 1:
+            obs, exp = obs[:-1], exp[:-1]
+
+        assert stats.chi2.sf(((obs - exp) ** 2 / exp).sum(), len(obs) - 1) > ALPHA
+
+    @pytest.mark.parametrize("n_trials, p", [(1, 0.3), (8, 0.01), (8, 0.99), (200, 0.5)])
+    def test_draws_stay_in_one_to_n(self, n_trials, p):
+        """A count of 0 would contradict the condition, more than n_trials would over-apply feedback."""
+        d = rng.binom(5, 20_000, n_trials, p)
+        assert d.min() >= 1 and d.max() <= n_trials
+
+    @pytest.mark.parametrize("n_trials, p, expected", [(1, 0.4, 1), (6, 1.0, 6), (6, 0.0, 1)])
+    def test_degenerate_cases(self, n_trials, p, expected):
+        """One trial or p = 0 give the minimum, p = 1 gives every trial."""
+        assert np.all(rng.binom(9, 100, n_trials, p) == expected)
+
+    @pytest.mark.parametrize("n_trials, p", [(0, 0.5), (1, 0.3), (4, 0.25), (40, 0.05)])
+    def test_prob_at_least_one(self, n_trials, p):
+        assert rng.prob_at_least_one(n_trials, p) == pytest.approx(1.0 - (1.0 - p) ** n_trials, rel=1e-5, abs=1e-7)
+
+
 needs_cuda = pytest.mark.skipif("cuda" not in DEVICES, reason="no usable cuda device")
 
 
@@ -200,3 +235,13 @@ class TestCpuCudaParity:
         bad = cpu != gpu
         assert bad.mean() < 1e-3
         assert np.all(np.abs(cpu[bad] - gpu[bad]) == 1.0)
+
+    @pytest.mark.parametrize("n_trials, p", [(10, 0.1), (64, 0.05)])
+    def test_binom_draws_agree_up_to_libm_rounding(self, n_trials, p):
+        """`powf` may round differently on host and device, which can move a draw across a cdf step, rarely."""
+        from . import rng_harness_cuda as cuda
+
+        cpu, gpu = rng.binom(99, 20_000, n_trials, p), cuda.binom(99, 20_000, n_trials, p)
+        bad = cpu != gpu
+        assert bad.mean() < 1e-3
+        assert np.all(np.abs(cpu[bad] - gpu[bad]) == 1)

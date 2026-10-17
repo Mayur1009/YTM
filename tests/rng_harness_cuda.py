@@ -18,6 +18,12 @@ extern "C" __global__ void k_geom(ull key, uint start, int n, float p, float* ou
     if (i < n) { uint c = start + (uint)i; out[i] = geom_sample(key, &c, p); }
 }
 extern "C" __global__ void k_hash(ull seed, ull a, ull b, ull* out) { out[0] = rng_hash(seed, a, b); }
+extern "C" __global__ void k_binom(ull key, uint start, int n, int n_trials, float p, int* out) {
+    if (blockIdx.x * blockDim.x + threadIdx.x != 0) return;
+    binom_t b = binom_params(n_trials, p);
+    uint c = start;
+    for (int i = 0; i < n; ++i) out[i] = binom_at_least_one(key, &c, b);
+}
 """
 
 
@@ -58,3 +64,12 @@ def rng_hash(seed: int, a: int, b: int) -> int:
     out = cp.empty(1, dtype=cp.uint64)
     _launch("k_hash", 1, (np.uint64(seed), np.uint64(a), np.uint64(b), out))
     return int(out.get()[0])
+
+
+def binom(key: int, n: int, n_trials: int, p: float, start: int = 0) -> np.ndarray:
+    """Same stream as the CPU `binom`: one thread draws all `n` in order."""
+    import cupy as cp
+
+    out = cp.empty(n, dtype=cp.int32)
+    _launch("k_binom", 1, (np.uint64(key), np.uint32(start), np.int32(n), np.int32(n_trials), np.float32(p), out))
+    return out.get()

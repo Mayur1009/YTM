@@ -44,3 +44,56 @@ INLINE_FN float geom_sample(ull rng_key, uint* rng_counter, float p) {
     float log_p = log1pf(-p);
     return ceilf(log_u / log_p);
 }
+
+// Given n_trials with prob p_success, what is the probability of at least one success.
+INLINE_FN float prob_at_least_one(int n_trials, float p_success) {
+    if (n_trials <= 0)
+        return 0.0f;
+    if (n_trials == 1)
+        return p_success;
+    return 1.0f - powf(1.0f - p_success, (float)n_trials);
+}
+
+// n_trials each with p_success, plus what binom_at_least_one needs, computed once so sampling needs no powf.
+typedef struct {
+    int n_trials;
+    float p_success;
+    float p_any; // P(at least one success)
+    float p_one; // P(exactly one success)
+    float odds;  // p_success / (1 - p_success), steps P(exactly j) to P(exactly j+1)
+} binom_t;
+
+INLINE_FN binom_t binom_params(int n_trials, float p_success) {
+    binom_t b;
+    b.n_trials = n_trials;
+    b.p_success = p_success;
+    b.p_any = prob_at_least_one(n_trials, p_success);
+    b.p_one = (n_trials > 1) ? (float)n_trials * p_success * powf(1.0f - p_success, (float)(n_trials - 1)) : b.p_any;
+    b.odds = (p_success < 1.0f) ? p_success / (1.0f - p_success) : 0.0f;
+    return b;
+}
+
+// Given n_trials each with p_success, and given at least one succeeded, return how many successes.
+INLINE_FN int binom_at_least_one(ull key, uint* counter, binom_t b) {
+    // Only one trial, and we condition on at least one success.
+    // OR, if p_success = 0, at least one success is impossible, so fall back to the minimum.
+    if (b.n_trials <= 1 || b.p_success <= 0.0f)
+        return 1;
+
+    // If p_success = 1, all trials succeed.
+    if (b.p_success >= 1.0f)
+        return b.n_trials;
+
+    float target = rand_uniform(key, counter) * b.p_any;
+
+    int n_success = 1;
+    float p_exact = b.p_one; // P(exactly 1)
+    float p_upto = p_exact;
+    while (p_upto < target && n_success < b.n_trials) {
+        // P(exactly n_success+1)
+        p_exact *= ((float)(b.n_trials - n_success) / (float)(n_success + 1)) * b.odds;
+        p_upto += p_exact;
+        ++n_success;
+    }
+    return n_success;
+}

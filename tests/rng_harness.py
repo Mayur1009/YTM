@@ -67,6 +67,14 @@ unsigned int w_geom_counter(ull key, float p) {
     return counter;
 }
 unsigned long long w_mix64(ull x) { return mix64(x); }
+
+void w_draw_binom(ull key, uint start, int n, int n_trials, float p, int* out) {
+    binom_t b = binom_params(n_trials, p);
+    uint counter = start;
+    for (int i = 0; i < n; ++i) out[i] = binom_at_least_one(key, &counter, b);
+}
+
+float w_prob_at_least_one(int n_trials, float p) { return prob_at_least_one(n_trials, p); }
 """
 
 
@@ -77,6 +85,7 @@ def _lib() -> ctypes.CDLL:
     lib.w_rng_hash.restype = ctypes.c_uint64
     lib.w_geom_counter.restype = ctypes.c_uint32
     lib.w_mix64.restype = ctypes.c_uint64
+    lib.w_prob_at_least_one.restype = ctypes.c_float
     return lib
 
 
@@ -121,3 +130,21 @@ def mix64(x: int) -> int:
 def geom_counter(key: int, p: float) -> int:
     """How many uniforms one `geom_sample` call consumed."""
     return _lib().w_geom_counter(ctypes.c_uint64(key), ctypes.c_float(p))
+
+
+def binom(key: int, n: int, n_trials: int, p: float, start: int = 0) -> np.ndarray:
+    """`n` draws of `binom_at_least_one`, one `binom_t` for all of them."""
+    out = np.empty(n, dtype=np.int32)
+    _lib().w_draw_binom(
+        ctypes.c_uint64(key),
+        ctypes.c_uint32(start),
+        ctypes.c_int(n),
+        ctypes.c_int(n_trials),
+        ctypes.c_float(p),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+    )
+    return out
+
+
+def prob_at_least_one(n_trials: int, p: float) -> float:
+    return _lib().w_prob_at_least_one(ctypes.c_int(n_trials), ctypes.c_float(p))
