@@ -128,10 +128,20 @@ def fb_counts_from_dense(tm, fb, fb_type) -> np.ndarray:
     return is_type.T.reshape(-1).astype(np.int64)  # one bank per class: global id is bank * n_clauses + row
 
 
-def fill_fb_list(tm, buf, ids) -> None:
+def dense_fb_shape(tm) -> tuple[int, ...]:
+    """Shape of a dense per clause feedback array: (n_clauses, n_classes), or (total_clauses,) for guided delta_l."""
+    cfg = tm.config
+    fb_signal = getattr(cfg, "_fb_signal", None)
+    if fb_signal is not None and fb_signal.name == "DELTA_L":
+        return (cfg._total_clauses,)
+    return (cfg._n_clauses, cfg.n_classes)
+
+
+def fill_fb_list(tm, buf, ids, fb) -> None:
+    """Fill the feedback lists with clauses `ids`, their counts taken from the dense host array `fb`."""
     ids = np.asarray(ids, dtype=np.uint32)
+    fb = np.asarray(fb)
     # Split into the T1b list and the T1a/T2 list, each with per clause counts over classes.
-    fb = host(tm, buf.feedback_type)
     n1a, n1b, n2 = (fb_counts_from_dense(tm, fb, t)[ids] for t in (FB_T1A, FB_T1B, FB_T2))
     t1b = n1b > 0
     fill(tm, buf.t1b_cid[: t1b.sum()], ids[t1b])
@@ -142,6 +152,14 @@ def fill_fb_list(tm, buf, ids) -> None:
     fill(tm, buf.t1a_cnt[: t12.sum()], n1a[t12])
     fill(tm, buf.t2_cnt[: t12.sum()], n2[t12])
     fill(tm, buf.t1a_t2_n, [t12.sum()])
+
+
+def _set_feedback(tm, buf, fb, ids=None) -> None:
+    """Put a dense feedback array on the device: the per class types where the model keeps them, and the lists."""
+    fb = np.asarray(fb, dtype=np.uint8).reshape(dense_fb_shape(tm))
+    if hasattr(buf, "feedback_type"):
+        fill(tm, buf.feedback_type, fb)
+    fill_fb_list(tm, buf, fb_ids_from_dense(tm, fb) if ids is None else ids, fb)
 
 
 def set_sample(tm, buf, e: int, key: int) -> None:
@@ -160,8 +178,7 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
         set_sample(tm, buf, e, key)
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(buf, e, key)
-        fill(tm, buf.feedback_type, fb)
-        fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
+        _set_feedback(tm, buf, fb, ids)
         dev._fit_apply_fb(buf, e, key)
 
 
@@ -174,15 +191,15 @@ def decide_feedback(tm, buf, votes, e: int = 0, key: int = 1) -> np.ndarray:
         dev._fit_eval(buf, e, key)
         fill(tm, buf.votes, votes)
         dev._fit_decide_fb(buf, e, key)
-    return host(tm, buf.feedback_type)
+    # Only discrete keeps the per class types (its weights need them), guided only fills the lists.
+    return host(tm, buf.feedback_type) if hasattr(buf, "feedback_type") else None
 
 
 def update_weights(tm, buf, fb=None, ids=None) -> None:
     dev = tm.dev
     with _ctx(tm):
         if fb is not None:
-            fill(tm, buf.feedback_type, fb)
-            fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
+            _set_feedback(tm, buf, fb, ids)
         dev._fit_update_weights(buf)
 
 

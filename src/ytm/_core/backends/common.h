@@ -1,5 +1,6 @@
 #pragma once
 
+// Neovim lsp block
 #ifdef IS_NEOVIM_CLANGD_ENV
 #define TOTAL_CLAUSES 1000
 #define INCLUDE_STATE 128
@@ -45,7 +46,16 @@
 #define NCLASSES_T uint32_t
 
 #include "cpu.h"
+#define FB_NONE 0
+#define FB_T1A 1
+#define FB_T1B 2
+#define FB_T2 3
 #endif
+
+// Defined Globals
+#define P_DENSE_MIN 0.5f
+#define T1B_MIN_TILE 256
+#define T1A_T2_MIN_TILE 256
 
 
 #define S_INV (1.0f / (float)(S))
@@ -96,6 +106,10 @@ INLINE_FN ull clause_output_offset(ull sample, ull global_clause_id) {
 
 INLINE_FN ull patch_output_offset(ull sample, ull global_clause_id, ull patch) {
     return (sample * (ull)TOTAL_CLAUSES + global_clause_id) * (ull)N_PATCHES + patch;
+}
+
+INLINE_FN ull chunk_sums_offset(ull sample, ull class_id, ull chunk, ull chunks) {
+    return (sample * (ull)CLASSES + class_id) * chunks + chunk;
 }
 
 INLINE_FN ull sample_offset(ull sample) {

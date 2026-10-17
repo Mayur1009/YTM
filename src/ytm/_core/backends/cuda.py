@@ -47,6 +47,8 @@ class Kernel:
 
 
 class CUDADevice(BaseDevice):
+    _VOTE_MIN_CHUNK = 256  # smallest clause chunk one warp sums alone
+
     xp = cp
 
     def _setup(self):
@@ -61,37 +63,45 @@ class CUDADevice(BaseDevice):
         block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
 
         self.cu = Kernel(self._build_code(), self.cuda_dev, block_size, props["multiProcessorCount"])
-        # Fit runs on its own stream, CUDA graphs cannot capture the legacy default stream.
-        self._fit_stream = cp.cuda.Stream(non_blocking=True)
+        self._fit_stream = cp.cuda.Stream(non_blocking=True)  # Stream for fit function, needed because of CUDA graph
 
-        # sum_votes splits each class row over every resident warp, its partials and row counters need
-        # 2 x that many entries. The counters start at zero and the kernel resets each one it finishes.
-        votes = self.cu.sum_votes
+        # vote_sum splits the class sums into clause chunks to fill every resident warp. With more than one chunk
+        # N * classes * chunks stays below 2 x the resident warps.
+        votes = self.cu.vote_over_clause_chunks
         self._votes_launch = votes.max_grid_size * votes.block_size
         with self.cuda_dev:
-            self._vote_partials = cp.zeros(2 * self._votes_launch // self._warp_size, dtype=np.float32)
-            self._vote_row_done = cp.zeros(2 * self._votes_launch // self._warp_size, dtype=np.uint32)
+            self._chunk_sums = cp.empty(2 * self._votes_launch // self._warp_size, dtype=np.float32)
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "update_fb.cu")
+        names = (
+            "cuda.h",
+            "common.h",
+            "rng.h",
+            "feedback.h",
+            "pack_clauses.h",
+            "pack_clauses.cu",
+            "evaluate.cu",
+            "interpret.cu",
+            "feedback.cu",
+        )
         return {name: read_file(core / name) for name in names}
 
     def _fb_list_allocs(self) -> dict:
         """The T1b list and the T1a/T2 list that decide_feedback fills, for the FitBuffers."""
         n, cnt = self.config._total_clauses, self.config._nclasses_dtype
-        return dict(
-            t1b_n=cp.zeros(1, dtype=np.uint32),
-            t1b_cid=cp.empty(n, dtype=np.uint32),
-            t1b_cnt=cp.empty(n, dtype=cnt),
-            t1a_t2_n=cp.zeros(1, dtype=np.uint32),
-            t1a_t2_cid=cp.empty(n, dtype=np.uint32),
-            t1a_cnt=cp.empty(n, dtype=cnt),
-            t2_cnt=cp.empty(n, dtype=cnt),
-            keys=cp.zeros(1, dtype=np.uint64),
-            e_dev=cp.zeros(1, dtype=np.int32),
-        )
+        return {
+            "t1b_n": cp.zeros(1, dtype=np.uint32),
+            "t1b_cid": cp.empty(n, dtype=np.uint32),
+            "t1b_cnt": cp.empty(n, dtype=cnt),
+            "t1a_t2_n": cp.zeros(1, dtype=np.uint32),
+            "t1a_t2_cid": cp.empty(n, dtype=np.uint32),
+            "t1a_cnt": cp.empty(n, dtype=cnt),
+            "t2_cnt": cp.empty(n, dtype=cnt),
+            "keys": cp.zeros(1, dtype=np.uint64),
+            "e_dev": cp.zeros(1, dtype=np.int32),
+        }
 
     def _fit_apply_fb(self, buf, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
@@ -234,7 +244,7 @@ class CUDADevice(BaseDevice):
         cfg = self.config
         pc = self.packed_clauses
 
-        self.cu.evaluate(
+        self.cu.eval_fit(
             cfg._total_clauses * self._warp_size,
             (
                 buf.keys,
@@ -253,11 +263,21 @@ class CUDADevice(BaseDevice):
             ),
         )
 
+    def vote_sum(self, clause_outputs, N: int, class_sums) -> None:
+        """Class sums of N samples: each class's clauses in chunks, one warp per chunk, then the chunks added up."""
+        cfg = self.config
+        n_sums = N * cfg.n_classes
+        max_chunks = -(-cfg._n_clauses // self._VOTE_MIN_CHUNK)
+        chunks = min(max(1, -(-(self._votes_launch // self._warp_size) // n_sums)), max_chunks)
+
+        # One chunk per class sum: write the class sums directly.
+        out = class_sums if chunks == 1 else self._chunk_sums
+        self.cu.vote_over_clause_chunks(self._votes_launch, (clause_outputs, self.clause_weights, np.int32(N), np.int32(chunks), out))
+        if chunks > 1:
+            self.cu.vote_combine_chunks(n_sums, (self._chunk_sums, np.int32(N), np.int32(chunks), class_sums))
+
     def _fit_voting(self, buf):
-        self.cu.sum_votes(
-            self._votes_launch,
-            (buf.clause_output, self.clause_weights, buf.votes, np.int32(1), self._vote_partials, self._vote_row_done),
-        )
+        self.vote_sum(buf.clause_output, 1, buf.votes)
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -272,11 +292,10 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.cu.calc_clause_outputs(
+                self.cu.eval_infer(
                     bs * cfg._total_clauses * self._warp_size,
                     (
                         Xb,
-                        clause_outputs,
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
@@ -284,13 +303,11 @@ class CUDADevice(BaseDevice):
                         pc.clause_n_feats,
                         pc.has_contra,
                         pc.clause_len,
+                        clause_outputs,
                     ),
                 )
 
-                self.cu.sum_votes(
-                    self._votes_launch,
-                    (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs), self._vote_partials, self._vote_row_done),
-                )
+                self.vote_sum(clause_outputs, bs, class_sums[i:end])
 
             return class_sums.get()
 
@@ -307,11 +324,10 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
 
-                self.cu.calc_clause_outputs(
+                self.cu.eval_infer(
                     bs * cfg._total_clauses * self._warp_size,
                     (
                         Xb,
-                        clause_outputs,
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
@@ -319,6 +335,7 @@ class CUDADevice(BaseDevice):
                         pc.clause_n_feats,
                         pc.has_contra,
                         pc.clause_len,
+                        clause_outputs,
                     ),
                 )
                 out[i:end] = clause_outputs.get()
@@ -338,11 +355,10 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
-                self.cu.calc_clause_outputs_patchwise(
+                self.cu.eval_patchwise(
                     bs * cfg._total_clauses * cfg._n_patches,
                     (
                         Xb,
-                        patch_output,
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
@@ -350,6 +366,7 @@ class CUDADevice(BaseDevice):
                         pc.clause_n_feats,
                         pc.has_contra,
                         pc.clause_len,
+                        patch_output,
                     ),
                 )
                 out[i:end] = patch_output.get()

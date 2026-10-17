@@ -68,3 +68,18 @@ INLINE_FN uint fb_list_append(uint* fb_count, uint* fb_ids, ull clause) {
     return i;
 }
 
+/*
+ * First kernel of each sample: moves to the next sample and empties the feedback lists.
+ *
+ * Arguments:
+ *   e_dev     index of the current sample, -1 before the first
+ *   t1b_n     T1b list length
+ *   t1a_t2_n  T1a/T2 list length
+ */
+extern "C" __global__ void prep_iter(int* e_dev, uint* t1b_n, uint* t1a_t2_n) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        *e_dev += 1;
+        *t1b_n = 0;
+        *t1a_t2_n = 0;
+    }
+}

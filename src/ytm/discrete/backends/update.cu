@@ -2,17 +2,24 @@
 #include "../../_core/backends/common.h"
 #include "../../_core/backends/cuda.h"
 #include "../../_core/backends/feedback.h"
-#include "../../_core/backends/feedback.h"
-#include "../../_core/backends/rng.h"
 
 #define T_MIN -100.0f
 #define T_MAX 100.0f
-#define FB_NONE 0
-#define FB_T1A 1
-#define FB_T1B 2
-#define FB_T2 3
 #endif
 
+/*
+ * Update probability of each class for the current sample.
+ *
+ * prob = (target - clip(votes, T_MIN, T_MAX)) / (T_MAX - T_MIN), in [-1, 1]. The sign is the direction (raise or
+ * lower the class sum). For calssification this is the same as the labels for the sample,
+ * (+ve -> label 1, -ve -> label 0).
+ *
+ * Arguments:
+ *   votes      class sums of the current sample
+ *   encoded_Y  target class sums of the batch, T_MAX for positive and T_MIN for negative labels
+ *   e_dev      index of the current sample
+ *   prob       output, update probability per class
+ */
 extern "C" __global__ void calc_update_prob(const float* votes, const float* encoded_Y, const int* e_dev, float* prob) {
     const int e = *e_dev;
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
@@ -22,12 +29,26 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
     }
 }
 
-extern "C" __global__ void decide_feedback(const ull* keys, const int* e_dev, const int8_t* clause_output_arr, const NLITS_T* clause_len,
-                                           const int8_t* clause_drop_mask, const float* prob, const float* label_probs,
-                                           const float* clause_weights, uint8_t* feedback_type,
-                                           uint* t1b_n, uint* t1b_cid,
-                                           NCLASSES_T* t1b_cnt, uint* t1a_t2_n, uint* t1a_t2_cid, NCLASSES_T* t1a_cnt,
-                                           NCLASSES_T* t2_cnt) {
+/*
+ * Decide each clause's feedback for the current sample and put it on the feedback lists.
+ * The type of feedback depends on the label and the polarity of the clause.
+ *
+ * Arguments:
+ *   keys, e_dev        RNG key of each sample, index of the current sample
+ *   clause_output_arr  clause outputs of the current sample
+ *   clause_len         number of included literals per clause
+ *   clause_drop_mask   1 for clauses dropped this epoch
+ *   prob               update probability per class, from calc_update_prob
+ *   label_probs        per sample, per class chance to take part (label sampling)
+ *   clause_weights     clause weights, their sign is the clause polarity per class
+ *   feedback_type      output, feedback type per class and clause
+ *   t1b_*, t1a_t2_*    output, the feedback lists
+ */
+extern "C" __global__ void decide_feedback(const ull* keys, const int* e_dev, const int8_t* clause_output_arr,
+                                           const NLITS_T* clause_len, const int8_t* clause_drop_mask, const float* prob,
+                                           const float* label_probs, const float* clause_weights,
+                                           uint8_t* feedback_type, uint* t1b_n, uint* t1b_cid, NCLASSES_T* t1b_cnt,
+                                           uint* t1a_t2_n, uint* t1a_t2_cid, NCLASSES_T* t1a_cnt, NCLASSES_T* t2_cnt) {
     const int e = *e_dev;
     const ull seed = keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
@@ -47,8 +68,8 @@ extern "C" __global__ void decide_feedback(const ull* keys, const int* e_dev, co
             if (!dropped) {
                 int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
 
-                if (!(rand_uniform(rng_k, &rng_counter) >= label_probs_e[class_id] || target == 0 ||
-                      rand_uniform(rng_k, &rng_counter) >= fabsf(prob[class_id]))) {
+                if (target != 0 && rand_uniform(rng_k, &rng_counter) < label_probs_e[class_id] &&
+                    rand_uniform(rng_k, &rng_counter) < fabsf(prob[class_id])) {
                     float weight = clause_weights[weight_offset(class_id, clause)];
                     int sign = (weight >= 0) - (weight < 0);
 
@@ -63,13 +84,26 @@ extern "C" __global__ void decide_feedback(const ull* keys, const int* e_dev, co
             n1b += (fb == FB_T1B);
             n2 += (fb == FB_T2);
         }
+        // One list entry per clause, with how many classes gave each type.
         fb_lists_append(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
+/*
+ * Update the clause weights from the per class feedback of the current sample.
+ *
+ * Only T1a and T2 change weights, thus only T1a/T2 lists are needed. T1a moves the weight away from 0. T2 moves it
+ * toward 0. |weight| >= +1. When ALLOW_POLARITY_CHANGE = True, the weight directly changes from -1 to +1 or +1 to -1
+ * when flipping the polarity.
+ *
+ * Arguments:
+ *   feedback_type   feedback type per class and clause, from decide_feedback
+ *   t1a_t2_n        T1a/T2 list length
+ *   t1a_t2_cid      T1a/T2 list clause ids
+ *   clause_weights  clause weights per class, updated in place
+ */
 extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
                                           float* clause_weights) {
-#if WEIGHTED
     const uint n = *t1a_t2_n;
 
     GRID_STRIDE_LOOP(i, n) {
@@ -78,41 +112,26 @@ extern "C" __global__ void update_weights(const uint8_t* feedback_type, const ui
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {
             uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
-            if (fb == FB_T1B)
-                continue;
-
             float* weight = &clause_weights[weight_offset(class_id, clause)];
             int sign = (*weight >= 0) - (*weight < 0);
 
-            if (fb == FB_T1A) {
-#if TYPE1A_FB
+            if (fb == FB_T1A && TYPE1A_FB) {
+                // Reinforce: one step away from 0, unless that passes MAX_WEIGHT.
                 float nw = *weight + sign * 1.0f;
                 if (fabsf(nw) < MAX_WEIGHT)
                     *weight = nw;
-#endif
-            }
-
-            else if (fb == FB_T2) {
-#if TYPE2_FB
+            } else if (fb == FB_T2 && TYPE2_FB) {
+                // Penalize: one step toward 0.
                 float nw = *weight - sign * 1.0f;
-
-#if NEGATIVE_CLAUSES == 0
-                *weight = clip(nw, 1.0f, MAX_WEIGHT);
-#else
-
-                if (fabsf(nw) < 1.0f) {
-#if ALLOW_POLARITY_CHANGE
-                    nw = -sign * 1.0f;
-#else
-                    nw = sign * 1.0f;
-#endif
+                if (!NEGATIVE_CLAUSES) {
+                    *weight = clip(nw, 1.0f, MAX_WEIGHT);
+                } else {
+                    // Reached 0: flip polarity or keep the clause at its smallest weight.
+                    if (fabsf(nw) < 1.0f)
+                        nw = ALLOW_POLARITY_CHANGE ? -sign * 1.0f : sign * 1.0f;
+                    *weight = nw;
                 }
-                *weight = nw;
-#endif
-
-#endif
             }
         }
     }
-#endif
 }

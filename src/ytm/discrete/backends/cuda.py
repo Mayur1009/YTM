@@ -74,7 +74,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
         self._fit_voting(buf)
         self._fit_decide_fb(buf, 0, 0)
         self._fit_apply_fb(buf, 0, 0)
-        self._fit_update_weights(buf)
+        if self.config.weighted:
+            self._fit_update_weights(buf)
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config

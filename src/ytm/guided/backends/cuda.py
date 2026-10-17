@@ -17,7 +17,6 @@ class GuidedFitBuffers(FitBuffers):
     grad: Any  # (n_classes,) loss gradient w.r.t. votes for the current sample
     y_hat: Any  # (n_classes,) activated votes for the current sample
     loss: Any  # (1,) loss for the current sample
-    feedback_type: Any  # (total_clauses, n_classes) for fb_signal="grad", (total_clauses,) for "delta_l"
     lr: float  # resolved once per epoch: the call's override, or config.lr
     lambda_: float  # resolved once per epoch: the call's override, or config.lambda_
     votes_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual votes, delta_l only
@@ -39,12 +38,9 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
 
         extra: dict[str, Any] = {}
         if cfg._fb_signal == FbSignal.DELTA_L:
-            feedback_type = cp.zeros(cfg._total_clauses, dtype=np.uint8)
             extra["votes_neg_ck"] = cp.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["y_hat_neg_ck"] = cp.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["loss_neg_ck"] = cp.empty(cfg._total_clauses, dtype=np.float32)
-        else:
-            feedback_type = cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8)
 
         return GuidedFitBuffers(
             X=None,
@@ -56,7 +52,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             grad=cp.empty(cfg.n_classes, dtype=np.float32),
             y_hat=cp.empty(cfg.n_classes, dtype=np.float32),
             loss=cp.empty(1, dtype=np.float32),
-            feedback_type=feedback_type,
             lr=lr,
             lambda_=lambda_,
             **extra,
@@ -136,7 +131,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_output,
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
-                    buf.feedback_type,
                     buf.t1b_n,
                     buf.t1b_cid,
                     buf.t1b_cnt,
@@ -167,7 +161,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_output,
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
-                    buf.feedback_type,
                     buf.t1b_n,
                     buf.t1b_cid,
                     buf.t1b_cnt,

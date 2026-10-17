@@ -77,7 +77,7 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "update_fb.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
 
     def _fb_list_allocs(self) -> dict[str, np.ndarray]:
@@ -105,9 +105,9 @@ class CPUDevice(BaseDevice):
         )
         self.lib.update_t1a_t2(
             c_uint64(rng_key),
+            c_int(e),
             buf.p_selected_pids,
             buf.p_X,
-            c_int(e),
             self.p_literal_offsets,
             buf.p_t1a_t2_n,
             buf.p_t1a_t2_cid,

@@ -204,7 +204,9 @@ class BaseTMConfig:
         self._n_clause_banks = 1 if self.coalesced else self.n_classes
         self._total_clauses = self._n_clause_banks * self._n_clauses
 
-        self._n_position_feats = (self._n_patches_y - 1) + (self._n_patches_x - 1)
+        # Position literals only exist with patches and when enabled.
+        self._position_literals = self.position_literals and self._n_patches > 1
+        self._n_position_feats = (self._n_patches_y - 1) + (self._n_patches_x - 1) if self._position_literals else 0
         self._n_patch_feats = int(np.sum(self._therm_bits))
 
         # literal offsets for thermometer encoded features
@@ -270,7 +272,7 @@ class BaseTMConfig:
 #define N_LITERALS {self._n_literals}
 #define MAX_INCLUDED_LITERALS {self._max_includes}
 #define NEGATED_LITERALS {int(self.negated_literals)}
-#define POSITION_LITERALS {int(self.position_literals)}
+#define POSITION_LITERALS {int(self._position_literals)}
 #define ALL_BINARY_FEATS {int(self._all_binary_feats)}
 
 #define INCLUDE_STATE {self._include_state}

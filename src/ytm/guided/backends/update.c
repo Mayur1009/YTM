@@ -5,11 +5,6 @@
 #include "../../_core/backends/rng.h"
 #include "act.h"
 
-#define FB_NONE 0
-#define FB_T1A 1
-#define FB_T1B 2
-#define FB_T2 3
-
 #define FB_SIGNAL_GRAD 0
 #define FB_SIGNAL_DELTA_L 1
 #define FB_SIGNAL FB_SIGNAL_DELTA_L
@@ -18,18 +13,22 @@ INLINE_FN void compute_loss(const float* restrict y, const float* restrict y_hat
                             float* restrict loss) {}
 #endif
 
+// Compute activations for a sample.
 void votes_activation(const float* restrict votes, float* restrict y_hat) { compute_act(votes, y_hat); }
 
+// Compute activations for a batch of samples.
 void votes_activation_batch(const float* restrict votes, int n_samples, float* restrict y_hat) {
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (int e = 0; e < n_samples; e++)
         compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
 }
 
+// Compute loss and gradient for a single sample.
 void loss_gradient(const float* restrict y_hat, const float* restrict y, float* restrict grad, float* restrict loss) {
     compute_loss(y, y_hat, grad, loss);
 }
 
+// Computes votes after flipping the clause output
 void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights,
                           const int8_t* restrict clause_output, float* restrict votes_neg_ck) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
@@ -37,18 +36,18 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
 
-#if COALESCED == 0
-        if (class_id != clause_id / (ull)CLAUSES_PER_CLASS) {
+        // Without coalescing a clause only votes for its own class, the other classes keep their votes.
+        if (!COALESCED && class_id != clause_id / (ull)CLAUSES_PER_CLASS) {
             votes_neg_ck[clause_class] = votes[class_id];
             continue;
         }
-#endif
         int ck = clause_output[clause_id];
         float w = clause_weights[weight_offset(class_id, clause_id)];
         votes_neg_ck[clause_class] = votes[class_id] - (ck ? w : -w);
     }
 }
 
+// Compute loss with flipped clause output.
 void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, float* restrict loss_neg_ck) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
@@ -58,10 +57,29 @@ void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restri
     }
 }
 
+/*
+ * Decide each clause's feedback from the loss gradient and put it on the feedback lists.
+ *
+ * Per class, feedback happens with prob 1 - exp(-lambda_ |grad|). The clause should push the class sum the way
+ * the gradient points when its polarity agrees with the gradient sign (dir > 0):
+ *   dir > 0, clause fired and has space  -> T1a
+ *   dir > 0, otherwise                   -> T1b
+ *   dir < 0, clause fired                -> T2
+ *
+ * Arguments:
+ *   seed               RNG key of the current sample
+ *   grad               gradient per class, positive means raise the class sum
+ *   clause_weights     clause weights, their sign is the clause polarity per class
+ *   clause_len         number of included literals per clause
+ *   clause_output      clause outputs of the current sample
+ *   clause_drop_mask   1 for clauses dropped this epoch
+ *   lambda_            scales |grad| into a feedback probability
+ *   t1b_*, t1a_t2_*    output, the feedback lists
+ */
 void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights,
                           const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                           const int8_t* restrict clause_drop_mask, const float lambda_,
-                          uint8_t* restrict feedback_type, uint* restrict t1b_n, uint* restrict t1b_cid,
+                          uint* restrict t1b_n, uint* restrict t1b_cid,
                           NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                           NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
@@ -88,21 +106,22 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                 float update_prob = 1.0f - expf(-lambda_ * fabsf(g));
 
                 if (rand_uniform(rng_k, &rng_counter) < update_prob) {
-                    bool t1a = (ck == 1 && dir > 0 && has_space);
-                    bool t1b = ((ck == 0 && dir > 0) || (ck == 1 && dir > 0 && !has_space));
-                    bool t2 = (ck == 1 && dir < 0);
-                    fb = t1a ? FB_T1A : (t1b ? FB_T1B : (t2 ? FB_T2 : FB_NONE));
+                    if (dir > 0)
+                        fb = (ck && has_space) ? FB_T1A : FB_T1B;
+                    else if (ck)
+                        fb = FB_T2;
                 }
             }
-            feedback_type[fbtype_offset(class_id, clause)] = fb;
             n1a += (fb == FB_T1A);
             n1b += (fb == FB_T1B);
             n2 += (fb == FB_T2);
         }
+        // One list entry per clause, with how many classes gave each type.
         fb_lists_append(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
+// Feedback type of one clause from delta_L = loss - loss with the clause output flipped, with prob uprob.
 static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob, float delta_L, int ck,
                                         bool has_space) {
     ull rng_k = rng_hash(seed, rng_id, 0xFEEDFACEULL);
@@ -124,30 +143,54 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
     return fb;
 }
 
+/*
+ * Decide each clause's feedback from delta_L and put it on the feedback lists, one decision per clause.
+ *
+ * delta_L = loss - loss with the clause output flipped (compute_votes_neg_ck, votes_activation_batch,
+ * compute_loss_neg_ck). Feedback happens with prob 1 - exp(-lambda_ |delta_L|), type from select_fb_delta_l.
+ *
+ * Arguments:
+ *   seed               RNG key of the current sample
+ *   loss               loss of the current sample
+ *   loss_neg_ck        loss with each clause's output flipped
+ *   clause_len         number of included literals per clause
+ *   clause_output      clause outputs of the current sample
+ *   clause_drop_mask   1 for clauses dropped this epoch
+ *   lambda_            scales |delta_L| into a feedback probability
+ *   t1b_*, t1a_t2_*    output, the feedback lists
+ */
 void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck,
                              const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                              const int8_t* restrict clause_drop_mask, const float lambda_,
-                             uint8_t* restrict feedback_type, uint* restrict t1b_n, uint* restrict t1b_cid,
+                             uint* restrict t1b_n, uint* restrict t1b_cid,
                              NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                              NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
-        if (clause_drop_mask[clause_id] == 1) {
-            feedback_type[clause_id] = FB_NONE;
+        if (clause_drop_mask[clause_id] == 1)
             continue;
-        }
 
         int ck = clause_output[clause_id];
         bool has_space = (clause_len[clause_id] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         float delta_L = *loss - loss_neg_ck[clause_id];
         float update_prob = 1.0f - expf(-lambda_ * fabsf(delta_L));
         uint8_t fb = select_fb_delta_l(seed, clause_id, update_prob, delta_L, ck, has_space);
-        feedback_type[clause_id] = fb;
         fb_lists_append(clause_id, fb == FB_T1A, fb == FB_T1B, fb == FB_T2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n,
                         t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
+/*
+ * Gradient step on the weights of every firing clause: w += lr * grad, per class.
+ * With ALLOW_POLARITY_CHANGE the weight may cross 0, otherwise it keeps its sign (|w| >= 0.0001).
+ *
+ * Arguments:
+ *   grad              gradient per class, positive means raise the class sum
+ *   lr                learning rate
+ *   clause_output     clause outputs of the current sample, only firing clauses contributed to the votes
+ *   clause_drop_mask  1 for clauses dropped this epoch
+ *   clause_weights    clause weights per class, updated in place
+ */
 void update_weights(const float* restrict grad, const float lr, const int8_t* restrict clause_output,
                     const int8_t* restrict clause_drop_mask, float* restrict clause_weights) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
@@ -159,11 +202,11 @@ void update_weights(const float* restrict grad, const float lr, const int8_t* re
         LOOP_CLASS_ID(class_id, clause) {
             ull idx = weight_offset(class_id, clause);
             float new_w = clause_weights[idx] + lr * grad[class_id];
-#if ALLOW_POLARITY_CHANGE
-            clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);
-#else
-            clause_weights[idx] = (clause_weights[idx] >= 0) ? clip(new_w, 0.0001f, MAX_WEIGHT) : clip(new_w, -MAX_WEIGHT, -0.0001f);
-#endif
+            if (ALLOW_POLARITY_CHANGE)
+                clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);
+            else
+                clause_weights[idx] =
+                    (clause_weights[idx] >= 0) ? clip(new_w, 0.0001f, MAX_WEIGHT) : clip(new_w, -MAX_WEIGHT, -0.0001f);
         }
     }
 }

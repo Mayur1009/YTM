@@ -22,6 +22,11 @@ void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
 #define GET_THREAD_ID 0
 #endif
 
+// CUDA's built-in float2, for code shared with the GPU.
+typedef struct {
+    float x, y;
+} float2;
+
 // Lane primitives, a single lane on CPU so both are the identity.
 INLINE_FN float lane_scan_add(float v) { return v; }
 

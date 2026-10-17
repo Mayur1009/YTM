@@ -27,16 +27,22 @@ INLINE_FN float rand_uniform(ull key, uint* counter) {
     return (float)(x >> 40) * 0x1p-24f; // 24 bits are enough for float32 rands.
 }
 
-typedef struct {
-    float r1, r2;
-} uniform2_t;
+// Random int in [0, high).
+INLINE_FN uint rand_int(ull key, uint* counter, uint high) {
+    return (uint)(((rand_u64(key, counter) >> 32) * high) >> 32);
+}
+
+// Random 32-bit unsigned int in the range [0, high).
+INLINE_FN uint rand_int(ull key, uint* counter, uint high) {
+    return (uint)(((rand_u64(key, counter) >> 32) * high) >> 32);
+}
 
 // Make 2 uniform random numbers from the hash.
-INLINE_FN uniform2_t rand_uniform2(ull key, uint* counter) {
+INLINE_FN float2 rand_uniform2(ull key, uint* counter) {
     ull x = rand_u64(key, counter);
-    uniform2_t n;
-    n.r1 = (float)(x >> 40) * 0x1p-24f;                 // top 24 bits
-    n.r2 = (float)((x >> 16) & 0xFFFFFFull) * 0x1p-24f; // next 24 bits
+    float2 n;
+    n.x = (float)(x >> 40) * 0x1p-24f;                 // top 24 bits
+    n.y = (float)((x >> 16) & 0xFFFFFFull) * 0x1p-24f; // next 24 bits
     return n;
 }
 
