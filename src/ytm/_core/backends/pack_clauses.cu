@@ -4,40 +4,40 @@
 #include "pack_clauses.h"
 #endif
 
+// X or Y position literal scan. Returns false on contradiction.
+__device__ inline bool scan_position_axis(const warp_t& warp, const TA_STATE_T* ta_state, int off, int n, int* lo,
+                                          int* hi, uint* includes, bool stop) {
+    const int lane = (int)warp.thread_rank();
+
+    for (int base = 0; base < n; base += WARP_SIZE) {
+        const int lit = base + lane;                                    // One lane per literal
+        const bool in = lit < n;                                        // check if lane is in the bounds.
+        uint pos = warp.ballot(in && is_included(ta_state[off + lit])); // Sync lanes
+        uint neg = NEGATED_LITERALS ? warp.ballot(in && is_included(ta_state[off + lit + N_LITERALS / 2])) : 0u;
+        if (pos)
+            *lo = base + WARP_SIZE - __clz(pos); // __clz(Count leading zero) gives the lower bound.
+        if (neg && *hi == n)
+            *hi = base + __ffs(neg) - 1;        // __ffs(Find first set) on the negations gives the upper bound.
+        *includes += __popc(pos) + __popc(neg); // Count the total includes in the pos and neg using pop-count
+        if (stop && *lo > *hi)                  // If the positions are contradictory, then stop
+            return false;
+    }
+    return *lo <= *hi;
+}
+
+// Find the position bounds of a clause.
 __device__ inline PositionResult scan_position_literals(const warp_t& warp, const TA_STATE_T* ta_state, int dont_skip) {
-    int lane = warp.thread_rank();
-    int pos0 = 0, pos1 = N_PATCHES_Y - 1;
-    int pos2 = 0, pos3 = N_PATCHES_X - 1;
+    int pos0 = 0, pos1 = N_POSITION_FEATS_Y;
+    int pos2 = 0, pos3 = N_POSITION_FEATS_X;
     uint includes = 0;
-    bool valid = true;
-
-    for (int base = 0; base < N_POSITION_FEATS_Y; base += WARP_SIZE) {
-        int lit = base + lane;
-        if (lit < N_POSITION_FEATS_Y)
-            update_pos_bounds(ta_state, lit, 0, &pos0, &pos1, &includes);
-        if (warp.any(pos0 > pos1)) {
-            valid = false;
-            if (!dont_skip)
-                return {pos0, pos1, pos2, pos3, includes, false};
-        }
-    }
-
-    for (int base = 0; base < N_POSITION_FEATS_X; base += WARP_SIZE) {
-        int lit = base + lane;
-        if (lit < N_POSITION_FEATS_X)
-            update_pos_bounds(ta_state, lit, N_POSITION_FEATS_Y, &pos2, &pos3, &includes);
-        if (warp.any(pos2 > pos3)) {
-            valid = false;
-            if (!dont_skip)
-                return {pos0, pos1, pos2, pos3, includes, false};
-        }
-    }
-
-    pos0 = cg::reduce(warp, pos0, cg::greater<int>());
-    pos1 = cg::reduce(warp, pos1, cg::less<int>());
-    pos2 = cg::reduce(warp, pos2, cg::greater<int>());
-    pos3 = cg::reduce(warp, pos3, cg::less<int>());
-    return {pos0, pos1, pos2, pos3, includes, (valid && pos0 <= pos1 && pos2 <= pos3)};
+    // Scan Y portion of the position literals
+    bool y_ok = scan_position_axis(warp, ta_state, 0, N_POSITION_FEATS_Y, &pos0, &pos1, &includes, !dont_skip);
+    bool x_ok = false;
+    if (dont_skip || y_ok)
+        // Scan X portion of the position literals.
+        x_ok = scan_position_axis(warp, ta_state, N_POSITION_FEATS_Y, N_POSITION_FEATS_X, &pos2, &pos3, &includes,
+                                  !dont_skip);
+    return {pos0, pos1, pos2, pos3, includes, y_ok && x_ok}; // Includes is the warp total, not per lane.
 }
 
 __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const TA_STATE_T* ta_state,
@@ -48,22 +48,28 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
     int write_offset = 0;
     bool all_valid = true;
 
+    // One feature per lane. Bounded features are compacted in fid order with a ballot.
+    const uint lanes_before = (1u << lane) - 1u; // Bitmask setting bit 1 for all the lanes before this one.
     for (int base = 0; base < N_RAW_PATCH_FEATS; base += WARP_SIZE) {
         int fid = base + lane;
         bool in_range = (fid < N_RAW_PATCH_FEATS);
 
         FeatScan fs = {};
         if (in_range) {
+            // Calculate bound for a single feature
             fs = calc_single_feat_bounds(ta_state, therm_bits, literal_offsets, fid);
             n_includes += fs.includes;
         }
 
-        int slot = warp_compact_slot(warp, fs.is_bounded, &write_offset);
+        uint bounded = warp.ballot(fs.is_bounded); // Sync lanes, each bit set meaning that lane found a bounded feature.
         if (fs.is_bounded) {
+            // Use lanes before and bounded to calculate which slot should be filled in the compacted lists.
+            int slot = write_offset + __popc(bounded & lanes_before);
             feat_ids[slot] = (NFEAT_T)fid;
             feat_bounds[slot * 2 + 0] = fs.lb;
             feat_bounds[slot * 2 + 1] = fs.ub;
         }
+        write_offset += __popc(bounded);
 
         all_valid = all_valid && warp.all(!(in_range && fs.lb > fs.ub));
         if (!all_valid && !dont_skip)
@@ -115,7 +121,7 @@ extern "C" __global__ void pack_clauses(const TA_STATE_T* global_ta_states, cons
         FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
 
         FeatureResult fr = scan_feature_literals(warp, ta_state, therm_bits, literal_offsets, cfids, cfb, dont_skip);
-        uint total_inc = cg::reduce(warp, pr.includes + fr.includes, cg::plus<uint>());
+        uint total_inc = pr.includes + cg::reduce(warp, fr.includes, cg::plus<uint>());
 
         if (lane == 0) {
             clause_n_feats[clause] = (NFEAT_T)fr.n_bounded_feats;
