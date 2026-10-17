@@ -1,31 +1,38 @@
+// Stateless Splitmix RNG
+
+#pragma once
 #ifdef IS_NEOVIM_CLANGD_ENV
 #include "common.h"
 #endif
 
-// Counter based RNG, shared by the C and CUDA builds.
-//
-// A key is derived once per work item from the seed and a few identifiers, then drawn from with a
-// counter. Nothing is stored between calls, so the same key and counter always give the same value
-// and threads never share state.
-
-#pragma once
-
 INLINE_FN ull mix64(ull x) {
+    // SplitMix64 finalizer: scrambles all 64 bits, so nearby inputs give unrelated outputs.
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
     return x ^ (x >> 31);
 }
 
+// Mix b into a.
 INLINE_FN ull hash_combine(ull a, ull b) { return mix64(a ^ mix64(b + 0x9e3779b97f4a7c15ULL)); }
-INLINE_FN ull rng_hash(ull seed, ull a, ull b) { return hash_combine(hash_combine(seed, a), b); }
 
+// Mix 3 values to get a hash.
+INLINE_FN ull rng_hash(ull a, ull b, ull c) { return hash_combine(hash_combine(a, b), c); }
+
+// Random 64bit int. advances the counter after use.
+INLINE_FN ull rand_u64(ull key, uint* counter) { return mix64(key ^ (ull)((*counter)++)); }
+
+// Random uniform float.
 INLINE_FN float rand_uniform(ull key, uint* counter) {
-    ull x = key ^ (ull)((*counter)++);
-    x = mix64(x);
-    return (float)(x >> 40) * 0x1p-24f;
+    ull x = rand_u64(key, counter);
+    return (float)(x >> 40) * 0x1p-24f; // 24 bits are enough for float32 rands.
 }
 
-// Geometric sampling for getting the number of trials after which there will be success.
+// Random 32-bit unsigned int in the range [0, high).
+INLINE_FN uint rand_int(ull key, uint* counter, uint high) {
+    return (uint)(((rand_u64(key, counter) >> 32) * high) >> 32);
+}
+
+// Geometric sampling. number of bernoulli(p) trials up to and including the first success.
 INLINE_FN float geom_sample(ull rng_key, uint* rng_counter, float p) {
     if (p >= 1.0f)
         return 1.0f;
