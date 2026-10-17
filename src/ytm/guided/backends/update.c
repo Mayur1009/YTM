@@ -147,51 +147,6 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
     }
 }
 
-void update_clauses(const ull seed, const int8_t* restrict clause_output, const NPATCHES_T* restrict selected_patch_ids,
-                    const FBOUND_T* restrict X, const int e, const NLITS_T* restrict literal_offsets,
-                    const uint8_t* restrict feedback_type, const uint* restrict fb_count,
-                    const uint* restrict fb_ids, TA_STATE_T* restrict global_ta_states,
-                    int8_t* restrict is_clause_synced) {
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    const uint n = *fb_count;
-    if (n == 0)
-        return;
-
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull i = 0; i < n; i++) {
-        ull clause = fb_ids[i];
-        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
-
-#if (N_PATCHES > 1)
-        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
-        int patch_idx_y = patch_id / N_PATCHES_X;
-        int patch_idx_x = patch_id % N_PATCHES_X;
-#else
-        int patch_idx_y = 0, patch_idx_x = 0;
-#endif
-
-        ull rng_k = rng_hash(seed, clause, 0xCAFEBABEULL);
-        uint rng_counter = 0;
-
-#if FB_SIGNAL == FB_SIGNAL_GRAD
-        ull class_id;
-        LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
-            if (fb == FB_NONE)
-                continue;
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
-            is_clause_synced[clause] = 0;
-        }
-#else
-        uint8_t fb = feedback_type[clause];
-        if (fb != FB_NONE) {
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, 0);
-            is_clause_synced[clause] = 0;
-        }
-#endif
-    }
-}
-
 void update_weights(const float* restrict grad, const float lr, const int8_t* restrict clause_output,
                     const int8_t* restrict clause_drop_mask, float* restrict clause_weights) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)

@@ -65,7 +65,7 @@ class CUDADevice(BaseDevice):
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu")
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
         return {name: read_file(core / name) for name in names}
 
     def _fb_list_allocs(self) -> dict:
@@ -80,6 +80,36 @@ class CUDADevice(BaseDevice):
             "t1a_cnt": cp.empty(n, dtype=cnt),
             "t2_cnt": cp.empty(n, dtype=cnt),
         }
+
+    def _fit_apply_fb(self, buf, e: int, rng_key: int) -> None:
+        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
+        self.cu.update_t1b(
+            self.config._total_clauses * self._warp_size,
+            (
+                np.uint64(rng_key),
+                buf.t1b_n,
+                buf.t1b_cid,
+                buf.t1b_cnt,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
+        self.cu.update_t1a_t2(
+            self.config._total_clauses * self._warp_size,
+            (
+                np.uint64(rng_key),
+                np.int32(e),
+                buf.selected_pids,
+                buf.X,
+                self.literal_offsets,
+                buf.t1a_t2_n,
+                buf.t1a_t2_cid,
+                buf.t1a_cnt,
+                buf.t2_cnt,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
 
     def _bind(self):
         pass

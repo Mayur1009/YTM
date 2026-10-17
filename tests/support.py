@@ -117,10 +117,39 @@ def fb_ids_from_dense(tm, fb) -> np.ndarray:
     return np.sort(ids).astype(np.uint32)
 
 
-def fill_fb_list(tm, buf, ids) -> None:
+def fb_counts_from_dense(tm, fb, fb_type) -> np.ndarray:
+    """Per global clause, how many classes gave `fb_type` in a dense `feedback_type`."""
+    cfg = tm.config
+    is_type = np.asarray(fb) == fb_type
+    if is_type.ndim == 1:  # guided delta_l: one entry per global clause
+        return is_type.astype(np.int64)
+    if cfg._total_clauses == cfg._n_clauses:  # coalesced: row is the clause, columns are classes
+        return is_type.sum(axis=1)
+    return is_type.T.reshape(-1).astype(np.int64)  # one bank per class: global id is bank * n_clauses + row
+
+
+def fill_fb_list(tm, buf, ids, fb) -> None:
+    """Fill the feedback lists with clauses `ids`, their counts taken from the dense host array `fb`."""
     ids = np.asarray(ids, dtype=np.uint32)
-    fill(tm, buf.fb_ids[: len(ids)], ids)
-    fill(tm, buf.fb_count, [len(ids)])
+    fb = np.asarray(fb)
+    # Split into the T1b list and the T1a/T2 list, each with per clause counts over classes.
+    n1a, n1b, n2 = (fb_counts_from_dense(tm, fb, t)[ids] for t in (FB_T1A, FB_T1B, FB_T2))
+    t1b = n1b > 0
+    fill(tm, buf.t1b_cid[: t1b.sum()], ids[t1b])
+    fill(tm, buf.t1b_cnt[: t1b.sum()], n1b[t1b])
+    fill(tm, buf.t1b_n, [t1b.sum()])
+    t12 = (n1a + n2) > 0
+    fill(tm, buf.t1a_t2_cid[: t12.sum()], ids[t12])
+    fill(tm, buf.t1a_cnt[: t12.sum()], n1a[t12])
+    fill(tm, buf.t2_cnt[: t12.sum()], n2[t12])
+    fill(tm, buf.t1a_t2_n, [t12.sum()])
+
+
+def _set_feedback(tm, buf, fb, ids=None) -> None:
+    """Put a dense feedback array on the device: the per class types and the lists."""
+    fill(tm, buf.feedback_type, fb)
+    fb = host(tm, buf.feedback_type)
+    fill_fb_list(tm, buf, fb_ids_from_dense(tm, fb) if ids is None else ids, fb)
 
 
 def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
@@ -132,8 +161,7 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
     with _ctx(tm):
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(buf, e, key)
-        fill(tm, buf.feedback_type, fb)
-        fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
+        _set_feedback(tm, buf, fb, ids)
         dev._fit_apply_fb(buf, e, key)
 
 
@@ -152,8 +180,7 @@ def update_weights(tm, buf, fb=None, ids=None) -> None:
     dev = tm.dev
     with _ctx(tm):
         if fb is not None:
-            fill(tm, buf.feedback_type, fb)
-            fill_fb_list(tm, buf, fb_ids_from_dense(tm, host(tm, buf.feedback_type)) if ids is None else ids)
+            _set_feedback(tm, buf, fb, ids)
         dev._fit_update_weights(buf)
 
 

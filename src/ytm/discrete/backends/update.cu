@@ -63,45 +63,6 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
     }
 }
 
-// A whole warp owns one clause, so `fb` is warp uniform and `apply_feedback` can stride its lanes
-// over the literals.
-extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_output, const NPATCHES_T* selected_patch_ids,
-                                          const FBOUND_T* X, const int e, const NLITS_T* literal_offsets,
-                                          const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
-                                          TA_STATE_T* global_ta_states, int8_t* is_clause_synced) {
-    auto [warp, lane, warp_id, total_warps] = warp_grid();
-
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    const uint n = *fb_count;
-
-    WARP_STRIDE_LOOP(i, n) {
-        ull clause = fb_ids[i];
-        TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
-
-#if (N_PATCHES > 1)
-        int patch_id = clause_output[clause] ? (int)selected_patch_ids[clause] : 0;
-        int patch_idx_y = patch_id / N_PATCHES_X;
-        int patch_idx_x = patch_id % N_PATCHES_X;
-#else
-        int patch_idx_y = 0, patch_idx_x = 0;
-#endif
-
-        ull rng_k = rng_hash(seed, clause * (ull)WARP_SIZE + (ull)lane, 0xCAFEBABEULL);
-        uint rng_counter = 0;
-
-        ull class_id;
-        LOOP_CLASS_ID(class_id, clause) {
-            uint8_t fb = feedback_type[fbtype_offset(class_id, clause)];
-            if (fb == FB_NONE)
-                continue;
-
-            apply_feedback(rng_k, &rng_counter, fb, Xe, patch_idx_y, patch_idx_x, literal_offsets, ta_states, lane);
-            if (lane == 0)
-                is_clause_synced[clause] = 0;
-        }
-    }
-}
-
 extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
                                           float* clause_weights) {
 #if WEIGHTED

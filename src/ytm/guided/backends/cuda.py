@@ -168,24 +168,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                 ),
             )
 
-    def _fit_apply_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
-        self.cu.update_clauses(
-            self.config._total_clauses * self._warp_size,
-            (
-                np.uint64(rng_key),
-                buf.clause_output,
-                buf.selected_pids,
-                buf.X,
-                np.int32(e),
-                self.literal_offsets,
-                buf.feedback_type,
-                buf.fb_count,
-                buf.fb_ids,
-                self.ta_states,
-                self.packed_clauses.is_clause_synced,
-            ),
-        )
-
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
         self.cu.update_weights(
             self.config._total_clauses,

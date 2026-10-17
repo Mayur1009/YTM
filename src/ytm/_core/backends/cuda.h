@@ -4,6 +4,7 @@
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cooperative_groups/scan.h>
 namespace cg = cooperative_groups;
 using warp_t = cg::thread_block_tile<WARP_SIZE>;
 
@@ -37,6 +38,16 @@ __device__ inline WarpGrid warp_grid() {
     auto grid = cg::this_grid();
     return {warp, (int)warp.thread_rank(), grid.thread_rank() / warp.size(), grid.size() / warp.size()};
 }
+
+// Lane primitives for warp cooperative loops. All 32 lanes must call them together.
+INLINE_FN float lane_scan_add(float v) {
+    auto warp = cg::tiled_partition<WARP_SIZE>(cg::this_thread_block());
+    return cg::inclusive_scan(warp, v);
+}
+
+INLINE_FN float lane_last(float v) { return __shfl_sync(0xffffffffu, v, WARP_SIZE - 1); }
+
+INLINE_FN int lane_id() { return (int)(threadIdx.x & (WARP_SIZE - 1)); }
 
 INLINE_FN uint list_push(uint* n, uint* ids, ull id) {
     auto g = cg::coalesced_threads();

@@ -77,7 +77,7 @@ class CPUDevice(BaseDevice):
 
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c")
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
 
     def _fb_list_allocs(self) -> dict[str, np.ndarray]:
@@ -92,6 +92,30 @@ class CPUDevice(BaseDevice):
             "t1a_cnt": np.empty(n, dtype=cnt),
             "t2_cnt": np.empty(n, dtype=cnt),
         }
+
+    def _fit_apply_fb(self, buf: CPUFitBuffers, e: int, rng_key: int) -> None:
+        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
+        self.lib.update_t1b(
+            c_uint64(rng_key),
+            buf.p_t1b_n,
+            buf.p_t1b_cid,
+            buf.p_t1b_cnt,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
+        self.lib.update_t1a_t2(
+            c_uint64(rng_key),
+            c_int(e),
+            buf.p_selected_pids,
+            buf.p_X,
+            self.p_literal_offsets,
+            buf.p_t1a_t2_n,
+            buf.p_t1a_t2_cid,
+            buf.p_t1a_cnt,
+            buf.p_t2_cnt,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
 
     def _bind(self):
         cfg = self.config

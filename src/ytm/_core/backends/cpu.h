@@ -22,6 +22,13 @@ void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
 #define GET_THREAD_ID 0
 #endif
 
+// Lane primitives, a single lane on CPU so both are the identity.
+INLINE_FN float lane_scan_add(float v) { return v; }
+
+INLINE_FN float lane_last(float v) { return v; }
+
+INLINE_FN int lane_id(void) { return 0; }
+
 INLINE_FN uint list_push(uint* RESTRICT n, uint* RESTRICT ids, ull id) {
     uint i;
 #pragma omp atomic capture

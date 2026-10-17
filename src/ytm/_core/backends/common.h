@@ -47,6 +47,8 @@
 #include "cpu.h"
 #endif
 
+// Defined Globals
+#define P_DENSE_MIN 0.5f
 
 #define S_INV (1.0f / (float)(S))
 #define N_POSITION_FEATS_Y (N_PATCHES_Y - 1)
