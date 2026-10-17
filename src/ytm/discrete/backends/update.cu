@@ -24,13 +24,14 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
 extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_output_arr, const NLITS_T* clause_len,
                                            const int8_t* clause_drop_mask, const float* prob, const float* label_probs,
                                            const int e, const float* clause_weights, uint8_t* feedback_type,
-                                           uint* fb_count, uint* fb_ids) {
+                                           uint* t1b_n, uint* t1b_cid, NCLASSES_T* t1b_cnt, uint* t1a_t2_n,
+                                           uint* t1a_t2_cid, NCLASSES_T* t1a_cnt, NCLASSES_T* t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
-        bool any_fb = false;
+        NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -54,10 +55,11 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
-            any_fb |= (fb != FB_NONE);
+            n1a += (fb == FB_T1A);
+            n1b += (fb == FB_T1B);
+            n2 += (fb == FB_T2);
         }
-        if (any_fb)
-            fb_list_append(fb_count, fb_ids, clause);
+        append_fb_lists(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
@@ -100,13 +102,13 @@ extern "C" __global__ void update_clauses(const ull seed, const int8_t* clause_o
     }
 }
 
-extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* fb_count, const uint* fb_ids,
+extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
                                           float* clause_weights) {
 #if WEIGHTED
-    const uint n = *fb_count;
+    const uint n = *t1a_t2_n;
 
     GRID_STRIDE_LOOP(i, n) {
-        ull clause = fb_ids[i];
+        ull clause = t1a_t2_cid[i];
 
         ull class_id;
         LOOP_CLASS_ID(class_id, clause) {

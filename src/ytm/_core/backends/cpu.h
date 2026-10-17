@@ -22,9 +22,10 @@ void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
 #define GET_THREAD_ID 0
 #endif
 
-INLINE_FN void fb_list_append(uint* RESTRICT fb_count, uint* RESTRICT fb_ids, ull clause) {
+INLINE_FN uint list_push(uint* RESTRICT n, uint* RESTRICT ids, ull id) {
     uint i;
 #pragma omp atomic capture
-    i = (*fb_count)++;
-    fb_ids[i] = (uint)clause;
+    i = (*n)++;
+    ids[i] = (uint)id;
+    return i;
 }

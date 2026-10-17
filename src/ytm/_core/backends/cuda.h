@@ -38,12 +38,14 @@ __device__ inline WarpGrid warp_grid() {
     return {warp, (int)warp.thread_rank(), grid.thread_rank() / warp.size(), grid.size() / warp.size()};
 }
 
-INLINE_FN void fb_list_append(uint* fb_count, uint* fb_ids, ull clause) {
+INLINE_FN uint list_push(uint* n, uint* ids, ull id) {
     auto g = cg::coalesced_threads();
     uint base;
     if (g.thread_rank() == 0)
-        base = atomicAdd(fb_count, g.size());
+        base = atomicAdd(n, g.size());
     base = g.shfl(base, 0);
-    fb_ids[base + g.thread_rank()] = (uint)clause;
+    uint i = base + g.thread_rank();
+    ids[i] = (uint)id;
+    return i;
 }
 

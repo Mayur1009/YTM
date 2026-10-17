@@ -53,8 +53,6 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
-            fb_count=cp.zeros(1, dtype=np.uint32),
-            fb_ids=cp.empty(cfg._total_clauses, dtype=np.uint32),
             grad=cp.empty(cfg.n_classes, dtype=np.float32),
             y_hat=cp.empty(cfg.n_classes, dtype=np.float32),
             loss=cp.empty(1, dtype=np.float32),
@@ -62,6 +60,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             lr=lr,
             lambda_=lambda_,
             **extra,
+            **self._fb_list_allocs(),
         )
 
     def fit_epoch(
@@ -111,7 +110,8 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
-        buf.fb_count.data.memset_async(0, buf.fb_count.nbytes)
+        buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
+        buf.t1a_t2_n.data.memset_async(0, buf.t1a_t2_n.nbytes)
 
         self.cu.votes_activation(1, (buf.votes, buf.y_hat))
         self.cu.loss_gradient(1, (buf.y_hat, buf.Y[e], buf.grad, buf.loss))
@@ -128,8 +128,13 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
-                    buf.fb_count,
-                    buf.fb_ids,
+                    buf.t1b_n,
+                    buf.t1b_cid,
+                    buf.t1b_cnt,
+                    buf.t1a_t2_n,
+                    buf.t1a_t2_cid,
+                    buf.t1a_cnt,
+                    buf.t2_cnt,
                 ),
             )
         else:
@@ -153,8 +158,13 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
                     buf.clause_drop_mask,
                     np.float32(buf.lambda_),
                     buf.feedback_type,
-                    buf.fb_count,
-                    buf.fb_ids,
+                    buf.t1b_n,
+                    buf.t1b_cid,
+                    buf.t1b_cnt,
+                    buf.t1a_t2_n,
+                    buf.t1a_t2_cid,
+                    buf.t1a_cnt,
+                    buf.t2_cnt,
                 ),
             )
 

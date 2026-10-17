@@ -10,6 +10,47 @@
 
 #pragma once
 
+/*
+ * Append a clause to feedback list along with count.
+ *
+ *   n1b > 0       -> (clause, n1b)      on the T1b list
+ *   n1a + n2 > 0  -> (clause, n1a, n2)  on the T1a/T2 list
+ * A list is a length counter plus parallel arrays: ids in *_cid, counts in *_cnt at the same index.
+ * The final list is unordered.
+ *
+ * Arguments:
+ *   clause      clause id
+ *   n1a         number of classes that gave T1a
+ *   n1b         number of classes that gave T1b
+ *   n2          number of classes that gave T2
+ *   t1b_n       T1b list length, incremented atomically
+ *   t1b_cid     T1b list clause ids
+ *   t1b_cnt     T1b count of each entry
+ *   t1a_t2_n    T1a/T2 list length, incremented atomically
+ *   t1a_t2_cid  T1a/T2 list clause ids
+ *   t1a_cnt     T1a count of each entry
+ *   t2_cnt      T2 count of each entry
+ */
+INLINE_FN void append_fb_lists(ull clause, int n1a, int n1b, int n2, uint* RESTRICT t1b_n, uint* RESTRICT t1b_cid,
+                               NCLASSES_T* RESTRICT t1b_cnt, uint* RESTRICT t1a_t2_n, uint* RESTRICT t1a_t2_cid,
+                               NCLASSES_T* RESTRICT t1a_cnt, NCLASSES_T* RESTRICT t2_cnt) {
+    if (!TYPE1A_FB)
+        n1a = 0;
+    if (!TYPE1B_FB)
+        n1b = 0;
+    if (!TYPE2_FB)
+        n2 = 0;
+
+    if (n1b > 0)
+        t1b_cnt[list_push(t1b_n, t1b_cid, clause)] = (NCLASSES_T)n1b;
+
+    if (n1a + n2 > 0) {
+        uint i = list_push(t1a_t2_n, t1a_t2_cid, clause);
+        t1a_cnt[i] = (NCLASSES_T)n1a;
+        t2_cnt[i] = (NCLASSES_T)n2;
+    }
+}
+
 INLINE_FN void safe_lit_inc(int li, TA_STATE_T* ta_states) {
     if (ta_states[li] < MAX_TA_STATE)
         ta_states[li] += 1;

@@ -61,13 +61,15 @@ void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restri
 void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights,
                           const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                           const int8_t* restrict clause_drop_mask, const float lambda_,
-                          uint8_t* restrict feedback_type, uint* restrict fb_count, uint* restrict fb_ids) {
+                          uint8_t* restrict feedback_type, uint* restrict t1b_n, uint* restrict t1b_cid,
+                          NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
+                          NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
-        bool any_fb = false;
+        NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 
         ull rng_k = rng_hash(seed, clause, 0xFEEDFACEULL);
         uint rng_counter = 0;
@@ -93,10 +95,11 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                 }
             }
             feedback_type[fbtype_offset(class_id, clause)] = fb;
-            any_fb |= (fb != FB_NONE);
+            n1a += (fb == FB_T1A);
+            n1b += (fb == FB_T1B);
+            n2 += (fb == FB_T2);
         }
-        if (any_fb)
-            fb_list_append(fb_count, fb_ids, clause);
+        append_fb_lists(clause, n1a, n1b, n2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 
@@ -124,7 +127,9 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
 void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck,
                              const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                              const int8_t* restrict clause_drop_mask, const float lambda_,
-                             uint8_t* restrict feedback_type, uint* restrict fb_count, uint* restrict fb_ids) {
+                             uint8_t* restrict feedback_type, uint* restrict t1b_n, uint* restrict t1b_cid,
+                             NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
+                             NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         if (clause_drop_mask[clause_id] == 1) {
@@ -138,8 +143,7 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
         float update_prob = 1.0f - expf(-lambda_ * fabsf(delta_L));
         uint8_t fb = select_fb_delta_l(seed, clause_id, update_prob, delta_L, ck, has_space);
         feedback_type[clause_id] = fb;
-        if (fb != FB_NONE)
-            fb_list_append(fb_count, fb_ids, clause_id);
+        append_fb_lists(clause_id, fb == FB_T1A, fb == FB_T1B, fb == FB_T2, t1b_n, t1b_cid, t1b_cnt, t1a_t2_n, t1a_t2_cid, t1a_cnt, t2_cnt);
     }
 }
 

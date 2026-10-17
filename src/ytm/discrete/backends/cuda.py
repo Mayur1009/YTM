@@ -33,11 +33,10 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
             clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),
-            fb_count=cp.zeros(1, dtype=np.uint32),
-            fb_ids=cp.empty(cfg._total_clauses, dtype=np.uint32),
             feedback_type=cp.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8),
             prob=cp.zeros(cfg.n_classes, dtype=np.float32),
             label_probs=None,
+            **self._fb_list_allocs(),
         )
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
@@ -70,7 +69,8 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
-        buf.fb_count.data.memset_async(0, buf.fb_count.nbytes)
+        buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
+        buf.t1a_t2_n.data.memset_async(0, buf.t1a_t2_n.nbytes)
 
         self.cu.calc_update_prob(
             cfg.n_classes,
@@ -89,8 +89,13 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
                 np.int32(e),
                 self.clause_weights,
                 buf.feedback_type,
-                buf.fb_count,
-                buf.fb_ids,
+                buf.t1b_n,
+                buf.t1b_cid,
+                buf.t1b_cnt,
+                buf.t1a_t2_n,
+                buf.t1a_t2_cid,
+                buf.t1a_cnt,
+                buf.t2_cnt,
             ),
         )
 
@@ -115,5 +120,5 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
     def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
         self.cu.update_weights(
             self.config._total_clauses,
-            (buf.feedback_type, buf.fb_count, buf.fb_ids, self.clause_weights),
+            (buf.feedback_type, buf.t1a_t2_n, buf.t1a_t2_cid, self.clause_weights),
         )
