@@ -4,7 +4,7 @@
 #endif
 
 /*
- * Type 1b feedback. One warp per T1b list entry, lanes split the clause's literals.
+ * Type 1b feedback. Parallelized across all the literals
  *
  * Arguments:
  *   seed              RNG key of the current sample
@@ -19,23 +19,50 @@ extern "C" __global__ void update_t1b(const ull seed, const uint* t1b_n, const u
                                       int8_t* is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const uint n = *t1b_n;
+    if (n == 0)
+        return;
 
-    WARP_STRIDE_LOOP(i, (ull)n) {
+    // Calculates tiles to split the work.
+    const ull max_tiles = (N_LITERALS + T1B_MIN_TILE - 1) / T1B_MIN_TILE;
+    ull tiles = (total_warps + n - 1) / n;
+    tiles = tiles > max_tiles ? max_tiles : tiles;
+    const int tile_len = (N_LITERALS + (int)tiles - 1) / (int)tiles;
+
+    WARP_STRIDE_LOOP(t, (ull)n * tiles) {
+        ull i = t / tiles;
+        int tile = (int)(t % tiles);
         ull clause = t1b_cid[i];
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
-        ull rng_k = rng_hash(seed, clause, (0x71B71B71ULL << 32) | (ull)lane);
+        int start = tile * tile_len;
+        int end = (start + tile_len < N_LITERALS) ? start + tile_len : N_LITERALS;
+
+        ull rng_k = rng_hash(seed, clause, (0x71B71B71ULL << 32) | ((ull)tile << 5) | (ull)lane);
         uint rng_counter = 0;
 
-        bool crossed = dec_range(rng_k, &rng_counter, binom_params((int)t1b_cnt[i], S_INV), 0, N_LITERALS, 0,
-                                 LANE_COUNT, ta_states);
+        bool crossed =
+            dec_range(rng_k, &rng_counter, binom_params((int)t1b_cnt[i], S_INV), start, end, 0, LANE_COUNT, ta_states);
         if (warp.any(crossed) && lane == 0)
             is_clause_synced[clause] = 0;
     }
 }
 
+__device__ inline int first_feat_from(const NLITS_T* literal_offsets, int x) {
+    if (ALL_BINARY_FEATS)
+        return x < N_RAW_PATCH_FEATS ? x : N_RAW_PATCH_FEATS;
+    int lo = 0, hi = N_RAW_PATCH_FEATS;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if ((int)literal_offsets[mid] < x)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 /*
- * Type 1a and Type 2 feedback. One warp per T1a/T2 list entry, lanes split the clause's patch features.
+ * Type 1a and Type 2 feedback. Parallelized across the feature tiles.
  *
  * Arguments:
  *   seed                RNG key of the current sample
@@ -57,8 +84,19 @@ extern "C" __global__ void update_t1a_t2(const ull seed, const int e, const NPAT
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const FBOUND_T* Xe = &X[sample_offset(e)];
     const uint n = *t1a_t2_n;
+    if (n == 0)
+        return;
 
-    WARP_STRIDE_LOOP(i, (ull)n) {
+    const int n_lits = ALL_BINARY_FEATS ? N_RAW_PATCH_FEATS : (int)literal_offsets[N_RAW_PATCH_FEATS];
+    ull max_tiles = ((ull)n_lits + T1A_T2_MIN_TILE - 1) / T1A_T2_MIN_TILE;
+    max_tiles = max_tiles < 1 ? 1 : max_tiles;
+    ull tiles = (total_warps + n - 1) / n;
+    tiles = tiles > max_tiles ? max_tiles : tiles;
+    const int tile_len = (n_lits + (int)tiles - 1) / (int)tiles;
+
+    WARP_STRIDE_LOOP(t, (ull)n * tiles) {
+        ull i = t / tiles;
+        int tile = (int)(t % tiles);
         ull clause = t1a_t2_cid[i];
         TA_STATE_T* ta_states = &global_ta_states[ta_offset(clause, 0)];
 
@@ -69,11 +107,15 @@ extern "C" __global__ void update_t1a_t2(const ull seed, const int e, const NPAT
             patch_idx_x = patch_id % N_PATCHES_X;
         }
 
-        ull rng_k = rng_hash(seed, clause, (0x71A2712AULL << 32) | (ull)lane);
+        int fid_start = first_feat_from(literal_offsets, tile * tile_len);
+        int fid_end =
+            (tile + 1 == (int)tiles) ? N_RAW_PATCH_FEATS : first_feat_from(literal_offsets, (tile + 1) * tile_len);
+
+        ull rng_k = rng_hash(seed, clause, (0x71A2712AULL << 32) | ((ull)tile << 5) | (ull)lane);
         uint rng_counter = 0;
 
         bool crossed = t1a_t2_fb(rng_k, &rng_counter, (int)t1a_cnt[i], (int)t2_cnt[i], Xe, patch_idx_y, patch_idx_x,
-                                 literal_offsets, ta_states, lane, 0, N_RAW_PATCH_FEATS, true);
+                                 literal_offsets, ta_states, lane, fid_start, fid_end, tile == 0);
         if (warp.any(crossed) && lane == 0)
             is_clause_synced[clause] = 0;
     }
