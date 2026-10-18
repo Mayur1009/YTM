@@ -131,9 +131,10 @@ class BaseDevice(abc.ABC):
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
 
-    def _fit_samples(self, pbar) -> Iterator[tuple[int, int]]:
+    def _fit_iter(self, pbar) -> Iterator[tuple[int, int]]:
+        keys = self._rng.integers(1, 1 << 62, size=len(pbar), dtype=np.uint64).tolist()
         for e in pbar:
-            yield e, int(self._rng.integers(1, 1 << 62, dtype=np.uint64))
+            yield e, keys[e]
 
     def _fit_drop_mask(self, clause_drop_p: float):
         cfg = self.config

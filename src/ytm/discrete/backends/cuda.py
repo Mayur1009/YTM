@@ -46,7 +46,7 @@ class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
 
         with self.cuda_dev:
             buf = self._fit_allocs(self._fit_drop_mask(clause_drop_p))
-            samples = self._fit_samples(tqdm_bar(range(N), desc="Fit"))
+            samples = self._fit_iter(tqdm_bar(range(N), desc="Fit"))
 
             for i in range(0, N, bs):
                 end = min(i + bs, N)

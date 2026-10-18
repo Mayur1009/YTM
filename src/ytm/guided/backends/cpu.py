@@ -100,7 +100,7 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
 
         running_loss = 0.0
         pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
-        for e, rng_key in self._fit_samples(pbar):
+        for e, rng_key in self._fit_iter(pbar):
             self.fit_sample(rng_key, buf, e)
             running_loss += float(buf.loss[0])
             pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")

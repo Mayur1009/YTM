@@ -79,7 +79,7 @@ class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
             )
 
             running_loss = cp.zeros(1, dtype=np.float32)
-            samples = self._fit_samples(tqdm_bar(range(N), desc="Fit"))
+            samples = self._fit_iter(tqdm_bar(range(N), desc="Fit"))
 
             for i in range(0, N, bs):
                 end = min(i + bs, N)
