@@ -47,6 +47,8 @@ class Kernel:
 
 
 class CUDADevice(BaseDevice):
+    _VOTING_MIN_CHUNK_SIZE = 256  # smallest clause chunk one warp sums alone
+
     xp = cp
 
     def _setup(self):
@@ -61,6 +63,10 @@ class CUDADevice(BaseDevice):
         block_size = max(self._warp_size, (block_size // self._warp_size) * self._warp_size)
 
         self.cu = Kernel(self._build_code(), self.cuda_dev, block_size, props["multiProcessorCount"])
+
+        cfg = self.config
+        self._fit_vote_chunks = -(-cfg._n_clauses // self._VOTING_MIN_CHUNK_SIZE)
+        self._chunk_sums = cp.empty(cfg.n_classes * self._fit_vote_chunks, dtype=np.float32)
 
     def _code_sections(self) -> dict[str, str]:
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
@@ -184,11 +190,21 @@ class CUDADevice(BaseDevice):
             ),
         )
 
-    def _fit_voting(self, buf):
-        self.cu.sum_votes(
-            self.config.n_classes * self._warp_size,
-            (buf.clause_output, self.clause_weights, buf.votes, np.int32(1)),
+    def _vote_sum(self, clause_outputs, N: int, class_sums, chunks: int = 1) -> None:
+        """Class sums of N samples, calculated using chunks"""
+        n_sums = N * self.config.n_classes
+
+        # If one chunk per class sum, then write the class sums directly.
+        out = class_sums if chunks == 1 else self._chunk_sums
+        self.cu.vote_over_clause_chunks(
+            n_sums * chunks * self._warp_size,
+            (clause_outputs, self.clause_weights, np.int32(N), np.int32(chunks), out),
         )
+        if chunks > 1:
+            self.cu.vote_combine_chunks(n_sums, (self._chunk_sums, np.int32(N), np.int32(chunks), class_sums))
+
+    def _fit_voting(self, buf):
+        self._vote_sum(buf.clause_output, 1, buf.votes, self._fit_vote_chunks)
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -218,10 +234,7 @@ class CUDADevice(BaseDevice):
                     ),
                 )
 
-                self.cu.sum_votes(
-                    bs * cfg.n_classes * self._warp_size,
-                    (clause_outputs, self.clause_weights, class_sums[i:end], np.int32(bs)),
-                )
+                self._vote_sum(clause_outputs, bs, class_sums[i:end])
 
             return class_sums.get()
 

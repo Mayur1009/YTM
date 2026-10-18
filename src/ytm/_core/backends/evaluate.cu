@@ -103,34 +103,59 @@ extern "C" __global__ void calc_clause_outputs(const FBOUND_T* X, int8_t* clause
 #endif
 }
 
-extern "C" __global__ void sum_votes(const int8_t* clause_outputs, const float* clause_weights, float* class_sums,
-                                     const int N) {
+/*
+ * Class sums over chunks of clauses: chunk_sums[e, class, chunk] = weighted sum of firing clauses in the chunk.
+ *
+ * Arguments:
+ *   clause_outputs  (N, TOTAL_CLAUSES) clause outputs
+ *   clause_weights  clause weights per class
+ *   N               number of samples
+ *   chunks          number of chunks per class
+ *   chunk_sums      output, (N, CLASSES, chunks)
+ */
+extern "C" __global__ void vote_over_clause_chunks(const int8_t* clause_outputs, const float* clause_weights,
+                                                   const int N, const int chunks, float* chunk_sums) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
-    ull total_work = (ull)N * CLASSES;
+    const int chunk_len = (CLAUSES_PER_CLASS + chunks - 1) / chunks;
 
-    WARP_STRIDE_LOOP(idx, total_work) {
-        ull e = idx / (ull)CLASSES;
-        ull class_id = idx % (ull)CLASSES;
+    WARP_STRIDE_LOOP(w, (ull)N * CLASSES * chunks) {
+        ull e = w / ((ull)CLASSES * chunks);
+        ull class_id = (w / chunks) % CLASSES;
+        ull chunk = w % chunks;
+        int clause_start = (int)chunk * chunk_len;
+        int clause_end = min(clause_start + chunk_len, (int)CLAUSES_PER_CLASS);
 
-        const int8_t* co = &clause_outputs[e * (ull)TOTAL_CLAUSES];
-        const float* cw = &clause_weights[class_id * (ull)CLAUSES_PER_CLASS];
-        ull clause_base = class_id * (ull)CLAUSES_PER_CLASS;
+        const ull first_clause = COALESCED ? 0 : class_id * (ull)CLAUSES_PER_CLASS; // first global clause of the class
+        const int8_t* outputs = &clause_outputs[clause_output_offset(e, first_clause)];
+        const float* weights = &clause_weights[weight_offset(class_id, first_clause)];
 
-        float partial = 0.0f;
-        for (int c = lane; c < CLAUSES_PER_CLASS; c += (int)warp.size()) {
-#if COALESCED == 0
-            if (co[clause_base + c])
-                partial += cw[c];
-#else
-            if (co[c])
-                partial += cw[c];
-#endif
-        }
-
-        partial = cg::reduce(warp, partial, cg::plus<float>());
-
+        float s = 0.0f;
+        for (int clause_id = clause_start + lane; clause_id < clause_end; clause_id += WARP_SIZE)
+            if (outputs[clause_id])
+                s += weights[clause_id];
+        s = cg::reduce(warp, s, cg::plus<float>());
         if (lane == 0)
-            class_sums[e * (ull)CLASSES + class_id] = partial;
+            chunk_sums[chunk_sums_offset(e, class_id, chunk, chunks)] = s;
+    }
+}
+
+/*
+ * Class sums from the chunk sums, added in chunk order so the result is deterministic.
+ *
+ * Arguments:
+ *   chunk_sums  (N, CLASSES, chunks), from vote_over_clause_chunks
+ *   N           number of samples
+ *   chunks      number of chunks per class
+ *   class_sums  output, (N, CLASSES)
+ */
+extern "C" __global__ void vote_combine_chunks(const float* chunk_sums, const int N, const int chunks,
+                                               float* class_sums) {
+    GRID_STRIDE_LOOP(idx, (ull)N * CLASSES) {
+        ull e = idx / CLASSES, class_id = idx % CLASSES;
+        float s = 0.0f;
+        for (int chunk = 0; chunk < chunks; chunk++)
+            s += chunk_sums[chunk_sums_offset(e, class_id, chunk, chunks)];
+        class_sums[idx] = s;
     }
 }
 

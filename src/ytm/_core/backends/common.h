@@ -102,6 +102,10 @@ INLINE_FN ull patch_output_offset(ull sample, ull global_clause_id, ull patch) {
     return (sample * (ull)TOTAL_CLAUSES + global_clause_id) * (ull)N_PATCHES + patch;
 }
 
+INLINE_FN ull chunk_sums_offset(ull sample, ull class_id, ull chunk, ull chunks) {
+    return (sample * (ull)CLASSES + class_id) * chunks + chunk;
+}
+
 INLINE_FN ull sample_offset(ull sample) {
     return sample * (ull)HEIGHT * WIDTH * DEPTH;
 }
