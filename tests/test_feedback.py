@@ -11,6 +11,7 @@ from .support import (
     apply_feedback,
     decide_feedback,
     discrete,
+    dense_fb_shape,
     fb_counts_from_dense,
     fb_ids_from_dense,
     fill,
@@ -137,7 +138,11 @@ def test_dropped_clauses_get_no_feedback(device):
 @pytest.mark.parametrize("threads", [1, 4])
 @pytest.mark.parametrize("model", ["discrete", "guided-grad", "guided-delta_l"])
 def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, threads):
-    """The T1b list and the T1a/T2 list hold each clause with feedback once, any order, with its counts over classes."""
+    """The T1b list and the T1a/T2 list hold each clause with feedback once, any order, with its counts over classes.
+
+    Discrete: the lists match the per class types in feedback_type. Guided keeps no per class types, so its lists are
+    checked for consistency only.
+    """
     if threads > 1 and not device.startswith("cpu"):
         pytest.skip("thread count only applies to cpu")
     dev = f"cpu:{threads}" if device.startswith("cpu") else device
@@ -157,9 +162,27 @@ def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, t
     buf = make_buffers(tm, [[1, 0, 1, 0]], Y)
     for key in range(1, 6):
         fb = decide_feedback(tm, buf, votes, key=key)
+        if fb is None:
+            _assert_fb_lists_consistent(tm, buf)
+            continue
         expected = fb_ids_from_dense(tm, fb)
         assert 0 < len(expected) < cfg._total_clauses
         _assert_fb_lists(tm, buf, fb)
+
+
+def _assert_fb_lists_consistent(tm, buf):
+    """Without per class types: each list has unique clause ids, every entry has a count, counts fit the classes."""
+    cfg = tm.config
+    max_cnt = cfg.n_classes if cfg.coalesced else 1
+    n_t1b, n_t12 = int(host(tm, buf.t1b_n)[0]), int(host(tm, buf.t1a_t2_n)[0])
+    assert 0 < n_t1b + n_t12
+    t1b_ids, t12_ids = host(tm, buf.t1b_cid)[:n_t1b], host(tm, buf.t1a_t2_cid)[:n_t12]
+    assert len(np.unique(t1b_ids)) == n_t1b and len(np.unique(t12_ids)) == n_t12
+    assert np.all(t1b_ids < cfg._total_clauses) and np.all(t12_ids < cfg._total_clauses)
+    n1b = host(tm, buf.t1b_cnt)[:n_t1b].astype(np.int64)
+    n1a, n2 = (host(tm, c)[:n_t12].astype(np.int64) for c in (buf.t1a_cnt, buf.t2_cnt))
+    assert np.all((1 <= n1b) & (n1b <= max_cnt))
+    assert np.all((1 <= n1a + n2) & (n1a + n2 <= max_cnt))
 
 
 def _assert_fb_lists(tm, buf, fb):
@@ -189,7 +212,7 @@ def test_update_touches_only_listed_clauses(device, model):
         tm = guided("binary", device, n_clauses=4, fb_signal=model.split("-")[1])
     cfg = tm.config
     states = np.tile(ROW, (cfg._total_clauses, 1))
-    all_t1a = np.full(host(tm, make_buffers(tm, [[1, 0, 1, 0]], [[0.0]]).feedback_type).shape, FB_T1A)
+    all_t1a = np.full(dense_fb_shape(tm), FB_T1A)
 
     for ids in ([], [1, 3]):
         set_ta_states(tm, states)

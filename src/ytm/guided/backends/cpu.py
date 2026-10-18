@@ -1,5 +1,5 @@
 import pathlib
-from ctypes import POINTER, c_float, c_int, c_uint8, c_uint64
+from ctypes import c_float, c_int, c_uint64
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,15 +11,12 @@ from ..._core.utils import read_file, tqdm_bar
 from ..config import FbSignal
 from .base import BaseDevice as GuidedBaseDevice
 
-uint8_p = POINTER(c_uint8)
-
 
 @dataclass(kw_only=True)
 class GuidedFitBuffers(CPUFitBuffers):
     grad: Any  # (n_classes,) loss gradient w.r.t. votes for the current sample
     y_hat: Any  # (n_classes,) activated votes for the current sample
     loss: Any  # (1,) loss for the current sample
-    feedback_type: Any  # (total_clauses, n_classes) for fb_signal="grad", (total_clauses,) for "delta_l"
     lr: float  # resolved once per epoch: the call's override, or config.lr
     lambda_: float  # resolved once per epoch: the call's override, or config.lambda_
     votes_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual votes, delta_l only
@@ -29,7 +26,6 @@ class GuidedFitBuffers(CPUFitBuffers):
     p_grad: Any = field(init=False)
     p_y_hat: Any = field(init=False)
     p_loss: Any = field(init=False)
-    p_feedback_type: Any = field(init=False)
     p_votes_neg_ck: Any = field(init=False, default=None)
     p_y_hat_neg_ck: Any = field(init=False, default=None)
     p_loss_neg_ck: Any = field(init=False, default=None)
@@ -39,7 +35,6 @@ class GuidedFitBuffers(CPUFitBuffers):
         self.p_grad = self.grad.ctypes.data_as(float_p)
         self.p_y_hat = self.y_hat.ctypes.data_as(float_p)
         self.p_loss = self.loss.ctypes.data_as(float_p)
-        self.p_feedback_type = self.feedback_type.ctypes.data_as(uint8_p)
 
         if self.votes_neg_ck is not None:
             self.p_votes_neg_ck = self.votes_neg_ck.ctypes.data_as(float_p)
@@ -65,12 +60,9 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
 
         extra: dict[str, np.ndarray] = {}
         if cfg._fb_signal == FbSignal.DELTA_L:
-            feedback_type = np.zeros(cfg._total_clauses, dtype=np.uint8)
             extra["votes_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["y_hat_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["loss_neg_ck"] = np.empty(cfg._total_clauses, dtype=np.float32)
-        else:
-            feedback_type = np.zeros((cfg._n_clauses, cfg.n_classes), dtype=np.uint8)
 
         return GuidedFitBuffers(
             X=X,
@@ -82,7 +74,6 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
             grad=np.empty(cfg.n_classes, dtype=np.float32),
             y_hat=np.empty(cfg.n_classes, dtype=np.float32),
             loss=np.empty(1, dtype=np.float32),
-            feedback_type=feedback_type,
             lr=lr,
             lambda_=lambda_,
             **extra,
@@ -143,7 +134,6 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_output,
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
-                buf.p_feedback_type,
                 buf.p_t1b_n,
                 buf.p_t1b_cid,
                 buf.p_t1b_cnt,
@@ -164,7 +154,6 @@ class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
                 buf.p_clause_output,
                 buf.p_clause_drop_mask,
                 c_float(buf.lambda_),
-                buf.p_feedback_type,
                 buf.p_t1b_n,
                 buf.p_t1b_cid,
                 buf.p_t1b_cnt,
