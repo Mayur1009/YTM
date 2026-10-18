@@ -77,8 +77,14 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, *args, **kwargs): ...
 
-    @abc.abstractmethod
-    def fit_sample(self, rng_key: int, buf, e: int): ...
+    def fit_sample(self, rng_key: int, buf, e: int):
+        self.pack_clauses()
+        self._fit_eval(buf, e, rng_key)
+        self._fit_voting(buf)
+        self._fit_decide_fb(buf, e, rng_key)
+        self._fit_apply_fb(buf, e, rng_key)
+        if self.config.weighted:
+            self._fit_update_weights(buf)
 
     @abc.abstractmethod
     def _fit_eval(self, buf, e: int, rng_key): ...

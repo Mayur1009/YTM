@@ -92,16 +92,6 @@ class CUDADevice(CoreCUDADevice):
 
             return float(running_loss[0]) / N
 
-    def fit_sample(self, rng_key: int, buf: GuidedFitBuffers, e: int) -> None:
-        with self.cuda_dev:
-            self.pack_clauses()
-            self._fit_eval(buf, e, rng_key)
-            self._fit_voting(buf)
-            self._fit_decide_fb(buf, e, rng_key)
-            self._fit_apply_fb(buf, e, rng_key)
-            if self.config.weighted:
-                self._fit_update_weights(buf)
-
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
         buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
