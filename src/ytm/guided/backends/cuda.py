@@ -9,7 +9,6 @@ from ..._core.backends.base import FitBuffers
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file, tqdm_bar
 from ..config import FbSignal
-from .base import BaseDevice as GuidedBaseDevice
 
 
 @dataclass(kw_only=True)
@@ -24,7 +23,7 @@ class GuidedFitBuffers(FitBuffers):
     loss_neg_ck: Any = None  # (total_clauses,) counterfactual loss, delta_l only
 
 
-class CUDADevice(GuidedBaseDevice, CoreCUDADevice):
+class CUDADevice(CoreCUDADevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent

@@ -9,7 +9,6 @@ from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.backends.cpu import CPUFitBuffers, float_p
 from ..._core.utils import read_file, tqdm_bar
 from ..config import FbSignal
-from .base import BaseDevice as GuidedBaseDevice
 
 
 @dataclass(kw_only=True)
@@ -42,7 +41,7 @@ class GuidedFitBuffers(CPUFitBuffers):
             self.p_loss_neg_ck = self.loss_neg_ck.ctypes.data_as(float_p)
 
 
-class CPUDevice(GuidedBaseDevice, CoreCPUDevice):
+class CPUDevice(CoreCPUDevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent

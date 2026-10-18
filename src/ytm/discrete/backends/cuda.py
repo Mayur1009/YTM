@@ -8,7 +8,6 @@ import numpy as np
 from ..._core.backends.base import FitBuffers
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file, tqdm_bar
-from .base import BaseDevice as DiscreteBaseDevice
 
 
 @dataclass(kw_only=True)
@@ -18,7 +17,7 @@ class DiscreteFitBuffers(FitBuffers):
     label_probs: Any  # (n_samples, n_classes) chance a class gives feedback at all
 
 
-class CUDADevice(DiscreteBaseDevice, CoreCUDADevice):
+class CUDADevice(CoreCUDADevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.cu"] = read_file(pathlib.Path(__file__).parent / "update.cu")

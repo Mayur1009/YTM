@@ -53,6 +53,7 @@ class BaseTMConfig:
 
     # clause weights
     weighted: bool = True
+    weight_init: float | str = 1
     max_weight: float = float(1 << 30)
     allow_polarity_change: bool = True
 
