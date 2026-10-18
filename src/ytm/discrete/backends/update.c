@@ -60,7 +60,6 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
 void update_weights(const uint8_t* restrict feedback_type, const uint* restrict t1a_t2_n,
                     const uint* restrict t1a_t2_cid,
                     float* restrict clause_weights) {
-#if WEIGHTED
     const uint n = *t1a_t2_n;
     if (n == 0)
         return;
@@ -108,8 +107,6 @@ void update_weights(const uint8_t* restrict feedback_type, const uint* restrict 
             }
         }
     }
-#else
-#endif
 }
 
 void calc_update_prob(const float* restrict votes, const float* restrict encoded_Y, const int e, float* restrict prob) {

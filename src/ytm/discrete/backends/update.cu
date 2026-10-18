@@ -65,7 +65,6 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
 
 extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
                                           float* clause_weights) {
-#if WEIGHTED
     const uint n = *t1a_t2_n;
 
     GRID_STRIDE_LOOP(i, n) {
@@ -110,5 +109,4 @@ extern "C" __global__ void update_weights(const uint8_t* feedback_type, const ui
             }
         }
     }
-#endif
 }
