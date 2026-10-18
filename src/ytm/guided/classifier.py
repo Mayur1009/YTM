@@ -13,11 +13,11 @@ class Classifier(BaseTM):
 
     @property
     def decision_threshold(self) -> float | None:
-        return self._DECISION_THRESHOLDS.get(self.config.act_loss.act)
+        return getattr(self, "_decision_threshold", self._DECISION_THRESHOLDS.get(self.config.act_loss.act))
 
     @decision_threshold.setter
     def decision_threshold(self, value: float) -> None:
-        self._DECISION_THRESHOLDS[self.config.act_loss.act] = value
+        self._decision_threshold = value
 
     def fit(
         self,
