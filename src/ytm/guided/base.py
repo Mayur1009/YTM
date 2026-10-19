@@ -5,17 +5,19 @@ import numpy as np
 from .._core.base import BaseTM as CoreBaseTM
 from .._core.device_config import DeviceConfig
 from .._core.utils import split_device_kwargs
-from .backends.cpu import CPUDevice
 from .config import T_Config, TMConfig
 
 
 class BaseTM(CoreBaseTM):
     config: TMConfig
     config_cls: type[TMConfig] = TMConfig
-    cpu_device_cls = CPUDevice
 
     @staticmethod
-    def _cuda_device_cls():
+    def _device_cls(kind: str):
+        if kind == "cpu":
+            from .backends.cpu import CPUDevice
+
+            return CPUDevice
         from .backends.cuda import CUDADevice
 
         return CUDADevice

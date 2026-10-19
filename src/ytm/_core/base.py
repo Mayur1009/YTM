@@ -39,7 +39,6 @@ class ClauseInfo:
 
 class BaseTM(abc.ABC):
     config_cls: type[BaseTMConfig]
-    cpu_device_cls: type[BaseDevice]
 
     def __init__(self, dev: BaseDevice):
         self.dev = dev
@@ -55,11 +54,10 @@ class BaseTM(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def _cuda_device_cls() -> type[BaseDevice]: ...
+    def _device_cls(kind: str) -> type[BaseDevice]: ...
 
     def _build_device(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None) -> BaseDevice:
-        cls = self.cpu_device_cls if device_config.kind == "cpu" else self._cuda_device_cls()
-        return cls(config, device_config, state)
+        return self._device_cls(device_config.kind)(config, device_config, state)
 
     def to(self, device: str, **device_kwargs) -> None:
         """Move the model to another device, in place."""
