@@ -144,13 +144,12 @@ class CUDADevice(CoreCUDADevice):
         )
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        votes = super().calc_class_sums(X, batch_size, force_repack)
         with self.cuda_dev:
-            votes_gpu = cp.asarray(votes, dtype=np.float32)
-            y_hat = cp.empty_like(votes_gpu)
+            votes = self._class_sums_dev(X, batch_size, force_repack)
+            y_hat = cp.empty_like(votes)
             self.cu.votes_activation_batch(
                 votes.shape[0],
-                (votes_gpu, np.int32(votes.shape[0]), y_hat),
+                (votes, np.int32(votes.shape[0]), y_hat),
             )
             return y_hat.get()
 

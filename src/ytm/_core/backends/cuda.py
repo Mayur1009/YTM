@@ -213,19 +213,22 @@ class CUDADevice(BaseDevice):
         )
         return clause_outputs
 
-    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def _class_sums_dev(self, X: np.ndarray, batch_size: int, force_repack: bool):
         cfg = self.config
         N = X.shape[0]
 
+        self.pack_clauses(force_repack)
+        class_sums = cp.zeros((N, cfg.n_classes), dtype=np.float32)
+
+        for i, end, bs in self._batches(N, batch_size, "Infer"):
+            clause_outputs = self._clause_outputs(cp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs)
+            self._vote_sum(clause_outputs, bs, class_sums[i:end])
+
+        return class_sums
+
+    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         with self.cuda_dev:
-            self.pack_clauses(force_repack)
-            class_sums = cp.zeros((N, cfg.n_classes), dtype=np.float32)
-
-            for i, end, bs in self._batches(N, batch_size, "Infer"):
-                clause_outputs = self._clause_outputs(cp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs)
-                self._vote_sum(clause_outputs, bs, class_sums[i:end])
-
-            return class_sums.get()
+            return self._class_sums_dev(X, batch_size, force_repack).get()
 
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
