@@ -103,6 +103,8 @@ INLINE_FN int binom_at_least_one(ull key, uint* RESTRICT counter, binom_t b) {
 }
 
 INLINE_FN int binomial(ull key, uint* RESTRICT counter, binom_t b) {
+    if (b.n_trials == 1)
+        return bernoulli(key, counter, b.p_success);
     if (!bernoulli(key, counter, b.p_any))
         return 0;
     return binom_at_least_one(key, counter, b);
