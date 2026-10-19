@@ -201,13 +201,13 @@ void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int
  */
 void vote_sum(const int8_t* restrict clause_outputs, const float* restrict clause_weights, const int N,
               float* restrict class_sums) {
+#pragma omp parallel for schedule(static) if (N > 1) num_threads(ytm_n_threads)
     for (int e = 0; e < N; e++) {
         const int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
         float* sums_e = &class_sums[(ull)e * CLASSES];
         for (int c = 0; c < CLASSES; c++)
             sums_e[c] = 0.0f;
 
-#pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES]) num_threads(ytm_n_threads)
         for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
             if (!out_e[clause])
                 continue;
