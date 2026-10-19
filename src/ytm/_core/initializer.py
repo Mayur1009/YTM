@@ -107,7 +107,7 @@ class SampleTAInit(TAInit):
             hi = v < cfg._therm_bits
             clauses[rows[hi], (base + v + half)[hi]] = True
 
-        if self.include_position and cfg.position_literals and cfg._n_patches > 1:
+        if self.include_position and cfg._position_literals:
             r, xo = np.arange(n), cfg._n_patches_y - 1
             clauses[r[py > 0], (py - 1)[py > 0]] = True
             clauses[r[px > 0], (xo + px - 1)[px > 0]] = True
