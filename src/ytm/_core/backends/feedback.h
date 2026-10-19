@@ -118,6 +118,33 @@ INLINE_FN bool dec_range(ull rng_key, uint* RESTRICT rng_counter, binom_t dec, i
     return dec_range_geom(rng_key, rng_counter, dec, start, end, offset, n_lanes, ta_states);
 }
 
+INLINE_FN bool inc_range_fails(ull rng_key, uint* RESTRICT rng_counter, binom_t fails, int n, int start, int end,
+                               int offset, int cap, TA_STATE_T* RESTRICT ta_states) {
+    if (start >= end || fails.p_any <= 0.0f)
+        return inc_range(start, end, offset, n, cap, ta_states);
+
+    bool crossed = false;
+    if (end - start == 1 || fails.p_any >= P_DENSE_MIN) {
+        for (int li = start; li < end; ++li) {
+            int k = rand_uniform(rng_key, rng_counter) < fails.p_any ? binom_at_least_one(rng_key, rng_counter, fails) : 0;
+            crossed |= safe_lit_inc(&ta_states[li + offset], n - k, cap);
+        }
+        return crossed;
+    }
+
+    float base = (float)start - 1.0f;
+    while (base < (float)end) {
+        float li = base + geom_sample(rng_key, rng_counter, fails.p_any);
+        int stop = li < (float)end ? (int)li : end;
+        crossed |= inc_range((int)base + 1, stop, offset, n, cap, ta_states);
+        if (li < (float)end)
+            crossed |= safe_lit_inc(&ta_states[(int)li + offset], n - binom_at_least_one(rng_key, rng_counter, fails),
+                                    cap);
+        base = li;
+    }
+    return crossed;
+}
+
 // Stores the counts and distribution for t1a and t2 feedbacks.
 typedef struct {
     int t1a_cnt;           // number of classes that gave t1a.
@@ -141,8 +168,8 @@ INLINE_FN bool apply_t1a_t2_fb(ull rng_key, uint* RESTRICT rng_counter, t1a_t2_t
                                bool lit_val, TA_STATE_T* RESTRICT ta_states) {
     bool crossed;
     if (lit_val) {
-        crossed = dec_range(rng_key, rng_counter, fb.t1a_inc_fails, start, end, offset, 1, ta_states);
-        crossed |= inc_range(start, end, offset, fb.t1a_cnt, MAX_TA_STATE, ta_states);
+        crossed = inc_range_fails(rng_key, rng_counter, fb.t1a_inc_fails, fb.t1a_cnt, start, end, offset, MAX_TA_STATE,
+                                  ta_states);
     } else {
         crossed = dec_range(rng_key, rng_counter, fb.t1a_dec, start, end, offset, 1, ta_states);
         crossed |= inc_range(start, end, offset, fb.t2_cnt, INCLUDE_STATE, ta_states);
@@ -176,28 +203,14 @@ INLINE_FN bool apply_t1a_t2_binary_feats(ull rng_key, uint* RESTRICT rng_counter
     const int lo = N_POSITION_FEATS + fid_start;
     const int hi = N_POSITION_FEATS + fid_end;
     const int neg = N_LITERALS / 2;
-    const bool boosted = BOOST_TP_INC || BOOST_TP_DEC;
     bool crossed = false;
-
-    if (!boosted) {
-        crossed |= dec_range(rng_key, rng_counter, fb.t1a_dec, lo, hi, 0, LANE_COUNT, ta_states);
-        if (NEGATED_LITERALS)
-            crossed |= dec_range(rng_key, rng_counter, fb.t1a_dec, lo, hi, neg, LANE_COUNT, ta_states);
-    }
 
     for (int fid = fid_start + lane; fid < fid_end; fid += LANE_COUNT) {
         int li = N_POSITION_FEATS + fid;
         bool val = get_feature_value(Xe, patch_idx_y, patch_idx_x, fid);
-        if (boosted) {
-            crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, 0, val, ta_states);
-            if (NEGATED_LITERALS)
-                crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, neg, !val, ta_states);
-        } else {
-            crossed |= safe_lit_inc(&ta_states[li], val ? fb.t1a_cnt : fb.t2_cnt, val ? MAX_TA_STATE : INCLUDE_STATE);
-            if (NEGATED_LITERALS)
-                crossed |= safe_lit_inc(&ta_states[li + neg], val ? fb.t2_cnt : fb.t1a_cnt,
-                                        val ? INCLUDE_STATE : MAX_TA_STATE);
-        }
+        crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, 0, val, ta_states);
+        if (NEGATED_LITERALS)
+            crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, neg, !val, ta_states);
     }
     return crossed;
 }
