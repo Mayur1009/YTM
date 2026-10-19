@@ -3,104 +3,234 @@
 #include "cuda.h"
 #endif
 
-__device__ void calc_clause_outputs_conv(const FBOUND_T* X, int8_t* clause_outputs, const int N,
-                                         const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
-                                         const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
-                                         const int8_t* has_contra, const NLITS_T* clause_len) {
-    auto [warp, lane, warp_id, total_warps] = warp_grid();
-    ull total_work = (ull)N * TOTAL_CLAUSES;
+// Output of a clause that needs no matching: 0 with a contradiction, 1 when empty, -1 when it must be matched.
+__device__ inline int eval_trivial(ull clause, const int8_t* has_contra, const NLITS_T* clause_len) {
+    if (has_contra[clause])
+        return 0;
+    if (clause_len[clause] == 0)
+        return 1;
+    return -1;
+}
 
-    WARP_STRIDE_LOOP(idx, total_work) {
-        ull e = idx / (ull)TOTAL_CLAUSES;
-        ull clause = idx % (ull)TOTAL_CLAUSES;
+// Warp parallel feature matching. Called by every warp, returns true if all the features checked by the warp matches,
+// else false.
+__device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* Xe, const FBOUND_T* feat_bounds,
+                                           const NFEAT_T* feat_ids, int n_feats) {
+    const int lane = (int)warp.thread_rank();
+    bool ok = true;
+    for (int base = 0; base < n_feats; base += WARP_SIZE) {
+        int i = base + lane;
+        if (i < n_feats) {
+            FBOUND_T val = get_feature_value(Xe, 0, 0, (int)feat_ids[i]);
+            if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
+                ok = false;
+        }
+        if (warp.any(!ok))
+            return false;
+    }
+    return true;
+}
 
-        if (has_contra[clause] || clause_len[clause] == 0) {
-            if (lane == 0)
-                clause_outputs[idx] = has_contra[clause] ? 0 : 1;
+// Warp parallel patch matching. Returns 32 bits (warp ballot), where each bit is 1 if the patch mached.
+__device__ inline uint match_patches_warp(const warp_t& warp, const FBOUND_T* Xe, const PBOUND_T* pos,
+                                          const FBOUND_T* feat_bounds, const NFEAT_T* feat_ids, int n_feats, int base) {
+    const int n_x = pos[3] - pos[2] + 1;
+    const int n_window = (pos[1] - pos[0] + 1) * n_x;
+    const int i = base + (int)warp.thread_rank();
+    bool match = false;
+    if (i < n_window)
+        match = match_patch(Xe, pos[0] + i / n_x, pos[2] + i % n_x, feat_ids, feat_bounds, n_feats);
+    return warp.ballot(match);
+}
+
+/*
+ * Output of every clause on every patch, for N samples.
+ *
+ * One thread per (sample, clause, patch).
+ *
+ * Arguments:
+ *   X                       features of the batch
+ *   N                       number of samples in the batch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   patch_output            output, (N, TOTAL_CLAUSES, N_PATCHES) clause outputs per patch
+ */
+extern "C" __global__ void eval_patchwise(const FBOUND_T* X, const int N, const PBOUND_T* clause_position_bounds,
+                                          const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
+                                          const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                          const NLITS_T* clause_len, int8_t* patch_output) {
+    GRID_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES * N_PATCHES) {
+        ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
+        ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
+        ull clause = clause_patch / (ull)N_PATCHES;
+        int patch = clause_patch % N_PATCHES;
+
+        int8_t* output = &patch_output[patch_output_offset(e, clause, patch)];
+
+        // Trivial checks
+        int trivial = eval_trivial(clause, has_contra, clause_len);
+        if (trivial >= 0) {
+            *output = (int8_t)trivial;
             continue;
         }
 
+        int py = patch / N_PATCHES_X;
+        int px = patch % N_PATCHES_X;
+
+        if (N_PATCHES > 1) {
+            const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+            // If position bounds contradict, then it cant match any position.
+            if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
+                *output = 0;
+                continue;
+            }
+        }
+
         const FBOUND_T* Xe = &X[sample_offset(e)];
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
-        int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
         const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
         const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
-        int n_y = pos1 - pos0 + 1;
-        int n_x = pos3 - pos2 + 1;
-        int patches_to_consider = n_y * n_x;
-
-        bool found = false;
-        for (int base = 0; base < patches_to_consider && !found; base += WARP_SIZE) {
-            int i = base + lane;
-            bool match = false;
-            if (i < patches_to_consider) {
-                int py = pos0 + i / n_x;
-                int px = pos2 + i % n_x;
-                match = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
-            }
-            if (warp.any(match))
-                found = true;
-        }
-
-        if (lane == 0)
-            clause_outputs[idx] = found ? 1 : 0;
+        // match a patch
+        *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
     }
 }
 
-__device__ void calc_clause_outputs_noconv(const FBOUND_T* X, int8_t* clause_outputs, const int N,
-                                           const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
-                                           const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                           const NLITS_T* clause_len) {
+/*
+ * Clause outputs of N samples at inference, one warp per (sample, clause).
+ *
+ * Arguments:
+ *   X                       features of the batch
+ *   N                       number of samples in the batch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   clause_outputs          output, (N, TOTAL_CLAUSES) clause outputs
+ */
+extern "C" __global__ void eval_infer(const FBOUND_T* X, const int N, const PBOUND_T* clause_position_bounds,
+                                      const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
+                                      const NFEAT_T* clause_n_feats, const int8_t* has_contra,
+                                      const NLITS_T* clause_len, int8_t* clause_outputs) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
-    ull total_work = (ull)N * TOTAL_CLAUSES;
 
-    WARP_STRIDE_LOOP(idx, total_work) {
+    WARP_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES) {
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
 
-        if (has_contra[clause] || clause_len[clause] == 0) {
-            if (lane == 0) {
-                clause_outputs[idx] = has_contra[clause] ? 0 : 1;
-            }
-            continue;
-        }
+        // Trivial checks
+        int out = eval_trivial(clause, has_contra, clause_len);
+        if (out < 0) {
+            const FBOUND_T* Xe = &X[sample_offset(e)];
+            const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+            const NFEAT_T* feat_ids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+            const int n_feats = (int)clause_n_feats[clause];
 
-        const FBOUND_T* Xe = &X[sample_offset(e)];
-        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        int n_bounded_fids = (int)clause_n_feats[clause];
-
-        bool is_matching = true;
-        for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
-            int i = base + lane;
-            if (i < n_bounded_fids) {
-                FBOUND_T val = get_feature_value(Xe, 0, 0, (int)bounded_fids[i]);
-                if (val < cfb[i * 2] || val > cfb[i * 2 + 1])
-                    is_matching = false;
+            if (N_PATCHES > 1) {
+                // Conv
+                const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+                const int n_possible_patches = (pos[1] - pos[0] + 1) * (pos[3] - pos[2] + 1);
+                out = 0;
+                for (int base = 0; base < n_possible_patches && !out; base += WARP_SIZE) {
+                    int warp_out = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base);
+                    out = warp_out != 0; // out = 1 if any bit of warp_out is set.
+                }
+            } else {
+                // Non conv
+                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats);
             }
-            if (warp.any(!is_matching))
-                break;
         }
-        bool matched = warp.all(is_matching);
 
         if (lane == 0)
-            clause_outputs[idx] = matched ? 1 : 0;
+            clause_outputs[idx] = (int8_t)out;
     }
 }
 
-extern "C" __global__ void calc_clause_outputs(const FBOUND_T* X, int8_t* clause_outputs, const int N,
-                                               const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
-                                               const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
-                                               const int8_t* has_contra, const NLITS_T* clause_len) {
-#if (N_PATCHES > 1)
-    calc_clause_outputs_conv(X, clause_outputs, N, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
-                             clause_n_feats, has_contra, clause_len);
-#else
-    calc_clause_outputs_noconv(X, clause_outputs, N, clause_feat_bounds, clause_feat_ids, clause_n_feats,
-                               has_contra, clause_len);
-#endif
+/*
+ * Clause outputs of the current sample during fit, one warp per clause. Use reservior sampling to select one matching
+ * patch.
+ *
+ * Arguments:
+ *   seed                    RNG key of the current sample
+ *   X                       features of the batch
+ *   e                       index of the current sample
+ *   clause_drop_mask        1 for clauses dropped this epoch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   clause_output           output, clause outputs
+ *   selected_patch_ids      output, picked patch per firing clause (patches only)
+ *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
+ */
+extern "C" __global__ void eval_fit(const ull seed, const FBOUND_T* X, const int e, const int8_t* clause_drop_mask,
+                                    const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
+                                    const NFEAT_T* clause_n_feats, const int8_t* has_contra, const NLITS_T* clause_len,
+                                    int8_t* clause_output, NPATCHES_T* selected_patch_ids, int* patch_weights) {
+    const FBOUND_T* Xe = &X[sample_offset(e)];
+    auto [warp, lane, warp_id, total_warps] = warp_grid();
+
+    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
+        // trivial checks
+        int out = (clause_drop_mask[clause] == 1) ? 0 : eval_trivial(clause, has_contra, clause_len);
+        int selected_id = -1;
+
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* feat_ids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+        const int n_feats = (int)clause_n_feats[clause];
+
+        if (N_PATCHES > 1) {
+            ull rng_k = rng_hash(seed, clause, 0xDEADBEEFULL);
+            uint rng_counter = 0;
+
+            if (out == 1) {
+                // Empty clause: any patch.
+                selected_id = (int)rand_int(rng_k, &rng_counter, N_PATCHES);
+            } else if (out < 0) {
+                const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+                const int n_x = pos[3] - pos[2] + 1;
+                const int n_window = (pos[1] - pos[0] + 1) * n_x;
+
+                // Reservoir sampling, lane 0 keeps the pick.
+                int count = 0;
+                for (int base = 0; base < n_window; base += WARP_SIZE) {
+                    uint ballot = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base);
+                    int n_matches = __popc(ballot);
+                    count += n_matches;
+                    if (lane == 0 && n_matches > 0 && (int)rand_int(rng_k, &rng_counter, (uint)count) < n_matches) {
+                        // k-th set bit of the ballot.
+                        int k = (int)rand_int(rng_k, &rng_counter, (uint)n_matches);
+                        uint bits = ballot;
+                        for (int j = 0; j < k; j++)
+                            bits &= bits - 1;
+                        int i = base + (__ffs(bits) - 1);
+                        selected_id = (pos[0] + i / n_x) * N_PATCHES_X + pos[2] + i % n_x;
+                    }
+                }
+                out = (selected_id >= 0); // valid on lane 0 only
+            }
+        } else {
+            if (out < 0)
+                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats);
+        }
+
+        if (lane == 0) {
+            clause_output[clause] = (int8_t)out;
+            if (N_PATCHES > 1 && out == 1) {
+                selected_patch_ids[clause] = (NPATCHES_T)selected_id;
+                if (TRACK_PATCH_WEIGHTS)
+                    patch_weights[patch_weights_offset(clause, selected_id)]++;
+            }
+        }
+    }
 }
 
 /*
@@ -157,175 +287,4 @@ extern "C" __global__ void vote_combine_chunks(const float* chunk_sums, const in
             s += chunk_sums[chunk_sums_offset(e, class_id, chunk, chunks)];
         class_sums[idx] = s;
     }
-}
-
-extern "C" __global__ void calc_clause_outputs_patchwise(const FBOUND_T* X, int8_t* patch_output, const int N,
-                                                         const PBOUND_T* clause_position_bounds,
-                                                         const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
-                                                         const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                                         const NLITS_T* clause_len) {
-    GRID_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES * N_PATCHES) {
-        ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
-        ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
-        ull clause = clause_patch / (ull)N_PATCHES;
-        int patch = clause_patch % N_PATCHES;
-
-        int8_t* output = &patch_output[patch_output_offset(e, clause, patch)];
-
-        if (has_contra[clause] || clause_len[clause] == 0) {
-            *output = has_contra[clause] ? 0 : 1;
-            continue;
-        }
-
-        int py = patch / N_PATCHES_X;
-        int px = patch % N_PATCHES_X;
-
-#if (N_PATCHES > 1)
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
-        if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
-            *output = 0;
-            continue;
-        }
-#endif
-
-        const FBOUND_T* Xe = &X[sample_offset(e)];
-        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        int n_bounded_fids = (int)clause_n_feats[clause];
-
-        *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
-    }
-}
-
-__device__ void evaluate_noconv(const FBOUND_T* Xe, const int8_t* clause_drop_mask, const FBOUND_T* clause_feat_bounds,
-                                const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                const NLITS_T* clause_len, int8_t* clause_output) {
-    auto [warp, lane, warp_id, total_warps] = warp_grid();
-
-    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
-        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
-            if (lane == 0)
-                clause_output[clause] = 0;
-            continue;
-        }
-
-        if (clause_len[clause] == 0) {
-            if (lane == 0)
-                clause_output[clause] = 1;
-            continue;
-        }
-
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        int n_bounded_fids = (int)clause_n_feats[clause];
-
-        bool is_matching = true;
-        for (int base = 0; base < n_bounded_fids; base += WARP_SIZE) {
-            int i = base + lane;
-            if (i < n_bounded_fids) {
-                FBOUND_T val = get_feature_value(Xe, 0, 0, (int)bounded_fids[i]);
-                if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
-                    is_matching = false;
-            }
-            if (warp.any(!is_matching))
-                break;
-        }
-        bool matched = warp.all(is_matching);
-
-        if (lane == 0)
-            clause_output[clause] = matched ? 1 : 0;
-    }
-}
-
-__device__ void evaluate_conv(const ull seed, const FBOUND_T* Xe, const int8_t* clause_drop_mask,
-                              const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
-                              const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                              const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
-                              int* patch_weights) {
-    auto [warp, lane, warp_id, total_warps] = warp_grid();
-
-    WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
-        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
-            if (lane == 0)
-                clause_output[clause] = 0;
-            continue;
-        }
-
-        ull rng_k = rng_hash(seed, clause, 0xDEADBEEFULL);
-        uint rng_counter = 0;
-
-        if (clause_len[clause] == 0) {
-            if (lane == 0) {
-                int selected_id = (int)(rand_uniform(rng_k, &rng_counter) * N_PATCHES);
-                clause_output[clause] = 1;
-                selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-#if TRACK_PATCH_WEIGHTS
-                patch_weights[patch_weights_offset(clause, selected_id)]++;
-#endif
-            }
-            continue;
-        }
-
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
-        const int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        const int n_bounded_fids = (int)clause_n_feats[clause];
-
-        int selected_id = -1;
-        int count = 0;
-        int n_y = pos1 - pos0 + 1;
-        int n_x = pos3 - pos2 + 1;
-        int patches_to_consider = n_y * n_x;
-
-        for (int base = 0; base < patches_to_consider; base += WARP_SIZE) {
-            int i = base + lane;
-            bool match = false;
-            if (i < patches_to_consider) {
-                int py = pos0 + i / n_x;
-                int px = pos2 + i % n_x;
-                match = match_patch(Xe, py, px, bounded_fids, feat_bounds, n_bounded_fids);
-            }
-
-            uint ballot = warp.ballot(match);
-            int n_matches = __popc(ballot);
-            count += n_matches;
-
-            if (lane == 0 && n_matches > 0 && (rand_uniform(rng_k, &rng_counter) * count) < (float)n_matches) {
-                int k = (int)(rand_uniform(rng_k, &rng_counter) * n_matches);
-                uint tmp = ballot;
-                for (int j = 0; j < k; j++)
-                    tmp &= tmp - 1;
-                int selected_i = base + (__ffs(tmp) - 1);
-                int py = pos0 + selected_i / n_x;
-                int px = pos2 + selected_i % n_x;
-                selected_id = py * N_PATCHES_X + px;
-            }
-        }
-
-        if (lane == 0) {
-            clause_output[clause] = (selected_id >= 0) ? 1 : 0;
-            if (selected_id >= 0) {
-                selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-#if TRACK_PATCH_WEIGHTS
-                patch_weights[patch_weights_offset(clause, selected_id)]++;
-#endif
-            }
-        }
-    }
-}
-
-extern "C" __global__ void evaluate(const ull seed, const FBOUND_T* X, const int e, const int8_t* clause_drop_mask,
-                                    const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds,
-                                    const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                    const NLITS_T* clause_len, int8_t* clause_output, NPATCHES_T* selected_patch_ids,
-                                    int* patch_weights) {
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-#if (N_PATCHES > 1)
-    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
-                  clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
-#else
-    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra,
-                    clause_len, clause_output);
-#endif
 }

@@ -171,7 +171,7 @@ class CUDADevice(BaseDevice):
         cfg = self.config
         pc = self.packed_clauses
 
-        self.cu.evaluate(
+        self.cu.eval_fit(
             cfg._total_clauses * self._warp_size,
             (
                 np.uint64(rng_key),
@@ -206,34 +206,36 @@ class CUDADevice(BaseDevice):
     def _fit_voting(self, buf):
         self._vote_sum(buf.clause_output, 1, buf.votes, self._fit_vote_chunks)
 
+    def _clause_outputs(self, Xb, bs: int):
+        cfg = self.config
+        pc = self.packed_clauses
+        clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
+        self.cu.eval_infer(
+            bs * cfg._total_clauses * self._warp_size,
+            (
+                Xb,
+                np.int32(bs),
+                pc.clause_position_bounds,
+                pc.clause_feat_bounds,
+                pc.clause_feat_ids,
+                pc.clause_n_feats,
+                pc.has_contra,
+                pc.clause_len,
+                clause_outputs,
+            ),
+        )
+        return clause_outputs
+
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
-        pc = self.packed_clauses
 
         with self.cuda_dev:
             self.pack_clauses(force_repack)
             class_sums = cp.zeros((N, cfg.n_classes), dtype=np.float32)
 
             for i, end, bs in self._batches(N, batch_size, "Infer"):
-                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
-                clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
-
-                self.cu.calc_clause_outputs(
-                    bs * cfg._total_clauses * self._warp_size,
-                    (
-                        Xb,
-                        clause_outputs,
-                        np.int32(bs),
-                        pc.clause_position_bounds,
-                        pc.clause_feat_bounds,
-                        pc.clause_feat_ids,
-                        pc.clause_n_feats,
-                        pc.has_contra,
-                        pc.clause_len,
-                    ),
-                )
-
+                clause_outputs = self._clause_outputs(cp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs)
                 self._vote_sum(clause_outputs, bs, class_sums[i:end])
 
             return class_sums.get()
@@ -241,31 +243,13 @@ class CUDADevice(BaseDevice):
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
-        pc = self.packed_clauses
         out = np.empty((N, cfg._total_clauses), dtype=np.int8)
 
         with self.cuda_dev:
             self.pack_clauses(force_repack)
 
             for i, end, bs in self._batches(N, batch_size, "Transform"):
-                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
-                clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
-
-                self.cu.calc_clause_outputs(
-                    bs * cfg._total_clauses * self._warp_size,
-                    (
-                        Xb,
-                        clause_outputs,
-                        np.int32(bs),
-                        pc.clause_position_bounds,
-                        pc.clause_feat_bounds,
-                        pc.clause_feat_ids,
-                        pc.clause_n_feats,
-                        pc.has_contra,
-                        pc.clause_len,
-                    ),
-                )
-                out[i:end] = clause_outputs.get()
+                out[i:end] = self._clause_outputs(cp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs).get()
 
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
@@ -282,11 +266,10 @@ class CUDADevice(BaseDevice):
                 Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
-                self.cu.calc_clause_outputs_patchwise(
+                self.cu.eval_patchwise(
                     bs * cfg._total_clauses * cfg._n_patches,
                     (
                         Xb,
-                        patch_output,
                         np.int32(bs),
                         pc.clause_position_bounds,
                         pc.clause_feat_bounds,
@@ -294,6 +277,7 @@ class CUDADevice(BaseDevice):
                         pc.clause_n_feats,
                         pc.has_contra,
                         pc.clause_len,
+                        patch_output,
                     ),
                 )
                 out[i:end] = patch_output.get()
