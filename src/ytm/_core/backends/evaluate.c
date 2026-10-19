@@ -3,201 +3,216 @@
 #include "rng.h"
 #endif
 
-#define ADD_VOTE(clause, clause_weights, votes)                                                                        \
-    do {                                                                                                               \
-        ull class_id;                                                                                                  \
-        LOOP_CLASS_ID(class_id, (clause)) {                                                                            \
-            (votes)[class_id] += (clause_weights)[weight_offset(class_id, (clause))];                                     \
-        }                                                                                                              \
-    } while (0)
-
-void calc_clause_outputs(const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
-                         const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
-                         const int8_t* restrict has_contra, const NLITS_T* restrict clause_len,
-                         const FBOUND_T* restrict X, const int e, int8_t* restrict clause_outputs) {
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
-
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        out_e[clause] = (int8_t)clause_output(Xe, clause, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
-                                              clause_n_feats, has_contra[clause], clause_len[clause]);
-    }
+// Output of a clause that needs no matching: 0 with a contradiction, 1 when empty, -1 when it must be matched.
+static inline int eval_trivial(ull clause, const int8_t* restrict has_contra, const NLITS_T* restrict clause_len) {
+    if (has_contra[clause])
+        return 0;
+    if (clause_len[clause] == 0)
+        return 1;
+    return -1;
 }
 
-void calc_class_sums(const float* restrict clause_weights, const PBOUND_T* restrict clause_position_bounds,
-                     const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
-                     const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                     const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int N,
-                     float* restrict class_sums) {
-    for (int e = 0; e < N; e++) {
+static inline bool match_window(const FBOUND_T* restrict Xe, const PBOUND_T* restrict pos,
+                                const FBOUND_T* restrict feat_bounds, const NFEAT_T* restrict feat_ids, int n_feats) {
+    for (int py = pos[0]; py <= pos[1]; py++)
+        for (int px = pos[2]; px <= pos[3]; px++)
+            if (match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats))
+                return true;
+    return false;
+}
+
+/*
+ * Output of every clause on every patch, for N samples.
+ *
+ * Arguments:
+ *   X                       features of the batch
+ *   N                       number of samples in the batch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   patch_output            output, (N, TOTAL_CLAUSES, N_PATCHES) clause outputs per patch
+ */
+void eval_patchwise(const FBOUND_T* restrict X, const int N, const PBOUND_T* restrict clause_position_bounds,
+                    const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                    const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                    const NLITS_T* restrict clause_len, int8_t* restrict patch_output) {
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+    for (ull idx = 0; idx < (ull)N * TOTAL_CLAUSES; idx++) {
+        ull e = idx / (ull)TOTAL_CLAUSES;
+        ull clause = idx % (ull)TOTAL_CLAUSES;
+        int8_t* output = &patch_output[patch_output_offset(e, clause, 0)];
+
+        // Trivial checks
+        int trivial = eval_trivial(clause, has_contra, clause_len);
+        if (trivial >= 0) {
+            for (int patch = 0; patch < N_PATCHES; patch++)
+                output[patch] = (int8_t)trivial;
+            continue;
+        }
+
         const FBOUND_T* Xe = &X[sample_offset(e)];
-        float* sums_e = &class_sums[(ull)e * CLASSES];
-
-#pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES]) num_threads(ytm_n_threads)
-        for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-            int out = clause_output(Xe, clause, clause_position_bounds, clause_feat_ids, clause_feat_bounds,
-                                    clause_n_feats, has_contra[clause], clause_len[clause]);
-
-            if (out)
-                ADD_VOTE(clause, clause_weights, sums_e);
-        }
-    }
-}
-
-void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_bounds,
-                                   const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
-                                   const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                                   const NLITS_T* restrict clause_len, const FBOUND_T* restrict X, const int e,
-                                   int8_t* restrict patch_output) {
-    const FBOUND_T* Xe = &X[sample_offset(e)];
-    int8_t* out_e = &patch_output[patch_output_offset(e, 0, 0)];
-
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        int8_t* clause_out = &out_e[clause * (ull)N_PATCHES];
-
-        if (has_contra[clause]) {
-            for (int p = 0; p < N_PATCHES; p++)
-                clause_out[p] = 0;
-            continue;
-        }
-
-        if (clause_len[clause] == 0) {
-            for (int p = 0; p < N_PATCHES; p++)
-                clause_out[p] = 1;
-            continue;
-        }
-
+        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
         const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
         const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
-
-        if (N_PATCHES == 1) {
-            clause_out[0] = match_patch(Xe, 0, 0, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
-            continue;
-        }
-
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
 
         for (int patch = 0; patch < N_PATCHES; patch++) {
             int py = patch / N_PATCHES_X;
             int px = patch % N_PATCHES_X;
 
-            if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3]) {
-                clause_out[patch] = 0;
+            // If position bounds contradict, then it cant match any position.
+            if (N_PATCHES > 1 && (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])) {
+                output[patch] = 0;
                 continue;
             }
 
-            clause_out[patch] = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
+            // match a patch
+            output[patch] = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
         }
     }
 }
 
-INLINE_FN void evaluate_noconv(const FBOUND_T* restrict Xe, const int8_t* restrict clause_drop_mask,
-                               const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
-                               const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                               const NLITS_T* restrict clause_len, int8_t* restrict clause_output) {
+/*
+ * Clause outputs of N samples at inference.
+ *
+ * Arguments:
+ *   X                       features of the batch
+ *   N                       number of samples in the batch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   clause_outputs          output, (N, TOTAL_CLAUSES) clause outputs
+ */
+void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restrict clause_position_bounds,
+                const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                const NLITS_T* restrict clause_len, int8_t* restrict clause_outputs) {
 #pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
-            clause_output[clause] = 0;
-            continue;
-        }
+    for (ull idx = 0; idx < (ull)N * TOTAL_CLAUSES; idx++) {
+        ull e = idx / (ull)TOTAL_CLAUSES;
+        ull clause = idx % (ull)TOTAL_CLAUSES;
 
-        if (clause_len[clause] == 0) {
-            clause_output[clause] = 1;
-            continue;
-        }
+        // Trivial checks
+        int out = eval_trivial(clause, has_contra, clause_len);
+        if (out < 0) {
+            const FBOUND_T* Xe = &X[sample_offset(e)];
+            const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+            const NFEAT_T* feat_ids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+            const int n_feats = (int)clause_n_feats[clause];
 
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        int n_bounded_fids = (int)clause_n_feats[clause];
-
-        clause_output[clause] = match_patch(Xe, 0, 0, bounded_fids, feat_bounds, n_bounded_fids) ? 1 : 0;
-    }
-}
-
-INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const int8_t* restrict clause_drop_mask,
-                             const PBOUND_T* restrict clause_position_bounds,
-                             const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
-                             const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
-                             const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
-                             NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-        if (clause_drop_mask[clause] == 1 || has_contra[clause]) {
-            clause_output[clause] = 0;
-            continue;
-        }
-
-        ull rng_k = rng_hash(seed, clause, 0xDEADBEEFULL);
-        uint rng_counter = 0;
-
-        if (clause_len[clause] == 0) {
-            int selected_id = (int)(rand_uniform(rng_k, &rng_counter) * N_PATCHES);
-            clause_output[clause] = 1;
-            selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-            if (TRACK_PATCH_WEIGHTS)
-                patch_weights[patch_weights_offset(clause, selected_id)]++;
-            continue;
-        }
-
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
-        const int pos0 = pos[0], pos1 = pos[1], pos2 = pos[2], pos3 = pos[3];
-        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
-        const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
-        const int n_bounded_fids = (int)clause_n_feats[clause];
-
-        int selected_id = -1;
-        int count = 0;
-        int n_y = pos1 - pos0 + 1;
-        int n_x = pos3 - pos2 + 1;
-
-        for (int iy = 0; iy < n_y; iy++) {
-            for (int ix = 0; ix < n_x; ix++) {
-                int py = pos0 + iy;
-                int px = pos2 + ix;
-                if (!match_patch(Xe, py, px, bounded_fids, feat_bounds, n_bounded_fids))
-                    continue;
-                count++;
-                if ((rand_uniform(rng_k, &rng_counter) * count) < 1.0f)
-                    selected_id = py * N_PATCHES_X + px;
+            if (N_PATCHES > 1) {
+                // Conv
+                const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+                out = match_window(Xe, pos, feat_bounds, feat_ids, n_feats);
+            } else {
+                // Non conv
+                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats);
             }
         }
 
-        clause_output[clause] = (selected_id >= 0) ? 1 : 0;
-        if (selected_id >= 0) {
-            selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-            if (TRACK_PATCH_WEIGHTS)
-                patch_weights[patch_weights_offset(clause, selected_id)]++;
-        }
+        clause_outputs[idx] = (int8_t)out;
     }
 }
 
-void evaluate(const ull seed, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
+/*
+ * Clause outputs of the current sample during fit. Use reservior sampling to select one matching patch.
+ *
+ * Arguments:
+ *   seed                    RNG key of the current sample
+ *   X                       features of the batch
+ *   e                       index of the current sample
+ *   clause_drop_mask        1 for clauses dropped this epoch
+ *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
+ *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
+ *   clause_feat_ids         per clause ids of its bounded features
+ *   clause_n_feats          number of bounded features per clause
+ *   has_contra              1 for clauses with a contradiction
+ *   clause_len              number of included literals per clause
+ *   clause_output           output, clause outputs
+ *   selected_patch_ids      output, picked patch per firing clause (patches only)
+ *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
+ */
+void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
               const PBOUND_T* restrict clause_position_bounds, const FBOUND_T* restrict clause_feat_bounds,
               const NFEAT_T* restrict clause_feat_ids, const NFEAT_T* restrict clause_n_feats,
               const int8_t* restrict has_contra, const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
               NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
-    if (N_PATCHES > 1)
-        evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
-                      clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
-    else
-        evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra,
-                        clause_len, clause_output);
-}
 
-void count_votes(const int8_t* restrict clause_output, const float* restrict clause_weights, float* restrict votes) {
-    for (int c = 0; c < CLASSES; c++)
-        votes[c] = 0.0f;
+#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        // trivial checks
+        int out = (clause_drop_mask[clause] == 1) ? 0 : eval_trivial(clause, has_contra, clause_len);
+        int selected_id = -1;
 
-#pragma omp parallel for schedule(dynamic) reduction(+ : votes[ : CLASSES]) num_threads(ytm_n_threads)
-    for (ull clause = 0; clause < TOTAL_CLAUSES; clause++) {
-        if (clause_output[clause])
-            ADD_VOTE(clause, clause_weights, votes);
+        const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* feat_ids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+        const int n_feats = (int)clause_n_feats[clause];
+
+        if (N_PATCHES > 1) {
+            ull rng_k = rng_hash(seed, clause, 0xDEADBEEFULL);
+            uint rng_counter = 0;
+
+            if (out == 1) {
+                // Empty clause: any patch.
+                selected_id = (int)rand_int(rng_k, &rng_counter, N_PATCHES);
+            } else if (out < 0) {
+                const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+                int count = 0;
+                for (int py = pos[0]; py <= pos[1]; py++) {
+                    for (int px = pos[2]; px <= pos[3]; px++) {
+                        if (!match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats))
+                            continue;
+                        count++;
+                        if (rand_int(rng_k, &rng_counter, (uint)count) == 0)
+                            selected_id = py * N_PATCHES_X + px;
+                    }
+                }
+                out = (selected_id >= 0);
+            }
+        } else {
+            if (out < 0)
+                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats);
+        }
+
+        clause_output[clause] = (int8_t)out;
+        if (N_PATCHES > 1 && out == 1) {
+            selected_patch_ids[clause] = (NPATCHES_T)selected_id;
+            if (TRACK_PATCH_WEIGHTS)
+                patch_weights[patch_weights_offset(clause, selected_id)]++;
+        }
     }
 }
 
-#undef ADD_VOTE
+/*
+ * Class sums of N samples.
+ *
+ * Arguments:
+ *   clause_outputs  (N, TOTAL_CLAUSES) clause outputs
+ *   clause_weights  clause weights per class
+ *   N               number of samples
+ *   class_sums      output, (N, CLASSES)
+ */
+void vote_sum(const int8_t* restrict clause_outputs, const float* restrict clause_weights, const int N,
+              float* restrict class_sums) {
+    for (int e = 0; e < N; e++) {
+        const int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
+        float* sums_e = &class_sums[(ull)e * CLASSES];
+        for (int c = 0; c < CLASSES; c++)
+            sums_e[c] = 0.0f;
+
+#pragma omp parallel for schedule(dynamic) reduction(+ : sums_e[ : CLASSES]) num_threads(ytm_n_threads)
+        for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+            if (!out_e[clause])
+                continue;
+            ull class_id;
+            LOOP_CLASS_ID(class_id, clause) { sums_e[class_id] += clause_weights[weight_offset(class_id, clause)]; }
+        }
+    }
+}

@@ -21,8 +21,7 @@ __device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* X
     for (int base = 0; base < n_feats; base += WARP_SIZE) {
         int i = base + lane;
         if (i < n_feats) {
-            FBOUND_T val = get_feature_value(Xe, 0, 0, (int)feat_ids[i]);
-            if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
+            if (!feat_in_bounds(get_feature_value(Xe, 0, 0, (int)feat_ids[i]), feat_bounds, i))
                 ok = false;
         }
         if (warp.any(!ok))

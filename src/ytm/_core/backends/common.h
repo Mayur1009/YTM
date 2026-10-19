@@ -130,37 +130,18 @@ INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int pat
     return X[feature_offset(fid, patch_idx_y, patch_idx_x)];
 }
 
+INLINE_FN bool feat_in_bounds(FBOUND_T val, const FBOUND_T* feat_bounds, int i) {
+    if (ALL_BINARY_FEATS)
+        return val == feat_bounds[i * 2];
+    return val >= feat_bounds[i * 2] && val <= feat_bounds[i * 2 + 1];
+}
+
 // True when the patch matches a clause (strict AND matching).
 INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, const NFEAT_T* feat_ids,
                            const FBOUND_T* feat_bounds, int n_feats) {
     for (int i = 0; i < n_feats; ++i) {
-        FBOUND_T val = get_feature_value(X, patch_idx_y, patch_idx_x, (int)feat_ids[i]);
-        if (val < feat_bounds[i * 2] || val > feat_bounds[i * 2 + 1])
+        if (!feat_in_bounds(get_feature_value(X, patch_idx_y, patch_idx_x, (int)feat_ids[i]), feat_bounds, i))
             return false;
     }
     return true;
-}
-
-// Clause output on this one sample.
-INLINE_FN int clause_output(const FBOUND_T* Xe, ull clause, const PBOUND_T* clause_position_bounds,
-                            const NFEAT_T* clause_feat_ids, const FBOUND_T* clause_feat_bounds,
-                            const NFEAT_T* clause_n_feats, bool has_contra, NLITS_T clause_len) {
-    if (has_contra)
-        return 0;
-    if (clause_len == 0)
-        return 1;
-
-    const NFEAT_T* fids = &clause_feat_ids[clause * (ull)N_RAW_PATCH_FEATS];
-    const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
-    int n_fids = (int)clause_n_feats[clause];
-
-    if (N_PATCHES > 1) {
-        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
-        for (int py = pos[0]; py <= pos[1]; py++)
-            for (int px = pos[2]; px <= pos[3]; px++)
-                if (match_patch(Xe, py, px, fids, feat_bounds, n_fids))
-                    return 1;
-        return 0;
-    }
-    return match_patch(Xe, 0, 0, fids, feat_bounds, n_fids) ? 1 : 0;
 }

@@ -5,7 +5,7 @@ from dataclasses import fields
 
 import numpy as np
 
-from ..utils import read_file, tqdm_bar
+from ..utils import read_file
 from .base import BaseDevice
 from .buffers import FitBuffers
 from .toolchain import Toolchain
@@ -141,7 +141,7 @@ class CPUDevice(BaseDevice):
 
     # == fit steps ==
     def _fit_eval(self, buf: FitBuffers, e: int, rng_key):
-        self.lib.evaluate(
+        self.lib.eval_fit(
             c_uint64(rng_key),
             buf.p_X,
             c_int(e),
@@ -158,67 +158,61 @@ class CPUDevice(BaseDevice):
         )
 
     def _fit_voting(self, buf: FitBuffers):
-        self.lib.count_votes(buf.p_clause_output, self.p_clause_weights, buf.p_votes)
+        self.lib.vote_sum(buf.p_clause_output, self.p_clause_weights, c_int(1), buf.p_votes)
 
-    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
+    def _clause_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         cfg = self.config
-        Xb = np.ascontiguousarray(Xb)
-        class_sums = np.zeros((bs, cfg.n_classes), dtype=np.float32)
-
-        self.lib.calc_class_sums(
-            self.p_clause_weights,
+        Xb = np.ascontiguousarray(Xb, dtype=cfg._fbound_dtype)
+        clause_outputs = np.empty((bs, cfg._total_clauses), dtype=np.int8)
+        self.lib.eval_infer(
+            Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
+            c_int(bs),
             self.p_clause_position_bounds,
             self.p_clause_feat_bounds,
             self.p_clause_feat_ids,
             self.p_clause_n_feats,
             self.p_has_contra,
             self.p_clause_len,
-            Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
-            c_int(bs),
-            class_sums.ctypes.data_as(float_p),
+            clause_outputs.ctypes.data_as(int8_p),
         )
+        return clause_outputs
+
+    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
+        class_sums = np.empty((bs, self.config.n_classes), dtype=np.float32)
+        clause_outputs = self._clause_outputs(Xb, bs)
+        self.lib.vote_sum(clause_outputs.ctypes.data_as(int8_p), self.p_clause_weights, c_int(bs), class_sums.ctypes.data_as(float_p))
         return class_sums
 
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         """Whether each clause fired on each sample."""
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
-        p_X = X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype)))
-        out = np.zeros((X.shape[0], cfg._total_clauses), dtype=np.int8)
+        N = X.shape[0]
+        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
         self.pack_clauses(force_repack)
 
-        for e in tqdm_bar(range(X.shape[0]), desc="Transform"):
-            self.lib.calc_clause_outputs(
-                self.p_clause_position_bounds,
-                self.p_clause_feat_bounds,
-                self.p_clause_feat_ids,
-                self.p_clause_n_feats,
-                self.p_has_contra,
-                self.p_clause_len,
-                p_X,
-                c_int(e),
-                out.ctypes.data_as(int8_p),
-            )
-        return out.reshape(X.shape[0], cfg._n_clause_banks, cfg._n_clauses)
+        for i, end, bs in self._batches(N, batch_size, "Transform"):
+            out[i:end] = self._clause_outputs(X[i:end], bs)
+
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
     def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
-        p_X = X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype)))
-        out = np.zeros((X.shape[0], cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+        N = X.shape[0]
+        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
         self.pack_clauses(force_repack)
 
-        for e in tqdm_bar(range(X.shape[0]), desc=desc):
-            self.lib.calc_clause_outputs_patchwise(
+        for i, end, bs in self._batches(N, batch_size, desc):
+            Xb = np.ascontiguousarray(X[i:end], dtype=cfg._fbound_dtype)
+            self.lib.eval_patchwise(
+                Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
+                c_int(bs),
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
                 self.p_clause_feat_ids,
                 self.p_clause_n_feats,
                 self.p_has_contra,
                 self.p_clause_len,
-                p_X,
-                c_int(e),
-                out.ctypes.data_as(int8_p),
+                out[i:end].ctypes.data_as(int8_p),
             )
         return out
 
