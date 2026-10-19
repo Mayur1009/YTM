@@ -34,15 +34,14 @@ def test_identity_activation_is_votes_over_norm(device):
     assert np.allclose(activation(tm, Z * 2.0), Z, atol=1e-6)
 
 
-def test_model_score_applies_the_activation_and_raw_votes_does_not(device):
-    """`score` returns y_hat, `raw_votes` the pre-activation sum (guided-raw-votes-decision)."""
+def test_model_score_applies_the_activation(device):
+    """`score` returns y_hat."""
     tm = guided("multi", device, n_classes=C, act_loss=SoftmaxCE())
     set_clauses(tm, {})  # all clauses empty, fire everywhere
     w = np.zeros((C, 4), dtype=np.float32)
     w[:, 0] = Z * 2.0
     set_weights(tm, w)
     X = np.zeros((1, 4), dtype=int)
-    assert np.allclose(tm.raw_votes(X, force_repack=True), [Z * 2.0], atol=1e-6)
     assert np.allclose(tm.score(X, force_repack=True), [scipy_special.softmax(Z)], atol=1e-6)
 
 

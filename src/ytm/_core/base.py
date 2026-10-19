@@ -96,7 +96,7 @@ class BaseTM(abc.ABC):
         return (Y[:, None] == np.arange(n_classes)).astype(np.int8)
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
+        return self.dev.infer(self._prepare_X(X), batch_size, force_repack)
 
     @abc.abstractmethod
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:

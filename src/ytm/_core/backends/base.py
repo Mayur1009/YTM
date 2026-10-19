@@ -101,8 +101,17 @@ class BaseDevice(abc.ABC):
 
         self.clause_weights = self.xp.asarray(sign * mag, dtype=np.float32)
 
+    def infer(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            out = self.xp.empty((X.shape[0], cfg.n_classes), dtype=np.float32)
+            for i, end, bs in self._batches(X.shape[0], batch_size, "Infer"):
+                out[i:end] = self._infer_batch(self.xp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs)
+            return self._to_host(out)
+
     @abc.abstractmethod
-    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray: ...
+    def _infer_batch(self, Xb, bs: int): ...
 
     @abc.abstractmethod
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False): ...

@@ -160,11 +160,10 @@ class CPUDevice(BaseDevice):
     def _fit_voting(self, buf: FitBuffers):
         self.lib.count_votes(buf.p_clause_output, self.p_clause_weights, buf.p_votes)
 
-    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         cfg = self.config
-        X = np.ascontiguousarray(X, dtype=cfg._fbound_dtype)
-        class_sums = np.zeros((X.shape[0], cfg.n_classes), dtype=np.float32)
-        self.pack_clauses(force_repack)
+        Xb = np.ascontiguousarray(Xb)
+        class_sums = np.zeros((bs, cfg.n_classes), dtype=np.float32)
 
         self.lib.calc_class_sums(
             self.p_clause_weights,
@@ -174,8 +173,8 @@ class CPUDevice(BaseDevice):
             self.p_clause_n_feats,
             self.p_has_contra,
             self.p_clause_len,
-            X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
-            c_int(X.shape[0]),
+            Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
+            c_int(bs),
             class_sums.ctypes.data_as(float_p),
         )
         return class_sums

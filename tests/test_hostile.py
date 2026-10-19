@@ -81,7 +81,6 @@ def test_all_clauses_dropped_changes_nothing(device, make):
 @pytest.mark.parametrize("batch_size", [1, 3, 7, 100, -1])
 def test_scoring_does_not_depend_on_batch_size(device, batch_size):
     """N=7 with batch sizes that do not divide it, exceed it, or equal 1: the tail batch must not be dropped or mis-offset."""
-    # On CPU `calc_class_sums` ignores batch_size, so this is only meaningful on CUDA.
     tm = discrete("multi", device, n_classes=2, n_clauses=8)
     set_clauses(tm, {0: [0], 1: [1, 6], 2: [2], 5: [3]})
     set_weights(tm, np.arange(16, dtype=np.float32).reshape(2, 8) - 5)

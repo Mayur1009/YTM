@@ -126,11 +126,8 @@ class CPUDevice(CoreCPUDevice):
     def _fit_update_weights(self, buf: GuidedFitBuffers) -> None:
         self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_clause_output, buf.p_clause_drop_mask, self.p_clause_weights)
 
-    def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        votes = super().calc_class_sums(X, batch_size, force_repack)
+    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
+        votes = super()._infer_batch(Xb, bs)
         y_hat = np.empty_like(votes)
-        self.lib.votes_activation_batch(votes.ctypes.data_as(float_p), c_int(votes.shape[0]), y_hat.ctypes.data_as(float_p))
+        self.lib.votes_activation_batch(votes.ctypes.data_as(float_p), c_int(bs), y_hat.ctypes.data_as(float_p))
         return y_hat
-
-    def raw_votes(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
-        return super().calc_class_sums(X, batch_size, force_repack)
