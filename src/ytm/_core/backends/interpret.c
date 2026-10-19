@@ -10,10 +10,8 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
          const FBOUND_T* restrict therm_bits, float pw_th, float* restrict output) {
 #pragma omp parallel for schedule(dynamic) reduction(+ : output[ : HEIGHT * WIDTH * DEPTH]) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
-#if COALESCED == 0
-        if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
+        if (!COALESCED && (ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
-#endif
         if (has_contra[clause_id])
             continue;
 
@@ -25,7 +23,16 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
         const NFEAT_T* cfids = &clause_feat_ids[feat_ids_offset(clause_id, 0)];
         const int n_feats = (int)clause_n_feats[clause_id];
 
-#if (N_PATCHES > 1)
+        if (N_PATCHES == 1) {
+            float wm = fabsf(w);
+            for (int i = 0; i < n_feats; i++) {
+                int k = (int)cfids[i];
+                float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
+                output[feature_offset(k, 0, 0)] += cp * wm;
+            }
+            continue;
+        }
+
         const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause_id, 0)];
         for (int py = pos[0]; py <= pos[1]; py++) {
             for (int px = pos[2]; px <= pos[3]; px++) {
@@ -43,14 +50,6 @@ void wic(int class_id, int polarity, const float* restrict clause_weights, const
                 }
             }
         }
-#else
-        float wm = fabsf(w);
-        for (int i = 0; i < n_feats; i++) {
-            int k = (int)cfids[i];
-            float cp = (float)((int)cfb[i * 2] + (int)cfb[i * 2 + 1] - (int)therm_bits[k]);
-            output[feature_offset(k, 0, 0)] += cp * wm;
-        }
-#endif
     }
 }
 
@@ -63,10 +62,8 @@ void wac_sample(int class_id, int polarity, const int8_t* restrict patch_output,
 
 #pragma omp parallel for schedule(dynamic) reduction(+ : out_e[ : HEIGHT * WIDTH * DEPTH]) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
-#if COALESCED == 0
-        if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
+        if (!COALESCED && (ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
-#endif
         if (has_contra[clause_id])
             continue;
 

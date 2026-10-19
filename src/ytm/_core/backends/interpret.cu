@@ -12,10 +12,8 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
         ull clause_id = idx / N_PATCHES;
         int p = idx % N_PATCHES;
 
-#if COALESCED == 0
-        if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
+        if (!COALESCED && (ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
-#endif
 
         if (has_contra[clause_id])
             continue;
@@ -26,17 +24,16 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
 
         int py = p / N_PATCHES_X, px = p % N_PATCHES_X;
 
-#if (N_PATCHES > 1)
-        const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause_id, 0)];
-        if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])
-            continue;
-
-        float pwv = patch_weights_norm[patch_weights_offset(clause_id, p)];
-        if (pwv <= pw_th)
-            continue;
-#else
         float pwv = 1.0f;
-#endif
+        if (N_PATCHES > 1) {
+            const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause_id, 0)];
+            if (py < pos[0] || py > pos[1] || px < pos[2] || px > pos[3])
+                continue;
+
+            pwv = patch_weights_norm[patch_weights_offset(clause_id, p)];
+            if (pwv <= pw_th)
+                continue;
+        }
 
         float wm = fabsf(w) * pwv;
         const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause_id, 0, 0)];
@@ -63,10 +60,8 @@ extern "C" __global__ void wac(const int* target_classes, int polarity, int N, c
 
         int class_id = target_classes[e];
 
-#if COALESCED == 0
-        if ((ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
+        if (!COALESCED && (ull)class_id != clause_id / (ull)CLAUSES_PER_CLASS)
             continue;
-#endif
 
         if (has_contra[clause_id])
             continue;

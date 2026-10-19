@@ -29,13 +29,11 @@ INLINE_FN void update_pos_bounds(const TA_STATE_T* ta_state, int lit, int lit_of
             *lo = lit + 1;
         (*includes)++;
     }
-#if NEGATED_LITERALS
-    if (is_included(ta_state[lit_off + lit + N_LITERALS / 2])) {
+    if (NEGATED_LITERALS && is_included(ta_state[lit_off + lit + N_LITERALS / 2])) {
         if (lit < *hi)
             *hi = lit;
         (*includes)++;
     }
-#endif
 }
 
 // Every thermometer literal of one raw patch feature, collapsed to the interval [lb, ub].
@@ -43,23 +41,22 @@ INLINE_FN FeatScan calc_single_feat_bounds(const TA_STATE_T* ta_state, const FBO
                                            const NLITS_T* literal_offsets, int fid) {
     FeatScan r;
 
-#if ALL_BINARY_FEATS
-    // One bit per feature.
-    int lstart = N_POSITION_FEATS + fid;
+    if (ALL_BINARY_FEATS) {
+        // One bit per feature.
+        int lstart = N_POSITION_FEATS + fid;
 
-    bool inc = is_included(ta_state[lstart]);
-    r.lb = inc;
-    r.includes = inc;
-#if NEGATED_LITERALS
-    bool neg = is_included(ta_state[lstart + N_LITERALS / 2]);
-    r.ub = !neg;
-    r.includes += neg;
-#else
-    r.ub = 1;
-#endif
-    r.is_bounded = (r.includes > 0);
-
-#else
+        bool inc = is_included(ta_state[lstart]);
+        r.lb = inc;
+        r.includes = inc;
+        r.ub = 1;
+        if (NEGATED_LITERALS) {
+            bool neg = is_included(ta_state[lstart + N_LITERALS / 2]);
+            r.ub = !neg;
+            r.includes += neg;
+        }
+        r.is_bounded = (r.includes > 0);
+        return r;
+    }
 
     FBOUND_T n_bits = therm_bits[fid];
     int lstart = N_POSITION_FEATS + literal_offsets[fid];
@@ -75,15 +72,12 @@ INLINE_FN FeatScan calc_single_feat_bounds(const TA_STATE_T* ta_state, const FBO
             r.includes++;
             r.is_bounded = true;
         }
-#if NEGATED_LITERALS
-        if (is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
+        if (NEGATED_LITERALS && is_included(ta_state[lstart + bit + N_LITERALS / 2])) {
             if (bit < r.ub)
                 r.ub = bit;
             r.includes++;
             r.is_bounded = true;
         }
-#endif
     }
-#endif
     return r;
 }

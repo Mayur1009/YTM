@@ -77,33 +77,19 @@ void update_weights(const uint8_t* restrict feedback_type, const uint* restrict 
             float* weight = &clause_weights[weight_offset(class_id, clause)];
             int sign = (*weight >= 0) - (*weight < 0);
 
-            if (fb == FB_T1A) {
-#if TYPE1A_FB
+            if (fb == FB_T1A && TYPE1A_FB) {
                 float nw = *weight + sign * 1.0f;
                 if (fabsf(nw) < MAX_WEIGHT)
                     *weight = nw;
-#endif
-            }
-
-            else if (fb == FB_T2) {
-#if TYPE2_FB
+            } else if (fb == FB_T2 && TYPE2_FB) {
                 float nw = *weight - sign * 1.0f;
-
-#if NEGATIVE_CLAUSES == 0
-                *weight = clip(nw, 1, MAX_WEIGHT);
-#else
-
-                if (fabsf(nw) < 1.0f) {
-#if ALLOW_POLARITY_CHANGE
-                    nw = -sign * 1.0f;
-#else
-                    nw = sign * 1.0f;
-#endif
+                if (!NEGATIVE_CLAUSES) {
+                    *weight = clip(nw, 1.0f, MAX_WEIGHT);
+                } else {
+                    if (fabsf(nw) < 1.0f)
+                        nw = ALLOW_POLARITY_CHANGE ? -sign * 1.0f : sign * 1.0f;
+                    *weight = nw;
                 }
-                *weight = nw;
-#endif
-
-#endif
             }
         }
     }

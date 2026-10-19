@@ -73,7 +73,11 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
         const NFEAT_T* bounded_fids = &clause_feat_ids[feat_ids_offset(clause, 0)];
         int n_bounded_fids = (int)clause_n_feats[clause];
 
-#if (N_PATCHES > 1)
+        if (N_PATCHES == 1) {
+            clause_out[0] = match_patch(Xe, 0, 0, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
+            continue;
+        }
+
         const PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
 
         for (int patch = 0; patch < N_PATCHES; patch++) {
@@ -87,9 +91,6 @@ void calc_clause_outputs_patchwise(const PBOUND_T* restrict clause_position_boun
 
             clause_out[patch] = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
         }
-#else
-        clause_out[0] = match_patch(Xe, 0, 0, bounded_fids, cfb, n_bounded_fids) ? 1 : 0;
-#endif
     }
 }
 
@@ -137,9 +138,8 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
             int selected_id = (int)(rand_uniform(rng_k, &rng_counter) * N_PATCHES);
             clause_output[clause] = 1;
             selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-#if TRACK_PATCH_WEIGHTS
-            patch_weights[patch_weights_offset(clause, selected_id)]++;
-#endif
+            if (TRACK_PATCH_WEIGHTS)
+                patch_weights[patch_weights_offset(clause, selected_id)]++;
             continue;
         }
 
@@ -169,9 +169,8 @@ INLINE_FN void evaluate_conv(const ull seed, const FBOUND_T* restrict Xe, const 
         clause_output[clause] = (selected_id >= 0) ? 1 : 0;
         if (selected_id >= 0) {
             selected_patch_ids[clause] = (NPATCHES_T)selected_id;
-#if TRACK_PATCH_WEIGHTS
-            patch_weights[patch_weights_offset(clause, selected_id)]++;
-#endif
+            if (TRACK_PATCH_WEIGHTS)
+                patch_weights[patch_weights_offset(clause, selected_id)]++;
         }
     }
 }
@@ -182,13 +181,12 @@ void evaluate(const ull seed, const FBOUND_T* restrict X, const int e, const int
               const int8_t* restrict has_contra, const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
               NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
-#if (N_PATCHES > 1)
-    evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
-                  clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
-#else
-    evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra, clause_len,
-                    clause_output);
-#endif
+    if (N_PATCHES > 1)
+        evaluate_conv(seed, Xe, clause_drop_mask, clause_position_bounds, clause_feat_bounds, clause_feat_ids,
+                      clause_n_feats, has_contra, clause_len, clause_output, selected_patch_ids, patch_weights);
+    else
+        evaluate_noconv(Xe, clause_drop_mask, clause_feat_bounds, clause_feat_ids, clause_n_feats, has_contra,
+                        clause_len, clause_output);
 }
 
 void count_votes(const int8_t* restrict clause_output, const float* restrict clause_weights, float* restrict votes) {

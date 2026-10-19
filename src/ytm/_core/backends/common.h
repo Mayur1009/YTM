@@ -115,16 +115,14 @@ INLINE_FN bool is_included(uint ta_state) { return ta_state >= INCLUDE_STATE; }
 
 // Index of raw patch feature `fid` of the patch at (patch_idx_y, patch_idx_x) in the flat image.
 INLINE_FN int feature_offset(int fid, int patch_idx_y, int patch_idx_x) {
-#if (PATCH_HEIGHT == HEIGHT && PATCH_WIDTH == WIDTH)
-    return fid;
-#else
+    if (PATCH_HEIGHT == HEIGHT && PATCH_WIDTH == WIDTH)
+        return fid;
     int rel_y = fid / (PATCH_WIDTH * DEPTH);
     int rel_x = (fid / DEPTH) % PATCH_WIDTH;
     int z = fid % DEPTH;
     int abs_y = patch_idx_y * STRIDE_Y + rel_y;
     int abs_x = patch_idx_x * STRIDE_X + rel_x;
     return abs_y * (WIDTH * DEPTH) + abs_x * DEPTH + z;
-#endif
 }
 
 // Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
@@ -156,14 +154,13 @@ INLINE_FN int clause_output(const FBOUND_T* Xe, ull clause, const PBOUND_T* clau
     const FBOUND_T* feat_bounds = &clause_feat_bounds[clause * (ull)N_RAW_PATCH_FEATS * 2];
     int n_fids = (int)clause_n_feats[clause];
 
-#if (N_PATCHES > 1)
-    const PBOUND_T* pos = &clause_position_bounds[clause * 4];
-    for (int py = pos[0]; py <= pos[1]; py++)
-        for (int px = pos[2]; px <= pos[3]; px++)
-            if (match_patch(Xe, py, px, fids, feat_bounds, n_fids))
-                return 1;
-    return 0;
-#else
+    if (N_PATCHES > 1) {
+        const PBOUND_T* pos = &clause_position_bounds[clause * 4];
+        for (int py = pos[0]; py <= pos[1]; py++)
+            for (int px = pos[2]; px <= pos[3]; px++)
+                if (match_patch(Xe, py, px, fids, feat_bounds, n_fids))
+                    return 1;
+        return 0;
+    }
     return match_patch(Xe, 0, 0, fids, feat_bounds, n_fids) ? 1 : 0;
-#endif
 }

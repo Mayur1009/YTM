@@ -37,12 +37,10 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
 
-#if COALESCED == 0
-        if (class_id != clause_id / (ull)CLAUSES_PER_CLASS) {
+        if (!COALESCED && class_id != clause_id / (ull)CLAUSES_PER_CLASS) {
             votes_neg_ck[clause_class] = votes[class_id];
             continue;
         }
-#endif
         int ck = clause_output[clause_id];
         float w = clause_weights[weight_offset(class_id, clause_id)];
         votes_neg_ck[clause_class] = votes[class_id] - (ck ? w : -w);
@@ -154,11 +152,11 @@ void update_weights(const float* restrict grad, const float lr, const int8_t* re
         LOOP_CLASS_ID(class_id, clause) {
             ull idx = weight_offset(class_id, clause);
             float new_w = clause_weights[idx] + lr * grad[class_id];
-#if ALLOW_POLARITY_CHANGE
-            clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);
-#else
-            clause_weights[idx] = (clause_weights[idx] >= 0) ? clip(new_w, 0.0001f, MAX_WEIGHT) : clip(new_w, -MAX_WEIGHT, -0.0001f);
-#endif
+            if (ALLOW_POLARITY_CHANGE)
+                clause_weights[idx] = clip(new_w, -MAX_WEIGHT, MAX_WEIGHT);
+            else
+                clause_weights[idx] =
+                    (clause_weights[idx] >= 0) ? clip(new_w, 0.0001f, MAX_WEIGHT) : clip(new_w, -MAX_WEIGHT, -0.0001f);
         }
     }
 }

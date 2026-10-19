@@ -69,19 +69,17 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
 
         const TA_STATE_T* ta_state = &global_ta_states[ta_offset(clause, 0)];
 
-#if POSITION_LITERALS
-        PositionResult pr = scan_position_literals(ta_state, dont_skip);
-#else
         PositionResult pr = {0, N_PATCHES_Y - 1, 0, N_PATCHES_X - 1, 0, true};
-#endif
+        if (POSITION_LITERALS)
+            pr = scan_position_literals(ta_state, dont_skip);
 
-#if (N_PATCHES > 1)
-        PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
-        pos[0] = pr.pos0;
-        pos[1] = pr.pos1;
-        pos[2] = pr.pos2;
-        pos[3] = pr.pos3;
-#endif
+        if (N_PATCHES > 1) {
+            PBOUND_T* pos = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+            pos[0] = pr.pos0;
+            pos[1] = pr.pos1;
+            pos[2] = pr.pos2;
+            pos[3] = pr.pos3;
+        }
 
         if (!pr.valid && !dont_skip) {
             has_contra[clause] = 1;
