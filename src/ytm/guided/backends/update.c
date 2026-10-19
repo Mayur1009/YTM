@@ -85,7 +85,7 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                 int dir = polarity * sign_grad;
                 float update_prob = 1.0f - expf(-lambda_ * fabsf(g));
 
-                if (rand_uniform(rng_k, &rng_counter) < update_prob) {
+                if (bernoulli(rng_k, &rng_counter, update_prob)) {
                     bool t1a = (ck == 1 && dir > 0 && has_space);
                     bool t1b = ((ck == 0 && dir > 0) || (ck == 1 && dir > 0 && !has_space));
                     bool t2 = (ck == 1 && dir < 0);
@@ -105,10 +105,8 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
     ull rng_k = rng_hash(seed, rng_id, 0xFEEDFACEULL);
     uint rng_counter = 0;
 
-    uint8_t fb;
-    if (rand_uniform(rng_k, &rng_counter) >= uprob) {
-        fb = FB_NONE;
-    } else {
+    uint8_t fb = FB_NONE;
+    if (bernoulli(rng_k, &rng_counter, uprob)) {
         // T1a -> ck = 1, and deltaL < 0, meaning turning ck=0 increased the loss
         // T1b -> ck = 0, and deltaL > 0, meaning turning ck=1 decreased the loss
         // T2 -> ck = 1, and deltaL > 0, meaning turning ck=0 decreased the loss

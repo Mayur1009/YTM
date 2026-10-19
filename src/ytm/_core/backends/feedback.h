@@ -99,8 +99,7 @@ INLINE_FN bool dec_range_dense(ull rng_key, uint* RESTRICT rng_counter, binom_t 
     const int lane = n_lanes > 1 ? lane_id() : 0;
     bool crossed = false;
     for (int li = start + lane; li < end; li += n_lanes) {
-        if (rand_uniform(rng_key, rng_counter) < dec.p_any)
-            crossed |= safe_lit_dec(&ta_states[li + offset], binom_at_least_one(rng_key, rng_counter, dec));
+        crossed |= safe_lit_dec(&ta_states[li + offset], binomial(rng_key, rng_counter, dec));
     }
     return crossed;
 }
@@ -126,8 +125,7 @@ INLINE_FN bool inc_range_fails(ull rng_key, uint* RESTRICT rng_counter, binom_t 
     bool crossed = false;
     if (end - start == 1 || fails.p_any >= P_DENSE_MIN) {
         for (int li = start; li < end; ++li) {
-            int k = rand_uniform(rng_key, rng_counter) < fails.p_any ? binom_at_least_one(rng_key, rng_counter, fails) : 0;
-            crossed |= safe_lit_inc(&ta_states[li + offset], n - k, cap);
+            crossed |= safe_lit_inc(&ta_states[li + offset], n - binomial(rng_key, rng_counter, fails), cap);
         }
         return crossed;
     }
