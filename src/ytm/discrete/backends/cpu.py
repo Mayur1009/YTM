@@ -1,32 +1,12 @@
 import pathlib
-from ctypes import POINTER, c_int, c_uint8, c_uint64
-from dataclasses import dataclass, field
-from typing import Any
+from ctypes import c_int, c_uint64
 
 import numpy as np
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
-from ..._core.backends.cpu import CPUFitBuffers, float_p
+from ..._core.backends.cpu import bind_ptrs
 from ..._core.utils import read_file, tqdm_bar
-
-uint8_p = POINTER(c_uint8)
-
-
-@dataclass(kw_only=True)
-class DiscreteFitBuffers(CPUFitBuffers):
-    feedback_type: Any  # (n_clauses, n_classes) one of FB_NONE/T1A/T1B/T2, indexed [rel_clause, class]
-    prob: Any  # (n_classes,) signed update probability for the current sample
-    label_probs: Any  # (n_samples, n_classes) chance a class gives feedback at all
-
-    p_feedback_type: Any = field(init=False)
-    p_prob: Any = field(init=False)
-    p_label_probs: Any = field(init=False)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.p_feedback_type = self.feedback_type.ctypes.data_as(uint8_p)
-        self.p_prob = self.prob.ctypes.data_as(float_p)
-        self.p_label_probs = self.label_probs.ctypes.data_as(float_p)
+from .buffers import DiscreteFitBuffers
 
 
 class CPUDevice(CoreCPUDevice):
@@ -42,7 +22,7 @@ class CPUDevice(CoreCPUDevice):
                 f"`{name}` must be C contiguous {np.dtype(dtype)}, got {arr.dtype} contiguous={arr.flags.c_contiguous}"
             )
 
-        return DiscreteFitBuffers(
+        buf = DiscreteFitBuffers(
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
@@ -54,6 +34,7 @@ class CPUDevice(CoreCPUDevice):
             label_probs=label_probs,
             **self._fb_list_allocs(),
         )
+        return bind_ptrs(buf)
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
         buf = self._fit_allocs(X, Y, self._fit_drop_mask(clause_drop_p), label_probs)

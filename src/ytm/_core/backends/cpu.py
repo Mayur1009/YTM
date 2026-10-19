@@ -1,13 +1,13 @@
 import pathlib
 import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import fields
 
 import numpy as np
 
 from ..utils import read_file, tqdm_bar
-from .base import BaseDevice, FitBuffers
+from .base import BaseDevice
+from .buffers import FitBuffers
 from .toolchain import Toolchain
 
 int8_p = POINTER(c_int8)
@@ -16,39 +16,15 @@ uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
 
-@dataclass(kw_only=True)
-class CPUFitBuffers(FitBuffers):
+def bind_ptrs(buf: FitBuffers) -> FitBuffers:
     """Adds the ctypes pointers, derived once per epoch rather than per sample."""
-
-    p_X: Any = field(init=False)
-    p_Y: Any = field(init=False)
-    p_clause_drop_mask: Any = field(init=False)
-    p_clause_output: Any = field(init=False)
-    p_selected_pids: Any = field(init=False)
-    p_votes: Any = field(init=False)
-    p_t1b_n: Any = field(init=False)
-    p_t1b_cid: Any = field(init=False)
-    p_t1b_cnt: Any = field(init=False)
-    p_t1a_t2_n: Any = field(init=False)
-    p_t1a_t2_cid: Any = field(init=False)
-    p_t1a_cnt: Any = field(init=False)
-    p_t2_cnt: Any = field(init=False)
-
-    def __post_init__(self):
-        self.p_X = self.X.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.X.dtype)))
-        self.p_Y = self.Y.ctypes.data_as(float_p)
-        self.p_clause_drop_mask = self.clause_drop_mask.ctypes.data_as(int8_p)
-        self.p_clause_output = self.clause_output.ctypes.data_as(int8_p)
-        self.p_selected_pids = self.selected_pids.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(self.selected_pids.dtype)))
-        self.p_votes = self.votes.ctypes.data_as(float_p)
-        self.p_t1b_n = self.t1b_n.ctypes.data_as(uint32_p)
-        self.p_t1b_cid = self.t1b_cid.ctypes.data_as(uint32_p)
-        nclasses_p = POINTER(np.ctypeslib.as_ctypes_type(self.t1b_cnt.dtype))
-        self.p_t1b_cnt = self.t1b_cnt.ctypes.data_as(nclasses_p)
-        self.p_t1a_t2_n = self.t1a_t2_n.ctypes.data_as(uint32_p)
-        self.p_t1a_t2_cid = self.t1a_t2_cid.ctypes.data_as(uint32_p)
-        self.p_t1a_cnt = self.t1a_cnt.ctypes.data_as(nclasses_p)
-        self.p_t2_cnt = self.t2_cnt.ctypes.data_as(nclasses_p)
+    for f in fields(buf):
+        arr = getattr(buf, f.name)
+        if isinstance(arr, np.ndarray):
+            setattr(buf, f"p_{f.name}", arr.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(arr.dtype))))
+        elif arr is None:
+            setattr(buf, f"p_{f.name}", None)
+    return buf
 
 
 class CPUDevice(BaseDevice):
@@ -93,7 +69,7 @@ class CPUDevice(BaseDevice):
             "t2_cnt": np.empty(n, dtype=cnt),
         }
 
-    def _fit_apply_fb(self, buf: CPUFitBuffers, e: int, rng_key: int) -> None:
+    def _fit_apply_fb(self, buf: FitBuffers, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         self.lib.update_t1b(
             c_uint64(rng_key),
@@ -164,7 +140,7 @@ class CPUDevice(BaseDevice):
         )
 
     # == fit steps ==
-    def _fit_eval(self, buf: CPUFitBuffers, e: int, rng_key):
+    def _fit_eval(self, buf: FitBuffers, e: int, rng_key):
         self.lib.evaluate(
             c_uint64(rng_key),
             buf.p_X,
@@ -181,7 +157,7 @@ class CPUDevice(BaseDevice):
             self.p_patch_weights,
         )
 
-    def _fit_voting(self, buf: CPUFitBuffers):
+    def _fit_voting(self, buf: FitBuffers):
         self.lib.count_votes(buf.p_clause_output, self.p_clause_weights, buf.p_votes)
 
     def calc_class_sums(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:

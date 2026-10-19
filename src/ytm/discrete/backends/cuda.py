@@ -1,20 +1,11 @@
 import pathlib
-from dataclasses import dataclass
-from typing import Any
 
 import cupy as cp
 import numpy as np
 
-from ..._core.backends.base import FitBuffers
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file, tqdm_bar
-
-
-@dataclass(kw_only=True)
-class DiscreteFitBuffers(FitBuffers):
-    feedback_type: Any  # (n_clauses, n_classes) one of FB_NONE/T1A/T1B/T2, indexed [rel_clause, class]
-    prob: Any  # (n_classes,) signed update probability for the current sample
-    label_probs: Any  # (n_samples, n_classes) chance a class gives feedback at all
+from .buffers import DiscreteFitBuffers
 
 
 class CUDADevice(CoreCUDADevice):

@@ -1,26 +1,13 @@
 import pathlib
-from dataclasses import dataclass
 from typing import Any
 
 import cupy as cp
 import numpy as np
 
-from ..._core.backends.base import FitBuffers
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file, tqdm_bar
 from ..config import FbSignal
-
-
-@dataclass(kw_only=True)
-class GuidedFitBuffers(FitBuffers):
-    grad: Any  # (n_classes,) loss gradient w.r.t. votes for the current sample
-    y_hat: Any  # (n_classes,) activated votes for the current sample
-    loss: Any  # (1,) loss for the current sample
-    lr: float  # resolved once per epoch: the call's override, or config.lr
-    lambda_: float  # resolved once per epoch: the call's override, or config.lambda_
-    votes_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual votes, delta_l only
-    y_hat_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual activations, delta_l only
-    loss_neg_ck: Any = None  # (total_clauses,) counterfactual loss, delta_l only
+from .buffers import GuidedFitBuffers
 
 
 class CUDADevice(CoreCUDADevice):

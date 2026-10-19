@@ -1,44 +1,13 @@
 import pathlib
 from ctypes import c_float, c_int, c_uint64
-from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
-from ..._core.backends.cpu import CPUFitBuffers, float_p
+from ..._core.backends.cpu import bind_ptrs, float_p
 from ..._core.utils import read_file, tqdm_bar
 from ..config import FbSignal
-
-
-@dataclass(kw_only=True)
-class GuidedFitBuffers(CPUFitBuffers):
-    grad: Any  # (n_classes,) loss gradient w.r.t. votes for the current sample
-    y_hat: Any  # (n_classes,) activated votes for the current sample
-    loss: Any  # (1,) loss for the current sample
-    lr: float  # resolved once per epoch: the call's override, or config.lr
-    lambda_: float  # resolved once per epoch: the call's override, or config.lambda_
-    votes_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual votes, delta_l only
-    y_hat_neg_ck: Any = None  # (total_clauses, n_classes) counterfactual activations, delta_l only
-    loss_neg_ck: Any = None  # (total_clauses,) counterfactual loss, delta_l only
-
-    p_grad: Any = field(init=False)
-    p_y_hat: Any = field(init=False)
-    p_loss: Any = field(init=False)
-    p_votes_neg_ck: Any = field(init=False, default=None)
-    p_y_hat_neg_ck: Any = field(init=False, default=None)
-    p_loss_neg_ck: Any = field(init=False, default=None)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.p_grad = self.grad.ctypes.data_as(float_p)
-        self.p_y_hat = self.y_hat.ctypes.data_as(float_p)
-        self.p_loss = self.loss.ctypes.data_as(float_p)
-
-        if self.votes_neg_ck is not None:
-            self.p_votes_neg_ck = self.votes_neg_ck.ctypes.data_as(float_p)
-            self.p_y_hat_neg_ck = self.y_hat_neg_ck.ctypes.data_as(float_p)
-            self.p_loss_neg_ck = self.loss_neg_ck.ctypes.data_as(float_p)
+from .buffers import GuidedFitBuffers
 
 
 class CPUDevice(CoreCPUDevice):
@@ -63,7 +32,7 @@ class CPUDevice(CoreCPUDevice):
             extra["y_hat_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
             extra["loss_neg_ck"] = np.empty(cfg._total_clauses, dtype=np.float32)
 
-        return GuidedFitBuffers(
+        buf = GuidedFitBuffers(
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
@@ -78,6 +47,7 @@ class CPUDevice(CoreCPUDevice):
             **extra,
             **self._fb_list_allocs(),
         )
+        return bind_ptrs(buf)
 
     def fit_epoch(
         self,
