@@ -86,6 +86,17 @@ class BaseTM(abc.ABC):
     def _prepare_X(self, X: np.ndarray) -> np.ndarray:
         return prepare_X(self.config, X)
 
+    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
+        n_classes = self.config.n_classes
+        if Y.ndim == 2 and Y.shape[1] == n_classes:
+            return Y
+        Y = Y.reshape(-1)
+        if n_classes == 1:
+            assert np.isin(Y, (0, 1)).all(), "Binary Y must contain only {0, 1}."
+            return Y.reshape(-1, 1)
+        assert np.isin(Y, np.arange(n_classes)).all(), f"Class labels must be in [0, {n_classes})."
+        return (Y[:, None] == np.arange(n_classes)).astype(np.int8)
+
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         return self.dev.calc_class_sums(self._prepare_X(X), batch_size, force_repack)
 

@@ -22,9 +22,12 @@ class RegressionTM(BaseTM):
         lr: float | None = None,
         lambda_: float | None = None,
     ) -> float:
-        assert Y.ndim == 1, "Y must be 1D array (samples,)"
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, batch_size, lr, lambda_)
+        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, batch_size, lr, lambda_)
+
+    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
+        assert Y.ndim == 1, "Y must be 1D array (samples,)"
+        return Y.reshape(-1, 1)
 
     def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
         class_sums = self.score(X, batch_size, force_repack=force_repack)

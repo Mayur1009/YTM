@@ -1,4 +1,3 @@
-import abc
 from typing import Unpack
 
 import numpy as np
@@ -28,28 +27,8 @@ class Classifier(BaseTM):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
         return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, batch_size, label_sampling)
 
-    @abc.abstractmethod
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        """Check the Y shape this classifier accepts and return it as (samples, n_classes)."""
-        ...
-
 
 class MultiClassTM(Classifier):
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        n_classes = self.config.n_classes
-        assert Y.ndim in (1, 2), f"Y must be 1D (samples,) or 2D (samples, {n_classes}) one hot, got {Y.ndim}D"
-
-        if Y.ndim == 2:
-            assert Y.shape[1] == n_classes, f"One-hot Y must have n_classes ({n_classes}) columns, got {Y.shape[1]}"
-            assert np.isin(Y, (0, 1)).all(), "One-hot Y must be binary containing only {0, 1}."
-            assert np.all(Y.sum(axis=1) == 1), "One-hot Y must have only one label per sample."
-            return Y
-
-        one_hot_Y = np.empty((Y.shape[0], n_classes), dtype=np.int8)
-        for i in range(n_classes):
-            one_hot_Y[:, i] = np.where(Y == i, 1, 0)
-        return one_hot_Y
-
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
         class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return np.argmax(class_sums, axis=1), class_sums
@@ -71,10 +50,6 @@ class MultiClassTM(Classifier):
 
 
 class MultiOutputTM(Classifier):
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        return Y
-
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
         class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return (class_sums > self.decision_threshold).astype(np.uint32), class_sums
@@ -104,12 +79,6 @@ class BinaryTM(Classifier):
         opt.setdefault("coalesced", False)
         opt.setdefault("allow_polarity_change", False)
         super().__init__(n_clauses, T, s, dim, 1, **opt)
-
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        assert Y.ndim in (1, 2), f"Y must be 1D (samples,) or 2D (samples, 1), got {Y.ndim}D"
-        assert Y.ndim == 1 or Y.shape[1] == 1, f"Y must have a single column, got {Y.shape[1]}"
-        assert np.isin(Y, (0, 1)).all(), "Y must be binary containing only {0, 1}."
-        return Y.reshape(-1, 1)
 
     def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
         class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
