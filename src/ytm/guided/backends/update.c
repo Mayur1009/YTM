@@ -32,7 +32,7 @@ void loss_gradient(const float* restrict y_hat, const float* restrict y, float* 
 
 void compute_votes_neg_ck(const float* restrict votes, const float* restrict clause_weights,
                           const int8_t* restrict clause_output, float* restrict votes_neg_ck) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause_class = 0; clause_class < (ull)TOTAL_CLAUSES * (ull)CLASSES; clause_class++) {
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
@@ -48,7 +48,7 @@ void compute_votes_neg_ck(const float* restrict votes, const float* restrict cla
 }
 
 void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restrict y, float* restrict loss_neg_ck) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         float loss = 0.0f;
         compute_loss(y, &y_hat_neg_ck[clause_id * (ull)CLASSES], NULL, &loss);
@@ -62,7 +62,7 @@ void decide_feedback_grad(const ull seed, const float* restrict grad, const floa
                           uint* restrict t1b_n, uint* restrict t1b_cid,
                           NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                           NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -125,7 +125,7 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
                              uint* restrict t1b_n, uint* restrict t1b_cid,
                              NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                              NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         if (clause_drop_mask[clause_id] == 1)
             continue;
@@ -141,7 +141,7 @@ void decide_feedback_delta_l(const ull seed, const float* restrict loss, const f
 
 void update_weights(const float* restrict grad, const float lr, const int8_t* restrict clause_output,
                     const int8_t* restrict clause_drop_mask, float* restrict clause_weights) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;

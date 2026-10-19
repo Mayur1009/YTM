@@ -39,7 +39,7 @@ void eval_patchwise(const FBOUND_T* restrict X, const int N, const PBOUND_T* res
                     const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
                     const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
                     const NLITS_T* restrict clause_len, int8_t* restrict patch_output) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull idx = 0; idx < (ull)N * TOTAL_CLAUSES; idx++) {
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
@@ -93,7 +93,7 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
                 const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
                 const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
                 const NLITS_T* restrict clause_len, int8_t* restrict clause_outputs) {
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull idx = 0; idx < (ull)N * TOTAL_CLAUSES; idx++) {
         ull e = idx / (ull)TOTAL_CLAUSES;
         ull clause = idx % (ull)TOTAL_CLAUSES;
@@ -145,7 +145,7 @@ void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int
               NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
 
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         // trivial checks
         int out = (clause_drop_mask[clause] == 1) ? 0 : eval_trivial(clause, has_contra, clause_len);

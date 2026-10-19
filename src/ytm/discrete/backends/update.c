@@ -20,7 +20,7 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
                      NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int clause_output = clause_output_arr[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -64,7 +64,7 @@ void update_weights(const uint8_t* restrict feedback_type, const uint* restrict 
     if (n == 0)
         return;
 
-#pragma omp parallel for schedule(dynamic) num_threads(ytm_n_threads)
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull i = 0; i < n; i++) {
         ull clause = t1a_t2_cid[i];
 
