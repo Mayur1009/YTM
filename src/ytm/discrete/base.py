@@ -64,8 +64,8 @@ class BaseTM(CoreBaseTM):
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        assert np.unique(Y).tolist() == [0, 1], "Y must be binary (0 or 1)"
-        return ((np.copy(Y).astype(np.float32) * 2) - 1) * self.config._T_max
+        assert np.isin(Y, (0, 1)).all(), "Y must be binary (0 or 1)"
+        return np.where(Y == 1, self.config._T_max, self.config._T_min).astype(np.float32)
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
         cfg = self.config
