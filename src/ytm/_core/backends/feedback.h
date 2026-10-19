@@ -193,6 +193,19 @@ INLINE_FN bool apply_t1a_t2_therm_feat(ull rng_key, uint* RESTRICT rng_counter, 
     return crossed;
 }
 
+INLINE_FN bool t1a_t2_binary_lit(ull rng_key, uint* RESTRICT rng_counter, t1a_t2_t fb, TA_STATE_T* RESTRICT ta,
+                                 bool val) {
+    if (val) {
+        int inc = fb.t1a_cnt;
+        if (!BOOST_TP_INC)
+            inc -= binomial(rng_key, rng_counter, fb.t1a_inc_fails);
+        return safe_lit_inc(ta, inc, MAX_TA_STATE);
+    }
+    int dec = BOOST_TP_DEC ? fb.t1a_cnt : binomial(rng_key, rng_counter, fb.t1a_dec);
+    bool crossed = safe_lit_dec(ta, dec);
+    return crossed | safe_lit_inc(ta, fb.t2_cnt, INCLUDE_STATE);
+}
+
 /*
  * Apply t1a and t2 feedbacks to multiple binary features.
  * Returns true when a literal crosses the include line.
@@ -200,17 +213,15 @@ INLINE_FN bool apply_t1a_t2_therm_feat(ull rng_key, uint* RESTRICT rng_counter, 
 INLINE_FN bool apply_t1a_t2_binary_feats(ull rng_key, uint* RESTRICT rng_counter, t1a_t2_t fb,
                                          const FBOUND_T* RESTRICT Xe, int patch_idx_y, int patch_idx_x,
                                          TA_STATE_T* RESTRICT ta_states, int lane, int fid_start, int fid_end) {
-    const int lo = N_POSITION_FEATS + fid_start;
-    const int hi = N_POSITION_FEATS + fid_end;
     const int neg = N_LITERALS / 2;
     bool crossed = false;
 
     for (int fid = fid_start + lane; fid < fid_end; fid += LANE_COUNT) {
         int li = N_POSITION_FEATS + fid;
         bool val = get_feature_value(Xe, patch_idx_y, patch_idx_x, fid);
-        crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, 0, val, ta_states);
+        crossed |= t1a_t2_binary_lit(rng_key, rng_counter, fb, &ta_states[li], val);
         if (NEGATED_LITERALS)
-            crossed |= apply_t1a_t2_fb(rng_key, rng_counter, fb, li, li + 1, neg, !val, ta_states);
+            crossed |= t1a_t2_binary_lit(rng_key, rng_counter, fb, &ta_states[li + neg], !val);
     }
     return crossed;
 }

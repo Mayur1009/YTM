@@ -32,6 +32,10 @@ INLINE_FN uint rand_int(ull key, uint* counter, uint high) {
     return (uint)(((rand_u64(key, counter) >> 32) * high) >> 32);
 }
 
+INLINE_FN bool bernoulli(ull key, uint* counter, float p) {
+    return p >= 1.0f || (p > 0.0f && rand_uniform(key, counter) < p);
+}
+
 // Geometric sampling. number of bernoulli(p) trials up to and including the first success.
 INLINE_FN float geom_sample(ull rng_key, uint* rng_counter, float p) {
     if (p >= 1.0f)
@@ -96,4 +100,10 @@ INLINE_FN int binom_at_least_one(ull key, uint* counter, binom_t b) {
         ++n_success;
     }
     return n_success;
+}
+
+INLINE_FN int binomial(ull key, uint* counter, binom_t b) {
+    if (!bernoulli(key, counter, b.p_any))
+        return 0;
+    return binom_at_least_one(key, counter, b);
 }
