@@ -1,4 +1,5 @@
 import abc
+import contextlib
 import copy
 import types
 from collections.abc import Iterator
@@ -20,12 +21,16 @@ class BaseDevice(abc.ABC):
         self.device_config = device_config
         self._rng = np.random.default_rng(self.config.seed + 1)
         self._setup()
-        self._init_consts()
-        if state is None:
-            self._init_params()
-        else:
-            self._restore_params(state)
-        self._bind()
+        with self._ctx():
+            self._init_consts()
+            if state is None:
+                self._init_params()
+            else:
+                self._restore_params(state)
+            self._bind()
+
+    def _ctx(self):
+        return contextlib.nullcontext()
 
     @abc.abstractmethod
     def _setup(self): ...
@@ -220,8 +225,9 @@ class BaseDevice(abc.ABC):
 
     def load_state_dict(self, state: dict) -> None:
         """Written in place, so anything already pointing at these arrays stays valid."""
-        self.ta_states[:] = self.xp.asarray(state["ta_states"])
-        self.clause_weights[:] = self.xp.asarray(state["clause_weights"])
-        self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
-        self._rng = copy.deepcopy(state["rng"])
-        self.packed_clauses.is_clause_synced.fill(0)
+        with self._ctx():
+            self.ta_states[:] = self.xp.asarray(state["ta_states"])
+            self.clause_weights[:] = self.xp.asarray(state["clause_weights"])
+            self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
+            self._rng = copy.deepcopy(state["rng"])
+            self.packed_clauses.is_clause_synced.fill(0)

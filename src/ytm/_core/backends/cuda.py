@@ -117,6 +117,9 @@ class CUDADevice(BaseDevice):
             ),
         )
 
+    def _ctx(self):
+        return self.cuda_dev
+
     def _bind(self):
         pass
 
@@ -127,22 +130,6 @@ class CUDADevice(BaseDevice):
     def _to_dev(self, arr: np.ndarray) -> cp.ndarray:
         with self.cuda_dev:
             return cp.asarray(arr)
-
-    def _init_consts(self):
-        with self.cuda_dev:
-            super()._init_consts()
-
-    def _init_params(self):
-        with self.cuda_dev:
-            super()._init_params()
-
-    def _restore_params(self, state: dict):
-        with self.cuda_dev:
-            super()._restore_params(state)
-
-    def load_state_dict(self, state: dict) -> None:
-        with self.cuda_dev:
-            super().load_state_dict(state)
 
     def pack_clauses(self, force_repack: bool = False, full: bool = False):
         with self.cuda_dev:
