@@ -19,25 +19,25 @@ INLINE_FN ull hash_combine(ull a, ull b) { return mix64(a ^ mix64(b + 0x9e3779b9
 INLINE_FN ull rng_hash(ull a, ull b, ull c) { return hash_combine(hash_combine(a, b), c); }
 
 // Random 64bit int. advances the counter after use.
-INLINE_FN ull rand_u64(ull key, uint* counter) { return mix64(key ^ (ull)((*counter)++)); }
+INLINE_FN ull rand_u64(ull key, uint* RESTRICT counter) { return mix64(key ^ (ull)((*counter)++)); }
 
 // Random uniform float.
-INLINE_FN float rand_uniform(ull key, uint* counter) {
+INLINE_FN float rand_uniform(ull key, uint* RESTRICT counter) {
     ull x = rand_u64(key, counter);
     return (float)(x >> 40) * 0x1p-24f; // 24 bits are enough for float32 rands.
 }
 
 // Random 32-bit unsigned int in the range [0, high).
-INLINE_FN uint rand_int(ull key, uint* counter, uint high) {
+INLINE_FN uint rand_int(ull key, uint* RESTRICT counter, uint high) {
     return (uint)(((rand_u64(key, counter) >> 32) * high) >> 32);
 }
 
-INLINE_FN bool bernoulli(ull key, uint* counter, float p) {
+INLINE_FN bool bernoulli(ull key, uint* RESTRICT counter, float p) {
     return p >= 1.0f || (p > 0.0f && rand_uniform(key, counter) < p);
 }
 
 // Geometric sampling. number of bernoulli(p) trials up to and including the first success.
-INLINE_FN float geom_sample(ull rng_key, uint* rng_counter, float p) {
+INLINE_FN float geom_sample(ull rng_key, uint* RESTRICT rng_counter, float p) {
     if (p >= 1.0f)
         return 1.0f;
     if (!(p > 0.0f))
@@ -78,7 +78,7 @@ INLINE_FN binom_t binom_params(int n_trials, float p_success) {
 }
 
 // Given n_trials each with p_success, and given at least one succeeded, return how many successes.
-INLINE_FN int binom_at_least_one(ull key, uint* counter, binom_t b) {
+INLINE_FN int binom_at_least_one(ull key, uint* RESTRICT counter, binom_t b) {
     // Only one trial, and we condition on at least one success.
     // OR, if p_success = 0, at least one success is impossible, so fall back to the minimum.
     if (b.n_trials <= 1 || b.p_success <= 0.0f)
@@ -102,7 +102,7 @@ INLINE_FN int binom_at_least_one(ull key, uint* counter, binom_t b) {
     return n_success;
 }
 
-INLINE_FN int binomial(ull key, uint* counter, binom_t b) {
+INLINE_FN int binomial(ull key, uint* RESTRICT counter, binom_t b) {
     if (!bernoulli(key, counter, b.p_any))
         return 0;
     return binom_at_least_one(key, counter, b);

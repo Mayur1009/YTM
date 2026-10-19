@@ -20,23 +20,27 @@ INLINE_FN void compute_loss(const float* RESTRICT y, const float* RESTRICT y_hat
 #endif
 
 // compute_act and compute_loss fold over CLASSES sequentially, so one thread owns a whole sample.
-extern "C" __global__ void votes_activation(const float* votes, float* y_hat) {
+extern "C" __global__ void votes_activation(const float* __restrict__ votes, float* __restrict__ y_hat) {
     if (threadIdx.x == 0 && blockIdx.x == 0)
         compute_act(votes, y_hat);
 }
 
-extern "C" __global__ void votes_activation_batch(const float* votes, int n_samples, float* y_hat) {
+extern "C" __global__ void votes_activation_batch(const float* __restrict__ votes, int n_samples,
+                                                  float* __restrict__ y_hat) {
     GRID_STRIDE_LOOP(e, n_samples)
         compute_act(&votes[(ull)e * CLASSES], &y_hat[(ull)e * CLASSES]);
 }
 
-extern "C" __global__ void loss_gradient(const float* y_hat, const float* y, float* grad, float* loss) {
+extern "C" __global__ void loss_gradient(const float* __restrict__ y_hat, const float* __restrict__ y,
+                                         float* __restrict__ grad, float* __restrict__ loss) {
     if (threadIdx.x == 0 && blockIdx.x == 0)
         compute_loss(y, y_hat, grad, loss);
 }
 
-extern "C" __global__ void compute_votes_neg_ck(const float* votes, const float* clause_weights,
-                                                const int8_t* clause_output, float* votes_neg_ck) {
+extern "C" __global__ void compute_votes_neg_ck(const float* __restrict__ votes,
+                                                const float* __restrict__ clause_weights,
+                                                const int8_t* __restrict__ clause_output,
+                                                float* __restrict__ votes_neg_ck) {
     GRID_STRIDE_LOOP(clause_class, (ull)TOTAL_CLAUSES * (ull)CLASSES) {
         ull clause_id = clause_class / (ull)CLASSES;
         ull class_id = clause_class % (ull)CLASSES;
@@ -51,7 +55,8 @@ extern "C" __global__ void compute_votes_neg_ck(const float* votes, const float*
     }
 }
 
-extern "C" __global__ void compute_loss_neg_ck(const float* y_hat_neg_ck, const float* y, float* loss_neg_ck) {
+extern "C" __global__ void compute_loss_neg_ck(const float* __restrict__ y_hat_neg_ck, const float* __restrict__ y,
+                                               float* __restrict__ loss_neg_ck) {
     GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         float loss = 0.0f;
         compute_loss(y, &y_hat_neg_ck[clause_id * (ull)CLASSES], nullptr, &loss);
@@ -59,12 +64,12 @@ extern "C" __global__ void compute_loss_neg_ck(const float* y_hat_neg_ck, const 
     }
 }
 
-extern "C" __global__ void decide_feedback_grad(const ull seed, const float* grad, const float* clause_weights,
-                                                const NLITS_T* clause_len, const int8_t* clause_output,
-                                                const int8_t* clause_drop_mask, const float lambda_,
-                                                uint* t1b_n, uint* t1b_cid,
-                                                NCLASSES_T* t1b_cnt, uint* t1a_t2_n, uint* t1a_t2_cid, NCLASSES_T* t1a_cnt,
-                                                NCLASSES_T* t2_cnt) {
+extern "C" __global__ void
+decide_feedback_grad(const ull seed, const float* __restrict__ grad, const float* __restrict__ clause_weights,
+                     const NLITS_T* __restrict__ clause_len, const int8_t* __restrict__ clause_output,
+                     const int8_t* __restrict__ clause_drop_mask, const float lambda_, uint* __restrict__ t1b_n,
+                     uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
+                     uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -121,12 +126,13 @@ __device__ inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float up
     return fb;
 }
 
-extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* loss, const float* loss_neg_ck,
-                                                   const NLITS_T* clause_len, const int8_t* clause_output,
-                                                   const int8_t* clause_drop_mask, const float lambda_,
-                                                   uint* t1b_n, uint* t1b_cid,
-                                                   NCLASSES_T* t1b_cnt, uint* t1a_t2_n, uint* t1a_t2_cid, NCLASSES_T* t1a_cnt,
-                                                   NCLASSES_T* t2_cnt) {
+extern "C" __global__ void
+decide_feedback_delta_l(const ull seed, const float* __restrict__ loss, const float* __restrict__ loss_neg_ck,
+                        const NLITS_T* __restrict__ clause_len, const int8_t* __restrict__ clause_output,
+                        const int8_t* __restrict__ clause_drop_mask, const float lambda_, uint* __restrict__ t1b_n,
+                        uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
+                        uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt,
+                        NCLASSES_T* __restrict__ t2_cnt) {
     GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause_id] == 1)
             continue;
@@ -140,8 +146,10 @@ extern "C" __global__ void decide_feedback_delta_l(const ull seed, const float* 
     }
 }
 
-extern "C" __global__ void update_weights(const float* grad, const float lr, const int8_t* clause_output,
-                                          const int8_t* clause_drop_mask, float* clause_weights) {
+extern "C" __global__ void update_weights(const float* __restrict__ grad, const float lr,
+                                          const int8_t* __restrict__ clause_output,
+                                          const int8_t* __restrict__ clause_drop_mask,
+                                          float* __restrict__ clause_weights) {
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause] == 1 || !clause_output[clause])
             continue;

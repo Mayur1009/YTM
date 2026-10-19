@@ -13,7 +13,8 @@
 #define FB_T2 3
 #endif
 
-extern "C" __global__ void calc_update_prob(const float* votes, const float* encoded_Y, const int e, float* prob) {
+extern "C" __global__ void calc_update_prob(const float* __restrict__ votes, const float* __restrict__ encoded_Y,
+                                            const int e, float* __restrict__ prob) {
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(class_id, CLASSES) {
         float v = clip(votes[class_id], T_MIN, T_MAX);
@@ -21,11 +22,13 @@ extern "C" __global__ void calc_update_prob(const float* votes, const float* enc
     }
 }
 
-extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_output_arr, const NLITS_T* clause_len,
-                                           const int8_t* clause_drop_mask, const float* prob, const float* label_probs,
-                                           const int e, const float* clause_weights, uint8_t* feedback_type,
-                                           uint* t1b_n, uint* t1b_cid, NCLASSES_T* t1b_cnt, uint* t1a_t2_n,
-                                           uint* t1a_t2_cid, NCLASSES_T* t1a_cnt, NCLASSES_T* t2_cnt) {
+extern "C" __global__ void
+decide_feedback(const ull seed, const int8_t* __restrict__ clause_output_arr, const NLITS_T* __restrict__ clause_len,
+                const int8_t* __restrict__ clause_drop_mask, const float* __restrict__ prob,
+                const float* __restrict__ label_probs, const int e, const float* __restrict__ clause_weights,
+                uint8_t* __restrict__ feedback_type, uint* __restrict__ t1b_n, uint* __restrict__ t1b_cid,
+                NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n, uint* __restrict__ t1a_t2_cid,
+                NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];
@@ -63,8 +66,8 @@ extern "C" __global__ void decide_feedback(const ull seed, const int8_t* clause_
     }
 }
 
-extern "C" __global__ void update_weights(const uint8_t* feedback_type, const uint* t1a_t2_n, const uint* t1a_t2_cid,
-                                          float* clause_weights) {
+extern "C" __global__ void update_weights(const uint8_t* __restrict__ feedback_type, const uint* __restrict__ t1a_t2_n,
+                                          const uint* __restrict__ t1a_t2_cid, float* __restrict__ clause_weights) {
     const uint n = *t1a_t2_n;
 
     GRID_STRIDE_LOOP(i, n) {

@@ -5,8 +5,9 @@
 #endif
 
 // X or Y position literal scan. Returns false on contradiction.
-__device__ inline bool scan_position_axis(const warp_t& warp, const TA_STATE_T* ta_state, int off, int n, int* lo,
-                                          int* hi, uint* includes, bool stop) {
+__device__ inline bool scan_position_axis(const warp_t& warp, const TA_STATE_T* __restrict__ ta_state, int off, int n,
+                                          int* __restrict__ lo, int* __restrict__ hi, uint* __restrict__ includes,
+                                          bool stop) {
     const int lane = (int)warp.thread_rank();
 
     for (int base = 0; base < n; base += WARP_SIZE) {
@@ -26,7 +27,8 @@ __device__ inline bool scan_position_axis(const warp_t& warp, const TA_STATE_T* 
 }
 
 // Find the position bounds of a clause.
-__device__ inline PositionResult scan_position_literals(const warp_t& warp, const TA_STATE_T* ta_state, int dont_skip) {
+__device__ inline PositionResult scan_position_literals(const warp_t& warp, const TA_STATE_T* __restrict__ ta_state,
+                                                        int dont_skip) {
     int pos0 = 0, pos1 = N_POSITION_FEATS_Y;
     int pos2 = 0, pos3 = N_POSITION_FEATS_X;
     uint includes = 0;
@@ -40,9 +42,11 @@ __device__ inline PositionResult scan_position_literals(const warp_t& warp, cons
     return {pos0, pos1, pos2, pos3, includes, y_ok && x_ok}; // Includes is the warp total, not per lane.
 }
 
-__device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const TA_STATE_T* ta_state,
-                                                      const FBOUND_T* therm_bits, const NLITS_T* literal_offsets,
-                                                      NFEAT_T* feat_ids, FBOUND_T* feat_bounds, int dont_skip) {
+__device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const TA_STATE_T* __restrict__ ta_state,
+                                                      const FBOUND_T* __restrict__ therm_bits,
+                                                      const NLITS_T* __restrict__ literal_offsets,
+                                                      NFEAT_T* __restrict__ feat_ids,
+                                                      FBOUND_T* __restrict__ feat_bounds, int dont_skip) {
     int lane = warp.thread_rank();
     uint n_includes = 0;
     int write_offset = 0;
@@ -79,11 +83,12 @@ __device__ inline FeatureResult scan_feature_literals(const warp_t& warp, const 
     return {write_offset, n_includes, all_valid};
 }
 
-extern "C" __global__ void pack_clauses(const TA_STATE_T* global_ta_states, const FBOUND_T* therm_bits,
-                                        const NLITS_T* literal_offsets, PBOUND_T* clause_position_bounds,
-                                        FBOUND_T* clause_feat_bounds, NFEAT_T* clause_feat_ids, NFEAT_T* clause_n_feats,
-                                        int8_t* has_contra, NLITS_T* clause_len, int8_t* is_clause_synced,
-                                        int dont_skip) {
+extern "C" __global__ void
+pack_clauses(const TA_STATE_T* __restrict__ global_ta_states, const FBOUND_T* __restrict__ therm_bits,
+             const NLITS_T* __restrict__ literal_offsets, PBOUND_T* __restrict__ clause_position_bounds,
+             FBOUND_T* __restrict__ clause_feat_bounds, NFEAT_T* __restrict__ clause_feat_ids,
+             NFEAT_T* __restrict__ clause_n_feats, int8_t* __restrict__ has_contra, NLITS_T* __restrict__ clause_len,
+             int8_t* __restrict__ is_clause_synced, int dont_skip) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {

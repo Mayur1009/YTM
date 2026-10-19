@@ -49,7 +49,7 @@ INLINE_FN float lane_last(float v) { return __shfl_sync(0xffffffffu, v, WARP_SIZ
 
 INLINE_FN int lane_id() { return (int)(threadIdx.x & (WARP_SIZE - 1)); }
 
-INLINE_FN uint list_push(uint* n, uint* ids, ull id) {
+INLINE_FN uint list_push(uint* RESTRICT n, uint* RESTRICT ids, ull id) {
     auto g = cg::coalesced_threads();
     uint base;
     if (g.thread_rank() == 0)
@@ -59,4 +59,3 @@ INLINE_FN uint list_push(uint* n, uint* ids, ull id) {
     ids[i] = (uint)id;
     return i;
 }
-

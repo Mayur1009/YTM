@@ -23,7 +23,8 @@ typedef struct {
 } FeatScan;
 
 // One position literal and its negation, narrowing [lo, hi] inward.
-INLINE_FN void update_pos_bounds(const TA_STATE_T* ta_state, int lit, int lit_off, int* lo, int* hi, uint* includes) {
+INLINE_FN void update_pos_bounds(const TA_STATE_T* RESTRICT ta_state, int lit, int lit_off, int* RESTRICT lo,
+                                 int* RESTRICT hi, uint* RESTRICT includes) {
     if (is_included(ta_state[lit_off + lit])) {
         if (lit + 1 > *lo)
             *lo = lit + 1;
@@ -37,8 +38,8 @@ INLINE_FN void update_pos_bounds(const TA_STATE_T* ta_state, int lit, int lit_of
 }
 
 // Every thermometer literal of one raw patch feature, collapsed to the interval [lb, ub].
-INLINE_FN FeatScan calc_single_feat_bounds(const TA_STATE_T* ta_state, const FBOUND_T* therm_bits,
-                                           const NLITS_T* literal_offsets, int fid) {
+INLINE_FN FeatScan calc_single_feat_bounds(const TA_STATE_T* RESTRICT ta_state, const FBOUND_T* RESTRICT therm_bits,
+                                           const NLITS_T* RESTRICT literal_offsets, int fid) {
     FeatScan r;
 
     if (ALL_BINARY_FEATS) {

@@ -3,7 +3,7 @@
 #include "pack_clauses.h"
 #endif
 
-static inline PositionResult scan_position_literals(const TA_STATE_T* ta_state, int full) {
+static inline PositionResult scan_position_literals(const TA_STATE_T* restrict ta_state, int full) {
     int pos0 = 0, pos1 = N_PATCHES_Y - 1;
     int pos2 = 0, pos3 = N_PATCHES_X - 1;
     uint includes = 0;

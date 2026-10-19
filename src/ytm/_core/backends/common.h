@@ -126,19 +126,19 @@ INLINE_FN int feature_offset(int fid, int patch_idx_y, int patch_idx_x) {
 }
 
 // Value of raw patch feature `fid` in the patch at (patch_idx_y, patch_idx_x).
-INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, int fid) {
+INLINE_FN FBOUND_T get_feature_value(const FBOUND_T* RESTRICT X, int patch_idx_y, int patch_idx_x, int fid) {
     return X[feature_offset(fid, patch_idx_y, patch_idx_x)];
 }
 
-INLINE_FN bool feat_in_bounds(FBOUND_T val, const FBOUND_T* feat_bounds, int i) {
+INLINE_FN bool feat_in_bounds(FBOUND_T val, const FBOUND_T* RESTRICT feat_bounds, int i) {
     if (ALL_BINARY_FEATS)
         return val == feat_bounds[i * 2];
     return val >= feat_bounds[i * 2] && val <= feat_bounds[i * 2 + 1];
 }
 
 // True when the patch matches a clause (strict AND matching).
-INLINE_FN bool match_patch(const FBOUND_T* X, int patch_idx_y, int patch_idx_x, const NFEAT_T* feat_ids,
-                           const FBOUND_T* feat_bounds, int n_feats) {
+INLINE_FN bool match_patch(const FBOUND_T* RESTRICT X, int patch_idx_y, int patch_idx_x,
+                           const NFEAT_T* RESTRICT feat_ids, const FBOUND_T* RESTRICT feat_bounds, int n_feats) {
     for (int i = 0; i < n_feats; ++i) {
         if (!feat_in_bounds(get_feature_value(X, patch_idx_y, patch_idx_x, (int)feat_ids[i]), feat_bounds, i))
             return false;

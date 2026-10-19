@@ -53,7 +53,7 @@ INLINE_FN void append_fb_lists(ull clause, int n1a, int n1b, int n2, uint* RESTR
 
 
 // Increment the TA state `ta` by `n`, saturating at `cap`. Returns true when a literal crosses the include line.
-INLINE_FN bool safe_lit_inc(TA_STATE_T* ta, int n, int cap) {
+INLINE_FN bool safe_lit_inc(TA_STATE_T* RESTRICT ta, int n, int cap) {
     if (n == 0)
         return false;
     TA_STATE_T old = *ta;
@@ -63,7 +63,7 @@ INLINE_FN bool safe_lit_inc(TA_STATE_T* ta, int n, int cap) {
 }
 
 // Decrement the TA state `ta` by `n`, saturating at 0. Returns true when a literal crosses the include line.
-INLINE_FN bool safe_lit_dec(TA_STATE_T* ta, int n) {
+INLINE_FN bool safe_lit_dec(TA_STATE_T* RESTRICT ta, int n) {
     TA_STATE_T old = *ta;
     int v = (int)old - n;
     *ta = (TA_STATE_T)(v < 0 ? 0 : v);

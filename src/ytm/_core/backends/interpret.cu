@@ -3,11 +3,12 @@
 #include "cuda.h"
 #endif
 
-extern "C" __global__ void wic(int class_id, int polarity, const float* clause_weights, const FBOUND_T* clause_feat_bounds,
-                               const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
-                               const PBOUND_T* clause_position_bounds, const int8_t* has_contra,
-                               const float* patch_weights_norm, const FBOUND_T* therm_bits, float pw_th,
-                               float* output) {
+extern "C" __global__ void wic(int class_id, int polarity, const float* __restrict__ clause_weights,
+                               const FBOUND_T* __restrict__ clause_feat_bounds,
+                               const NFEAT_T* __restrict__ clause_feat_ids, const NFEAT_T* __restrict__ clause_n_feats,
+                               const PBOUND_T* __restrict__ clause_position_bounds,
+                               const int8_t* __restrict__ has_contra, const float* __restrict__ patch_weights_norm,
+                               const FBOUND_T* __restrict__ therm_bits, float pw_th, float* __restrict__ output) {
     GRID_STRIDE_LOOP(idx, (ull)TOTAL_CLAUSES * N_PATCHES) {
         ull clause_id = idx / N_PATCHES;
         int p = idx % N_PATCHES;
@@ -48,10 +49,12 @@ extern "C" __global__ void wic(int class_id, int polarity, const float* clause_w
     }
 }
 
-extern "C" __global__ void wac(const int* target_classes, int polarity, int N, const float* clause_weights,
-                               const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids, const NFEAT_T* clause_n_feats,
-                               const int8_t* patch_output, const int8_t* has_contra,
-                               const FBOUND_T* therm_bits, float* output) {
+extern "C" __global__ void wac(const int* __restrict__ target_classes, int polarity, int N,
+                               const float* __restrict__ clause_weights,
+                               const FBOUND_T* __restrict__ clause_feat_bounds,
+                               const NFEAT_T* __restrict__ clause_feat_ids, const NFEAT_T* __restrict__ clause_n_feats,
+                               const int8_t* __restrict__ patch_output, const int8_t* __restrict__ has_contra,
+                               const FBOUND_T* __restrict__ therm_bits, float* __restrict__ output) {
     GRID_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES * N_PATCHES) {
         ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
         ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);

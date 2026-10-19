@@ -4,7 +4,8 @@
 #endif
 
 // Output of a clause that needs no matching: 0 with a contradiction, 1 when empty, -1 when it must be matched.
-__device__ inline int eval_trivial(ull clause, const int8_t* has_contra, const NLITS_T* clause_len) {
+__device__ inline int eval_trivial(ull clause, const int8_t* __restrict__ has_contra,
+                                   const NLITS_T* __restrict__ clause_len) {
     if (has_contra[clause])
         return 0;
     if (clause_len[clause] == 0)
@@ -14,8 +15,9 @@ __device__ inline int eval_trivial(ull clause, const int8_t* has_contra, const N
 
 // Warp parallel feature matching. Called by every warp, returns true if all the features checked by the warp matches,
 // else false.
-__device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* Xe, const FBOUND_T* feat_bounds,
-                                           const NFEAT_T* feat_ids, int n_feats) {
+__device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* __restrict__ Xe,
+                                           const FBOUND_T* __restrict__ feat_bounds,
+                                           const NFEAT_T* __restrict__ feat_ids, int n_feats) {
     const int lane = (int)warp.thread_rank();
     bool ok = true;
     for (int base = 0; base < n_feats; base += WARP_SIZE) {
@@ -31,8 +33,9 @@ __device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* X
 }
 
 // Warp parallel patch matching. Returns 32 bits (warp ballot), where each bit is 1 if the patch mached.
-__device__ inline uint match_patches_warp(const warp_t& warp, const FBOUND_T* Xe, const PBOUND_T* pos,
-                                          const FBOUND_T* feat_bounds, const NFEAT_T* feat_ids, int n_feats, int base) {
+__device__ inline uint match_patches_warp(const warp_t& warp, const FBOUND_T* __restrict__ Xe,
+                                          const PBOUND_T* __restrict__ pos, const FBOUND_T* __restrict__ feat_bounds,
+                                          const NFEAT_T* __restrict__ feat_ids, int n_feats, int base) {
     const int n_x = pos[3] - pos[2] + 1;
     const int n_window = (pos[1] - pos[0] + 1) * n_x;
     const int i = base + (int)warp.thread_rank();
@@ -58,10 +61,11 @@ __device__ inline uint match_patches_warp(const warp_t& warp, const FBOUND_T* Xe
  *   clause_len              number of included literals per clause
  *   patch_output            output, (N, TOTAL_CLAUSES, N_PATCHES) clause outputs per patch
  */
-extern "C" __global__ void eval_patchwise(const FBOUND_T* X, const int N, const PBOUND_T* clause_position_bounds,
-                                          const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
-                                          const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                          const NLITS_T* clause_len, int8_t* patch_output) {
+extern "C" __global__ void
+eval_patchwise(const FBOUND_T* __restrict__ X, const int N, const PBOUND_T* __restrict__ clause_position_bounds,
+               const FBOUND_T* __restrict__ clause_feat_bounds, const NFEAT_T* __restrict__ clause_feat_ids,
+               const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
+               const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ patch_output) {
     GRID_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES * N_PATCHES) {
         ull e = idx / ((ull)TOTAL_CLAUSES * N_PATCHES);
         ull clause_patch = idx % ((ull)TOTAL_CLAUSES * N_PATCHES);
@@ -113,10 +117,12 @@ extern "C" __global__ void eval_patchwise(const FBOUND_T* X, const int N, const 
  *   clause_len              number of included literals per clause
  *   clause_outputs          output, (N, TOTAL_CLAUSES) clause outputs
  */
-extern "C" __global__ void eval_infer(const FBOUND_T* X, const int N, const PBOUND_T* clause_position_bounds,
-                                      const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
-                                      const NFEAT_T* clause_n_feats, const int8_t* has_contra,
-                                      const NLITS_T* clause_len, int8_t* clause_outputs) {
+extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int N,
+                                      const PBOUND_T* __restrict__ clause_position_bounds,
+                                      const FBOUND_T* __restrict__ clause_feat_bounds,
+                                      const NFEAT_T* __restrict__ clause_feat_ids,
+                                      const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
+                                      const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ clause_outputs) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     WARP_STRIDE_LOOP(idx, (ull)N * TOTAL_CLAUSES) {
@@ -170,10 +176,14 @@ extern "C" __global__ void eval_infer(const FBOUND_T* X, const int N, const PBOU
  *   selected_patch_ids      output, picked patch per firing clause (patches only)
  *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
  */
-extern "C" __global__ void eval_fit(const ull seed, const FBOUND_T* X, const int e, const int8_t* clause_drop_mask,
-                                    const PBOUND_T* clause_position_bounds, const FBOUND_T* clause_feat_bounds, const NFEAT_T* clause_feat_ids,
-                                    const NFEAT_T* clause_n_feats, const int8_t* has_contra, const NLITS_T* clause_len,
-                                    int8_t* clause_output, NPATCHES_T* selected_patch_ids, int* patch_weights) {
+extern "C" __global__ void eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e,
+                                    const int8_t* __restrict__ clause_drop_mask,
+                                    const PBOUND_T* __restrict__ clause_position_bounds,
+                                    const FBOUND_T* __restrict__ clause_feat_bounds,
+                                    const NFEAT_T* __restrict__ clause_feat_ids,
+                                    const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
+                                    const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ clause_output,
+                                    NPATCHES_T* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
@@ -242,8 +252,9 @@ extern "C" __global__ void eval_fit(const ull seed, const FBOUND_T* X, const int
  *   chunks          number of chunks per class
  *   chunk_sums      output, (N, CLASSES, chunks)
  */
-extern "C" __global__ void vote_over_clause_chunks(const int8_t* clause_outputs, const float* clause_weights,
-                                                   const int N, const int chunks, float* chunk_sums) {
+extern "C" __global__ void vote_over_clause_chunks(const int8_t* __restrict__ clause_outputs,
+                                                   const float* __restrict__ clause_weights, const int N,
+                                                   const int chunks, float* __restrict__ chunk_sums) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const int chunk_len = (CLAUSES_PER_CLASS + chunks - 1) / chunks;
 
@@ -277,8 +288,8 @@ extern "C" __global__ void vote_over_clause_chunks(const int8_t* clause_outputs,
  *   chunks      number of chunks per class
  *   class_sums  output, (N, CLASSES)
  */
-extern "C" __global__ void vote_combine_chunks(const float* chunk_sums, const int N, const int chunks,
-                                               float* class_sums) {
+extern "C" __global__ void vote_combine_chunks(const float* __restrict__ chunk_sums, const int N, const int chunks,
+                                               float* __restrict__ class_sums) {
     GRID_STRIDE_LOOP(idx, (ull)N * CLASSES) {
         ull e = idx / CLASSES, class_id = idx % CLASSES;
         float s = 0.0f;
