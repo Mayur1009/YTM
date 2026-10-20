@@ -43,6 +43,11 @@ class CPUDevice(CoreCPUDevice):
         for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):
             self.fit_sample(rng_key, buf, e)
 
+    def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+        if not self.config.coalesced:
+            self.lib.sample_classes(c_uint64(rng_key), buf.p_label_probs, c_int(e), buf.p_class_active)
+        super()._fit_eval(buf, e, rng_key)
+
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         """Turn the votes into a per class update probability, then pick a feedback type per clause."""
         buf.t1b_n[0] = 0
@@ -55,6 +60,7 @@ class CPUDevice(CoreCPUDevice):
             buf.p_clause_drop_mask,
             buf.p_prob,
             buf.p_label_probs,
+            buf.p_class_active,
             c_int(e),
             self.p_clause_weights,
             buf.p_feedback_type,

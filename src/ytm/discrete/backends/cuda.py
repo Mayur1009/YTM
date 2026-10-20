@@ -49,6 +49,11 @@ class CUDADevice(CoreCUDADevice):
                     _, rng_key = next(samples)
                     self.fit_sample(rng_key, buf, e)
 
+    def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+        if not self.config.coalesced:
+            self.cu.sample_classes(self.config.n_classes, (np.uint64(rng_key), buf.label_probs, np.int32(e), buf.class_active))
+        super()._fit_eval(buf, e, rng_key)
+
     def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
         buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
@@ -68,6 +73,7 @@ class CUDADevice(CoreCUDADevice):
                 buf.clause_drop_mask,
                 buf.prob,
                 buf.label_probs,
+                buf.class_active,
                 np.int32(e),
                 self.clause_weights,
                 buf.feedback_type,

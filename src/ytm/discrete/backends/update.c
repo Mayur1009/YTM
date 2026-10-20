@@ -14,10 +14,10 @@
 
 void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
                      const int8_t* restrict clause_drop_mask, const float* restrict prob,
-                     const float* restrict label_probs, const int e, const float* restrict clause_weights,
-                     uint8_t* restrict feedback_type, uint* restrict t1b_n, uint* restrict t1b_cid,
-                     NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
-                     NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
+                     const float* restrict label_probs, const uint8_t* restrict class_active, const int e,
+                     const float* restrict clause_weights, uint8_t* restrict feedback_type, uint* restrict t1b_n,
+                     uint* restrict t1b_cid, NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n,
+                     uint* restrict t1a_t2_cid, NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
@@ -37,8 +37,9 @@ void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, c
             if (!dropped) {
                 int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
 
-                if (bernoulli(rng_k, &rng_counter, label_probs_e[class_id]) && target != 0 &&
-                    bernoulli(rng_k, &rng_counter, fabsf(prob[class_id]))) {
+                bool sampled =
+                    COALESCED ? bernoulli(rng_k, &rng_counter, label_probs_e[class_id]) : class_active[class_id];
+                if (sampled && target != 0 && bernoulli(rng_k, &rng_counter, fabsf(prob[class_id]))) {
                     float weight = clause_weights[weight_offset(class_id, clause)];
                     int sign = (weight >= 0) - (weight < 0);
 
@@ -92,6 +93,15 @@ void update_weights(const uint8_t* restrict feedback_type, const uint* restrict 
                 }
             }
         }
+    }
+}
+
+void sample_classes(const ull seed, const float* restrict label_probs, const int e, uint8_t* restrict class_active) {
+    const float* label_probs_e = &label_probs[(ull)e * CLASSES];
+    for (int class_id = 0; class_id < CLASSES; class_id++) {
+        uint rng_counter = 0;
+        class_active[class_id] =
+            bernoulli(rng_hash(seed, class_id, 0xC1A55C1AULL), &rng_counter, label_probs_e[class_id]);
     }
 }
 

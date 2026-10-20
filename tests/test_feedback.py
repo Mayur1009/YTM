@@ -10,8 +10,8 @@ from .support import (
     _ctx,
     apply_feedback,
     decide_feedback,
-    discrete,
     dense_fb_shape,
+    discrete,
     fb_counts_from_dense,
     fb_ids_from_dense,
     fill,
@@ -319,3 +319,23 @@ def test_type1a_thermometer_geometric_skip_frequencies_match_one_over_s(device):
     # "dec" ranges go through prob_dec_literals_in_range with S_INV: lit 2, lits 3-5, negations 6-7.
     for i in (2, 3, 4, 5, 6, 7):
         assert stats.binomtest(int(-d[i]), TRIALS, 1 / s).pvalue > ALPHA, i
+
+
+@pytest.mark.statistical
+def test_non_coalesced_class_sampling_per_bank(device):
+    n, p = 4, 0.3
+    tm = discrete("multi", device, n_classes=n, coalesced=False)
+    cfg = tm.config
+    Y = np.full((1, n), cfg._T_min)
+    Y[0, 0] = cfg._T_max
+    buf = make_buffers(tm, [[1, 0, 1, 0]], Y)
+    fill(tm, buf.label_probs, [[1.0] + [p] * (n - 1)])
+    counts = np.zeros(n, dtype=np.int64)
+    for t in range(TRIALS):
+        fb = decide_feedback(tm, buf, np.zeros(n), key=1 + t)
+        active = host(tm, buf.class_active).astype(bool)
+        counts += active
+        assert (fb[:, ~active] == FB_NONE).all()
+    assert counts[0] == TRIALS
+    for c in range(1, n):
+        assert stats.binomtest(int(counts[c]), TRIALS, p).pvalue > ALPHA, c

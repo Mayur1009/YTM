@@ -13,6 +13,16 @@
 #define FB_T2 3
 #endif
 
+extern "C" __global__ void sample_classes(const ull seed, const float* __restrict__ label_probs, const int e,
+                                          uint8_t* __restrict__ class_active) {
+    const float* label_probs_e = &label_probs[(ull)e * CLASSES];
+    GRID_STRIDE_LOOP(class_id, CLASSES) {
+        uint rng_counter = 0;
+        class_active[class_id] =
+            bernoulli(rng_hash(seed, class_id, 0xC1A55C1AULL), &rng_counter, label_probs_e[class_id]);
+    }
+}
+
 extern "C" __global__ void calc_update_prob(const float* __restrict__ votes, const float* __restrict__ encoded_Y,
                                             const int e, float* __restrict__ prob) {
     const float* encoded_Y_e = &encoded_Y[(ull)e * CLASSES];
@@ -25,10 +35,10 @@ extern "C" __global__ void calc_update_prob(const float* __restrict__ votes, con
 extern "C" __global__ void
 decide_feedback(const ull seed, const int8_t* __restrict__ clause_output_arr, const NLITS_T* __restrict__ clause_len,
                 const int8_t* __restrict__ clause_drop_mask, const float* __restrict__ prob,
-                const float* __restrict__ label_probs, const int e, const float* __restrict__ clause_weights,
-                uint8_t* __restrict__ feedback_type, uint* __restrict__ t1b_n, uint* __restrict__ t1b_cid,
-                NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n, uint* __restrict__ t1a_t2_cid,
-                NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
+                const float* __restrict__ label_probs, const uint8_t* __restrict__ class_active, const int e,
+                const float* __restrict__ clause_weights, uint8_t* __restrict__ feedback_type, uint* __restrict__ t1b_n,
+                uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
+                uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];
@@ -46,8 +56,9 @@ decide_feedback(const ull seed, const int8_t* __restrict__ clause_output_arr, co
             if (!dropped) {
                 int target = (prob[class_id] > 0.0f) - (prob[class_id] < 0.0f);
 
-                if (bernoulli(rng_k, &rng_counter, label_probs_e[class_id]) && target != 0 &&
-                    bernoulli(rng_k, &rng_counter, fabsf(prob[class_id]))) {
+                bool sampled =
+                    COALESCED ? bernoulli(rng_k, &rng_counter, label_probs_e[class_id]) : class_active[class_id];
+                if (sampled && target != 0 && bernoulli(rng_k, &rng_counter, fabsf(prob[class_id]))) {
                     float weight = clause_weights[weight_offset(class_id, clause)];
                     int sign = (weight >= 0) - (weight < 0);
 
