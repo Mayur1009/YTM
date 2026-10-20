@@ -24,7 +24,12 @@ INLINE_FN ull rand_u64(ull key, uint* RESTRICT counter) { return mix64(key ^ (ul
 // Random uniform float.
 INLINE_FN float rand_uniform(ull key, uint* RESTRICT counter) {
     ull x = rand_u64(key, counter);
-    return (float)(x >> 40) * 0x1p-24f; // 24 bits are enough for float32 rands.
+    return (float)(uint)(x >> 40) * 0x1p-24f; // 24 bits are enough for float32 rands.
+}
+
+INLINE_FN float2 rand_uniform2(ull key, uint* RESTRICT counter) {
+    ull x = rand_u64(key, counter);
+    return make_float2((float)(uint)(x >> 40) * 0x1p-24f, (float)((uint)x >> 8) * 0x1p-24f);
 }
 
 // Random 32-bit unsigned int in the range [0, high).
@@ -102,10 +107,24 @@ INLINE_FN int binom_at_least_one(ull key, uint* RESTRICT counter, binom_t b) {
     return n_success;
 }
 
+INLINE_FN int2 bernoulli2(ull key, uint* RESTRICT counter, float pa, float pb) {
+    if (!(pa > 0.0f && pa < 1.0f) && !(pb > 0.0f && pb < 1.0f))
+        return make_int2(pa >= 1.0f, pb >= 1.0f);
+    float2 u = rand_uniform2(key, counter);
+    return make_int2(pa >= 1.0f || (pa > 0.0f && u.x < pa), pb >= 1.0f || (pb > 0.0f && u.y < pb));
+}
+
 INLINE_FN int binomial(ull key, uint* RESTRICT counter, binom_t b) {
     if (b.n_trials == 1)
         return bernoulli(key, counter, b.p_success);
     if (!bernoulli(key, counter, b.p_any))
         return 0;
     return binom_at_least_one(key, counter, b);
+}
+
+INLINE_FN int2 binomial2(ull key, uint* RESTRICT counter, binom_t a, binom_t b) {
+    int2 hit = bernoulli2(key, counter, a.p_any, b.p_any);
+    if (a.n_trials == 1 && b.n_trials == 1)
+        return hit;
+    return make_int2(hit.x ? binom_at_least_one(key, counter, a) : 0, hit.y ? binom_at_least_one(key, counter, b) : 0);
 }

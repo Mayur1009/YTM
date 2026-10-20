@@ -191,17 +191,18 @@ INLINE_FN bool apply_t1a_t2_therm_feat(ull rng_key, uint* RESTRICT rng_counter, 
     return crossed;
 }
 
-INLINE_FN bool t1a_t2_binary_lit(ull rng_key, uint* RESTRICT rng_counter, t1a_t2_t fb, TA_STATE_T* RESTRICT ta,
-                                 bool val) {
-    if (val) {
-        int inc = fb.t1a_cnt;
-        if (!BOOST_TP_INC)
-            inc -= binomial(rng_key, rng_counter, fb.t1a_inc_fails);
-        return safe_lit_inc(ta, inc, MAX_TA_STATE);
+INLINE_FN bool t1a_t2_binary_feat(t1a_t2_t fb, TA_STATE_T* RESTRICT lit, bool val, int fail, int dec) {
+    TA_STATE_T* neg = NEGATED_LITERALS ? lit + N_LITERALS / 2 : lit;
+    TA_STATE_T* t = val ? lit : neg;
+    TA_STATE_T* f = val ? neg : lit;
+    bool crossed = false;
+    if (NEGATED_LITERALS || val)
+        crossed |= safe_lit_inc(t, fb.t1a_cnt - fail, MAX_TA_STATE);
+    if (NEGATED_LITERALS || !val) {
+        crossed |= safe_lit_dec(f, dec);
+        crossed |= safe_lit_inc(f, fb.t2_cnt, INCLUDE_STATE);
     }
-    int dec = BOOST_TP_DEC ? fb.t1a_cnt : binomial(rng_key, rng_counter, fb.t1a_dec);
-    bool crossed = safe_lit_dec(ta, dec);
-    return crossed | safe_lit_inc(ta, fb.t2_cnt, INCLUDE_STATE);
+    return crossed;
 }
 
 /*
@@ -211,15 +212,23 @@ INLINE_FN bool t1a_t2_binary_lit(ull rng_key, uint* RESTRICT rng_counter, t1a_t2
 INLINE_FN bool apply_t1a_t2_binary_feats(ull rng_key, uint* RESTRICT rng_counter, t1a_t2_t fb,
                                          const FBOUND_T* RESTRICT Xe, int patch_idx_y, int patch_idx_x,
                                          TA_STATE_T* RESTRICT ta_states, int lane, int fid_start, int fid_end) {
-    const int neg = N_LITERALS / 2;
     bool crossed = false;
-
-    for (int fid = fid_start + lane; fid < fid_end; fid += LANE_COUNT) {
-        int li = N_POSITION_FEATS + fid;
-        bool val = get_feature_value(Xe, patch_idx_y, patch_idx_x, fid);
-        crossed |= t1a_t2_binary_lit(rng_key, rng_counter, fb, &ta_states[li], val);
-        if (NEGATED_LITERALS)
-            crossed |= t1a_t2_binary_lit(rng_key, rng_counter, fb, &ta_states[li + neg], !val);
+    int fid = fid_start + lane;
+    for (; fid + LANE_COUNT < fid_end; fid += 2 * LANE_COUNT) {
+        int2 dec =
+            BOOST_TP_DEC ? make_int2(fb.t1a_cnt, fb.t1a_cnt) : binomial2(rng_key, rng_counter, fb.t1a_dec, fb.t1a_dec);
+        int2 fail =
+            BOOST_TP_INC ? make_int2(0, 0) : binomial2(rng_key, rng_counter, fb.t1a_inc_fails, fb.t1a_inc_fails);
+        crossed |= t1a_t2_binary_feat(fb, &ta_states[N_POSITION_FEATS + fid],
+                                      get_feature_value(Xe, patch_idx_y, patch_idx_x, fid), fail.x, dec.x);
+        crossed |= t1a_t2_binary_feat(fb, &ta_states[N_POSITION_FEATS + fid + LANE_COUNT],
+                                      get_feature_value(Xe, patch_idx_y, patch_idx_x, fid + LANE_COUNT), fail.y, dec.y);
+    }
+    if (fid < fid_end) {
+        int dec = BOOST_TP_DEC ? fb.t1a_cnt : binomial(rng_key, rng_counter, fb.t1a_dec);
+        int fail = BOOST_TP_INC ? 0 : binomial(rng_key, rng_counter, fb.t1a_inc_fails);
+        crossed |= t1a_t2_binary_feat(fb, &ta_states[N_POSITION_FEATS + fid],
+                                      get_feature_value(Xe, patch_idx_y, patch_idx_x, fid), fail, dec);
     }
     return crossed;
 }

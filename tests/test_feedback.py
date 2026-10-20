@@ -300,12 +300,13 @@ def test_type1a_without_boost_merged_classes_at_state_zero(device):
 
 
 @pytest.mark.statistical
-def test_type1b_decrements_every_literal_with_probability_one_over_s(device):
+@pytest.mark.parametrize("s", [2.0, 4.0])
+def test_type1b_decrements_every_literal_with_probability_one_over_s(device, s):
     """The geometric skipping in type1b must be marginally Bernoulli(1/s) for every literal, including the last ones."""
-    tm = discrete("binary", device, s=4.0, n_states=65536)
+    tm = discrete("binary", device, s=s, n_states=65536)
     d = _drift(tm, [[1, 0, 1, 0]], FB_T1B)
     for i in range(8):
-        assert stats.binomtest(int(-d[i]), TRIALS, 0.25).pvalue > ALPHA, i
+        assert stats.binomtest(int(-d[i]), TRIALS, 1 / s).pvalue > ALPHA, i
 
 
 @pytest.mark.statistical

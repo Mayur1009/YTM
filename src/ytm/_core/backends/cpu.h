@@ -12,6 +12,24 @@ typedef unsigned long long ull;
 #define RESTRICT restrict
 #define LANE_COUNT 1
 
+typedef struct {
+    float x, y;
+} float2;
+
+typedef struct {
+    int x, y;
+} int2;
+
+INLINE_FN float2 make_float2(float x, float y) {
+    float2 r = {x, y};
+    return r;
+}
+
+INLINE_FN int2 make_int2(int x, int y) {
+    int2 r = {x, y};
+    return r;
+}
+
 static int ytm_n_threads = 1;
 void set_num_threads(int n) { ytm_n_threads = n < 1 ? 1 : n; }
 
