@@ -166,6 +166,7 @@ extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int 
  *   X                       features of the batch
  *   e                       index of the current sample
  *   clause_drop_mask        1 for clauses dropped this epoch
+ *   class_active            1 for classes that get feedback on this sample
  *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
  *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
  *   clause_feat_ids         per clause ids of its bounded features
@@ -176,20 +177,20 @@ extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int 
  *   selected_patch_ids      output, picked patch per firing clause (patches only)
  *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
  */
-extern "C" __global__ void eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e,
-                                    const int8_t* __restrict__ clause_drop_mask,
-                                    const PBOUND_T* __restrict__ clause_position_bounds,
-                                    const FBOUND_T* __restrict__ clause_feat_bounds,
-                                    const NFEAT_T* __restrict__ clause_feat_ids,
-                                    const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
-                                    const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ clause_output,
-                                    NPATCHES_T* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
+extern "C" __global__ void
+eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e, const int8_t* __restrict__ clause_drop_mask,
+         const uint8_t* __restrict__ class_active, const PBOUND_T* __restrict__ clause_position_bounds,
+         const FBOUND_T* __restrict__ clause_feat_bounds, const NFEAT_T* __restrict__ clause_feat_ids,
+         const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
+         const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ clause_output,
+         NPATCHES_T* __restrict__ selected_patch_ids, int* __restrict__ patch_weights) {
     const FBOUND_T* Xe = &X[sample_offset(e)];
     auto [warp, lane, warp_id, total_warps] = warp_grid();
 
     WARP_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         // trivial checks
-        int out = (clause_drop_mask[clause] == 1) ? 0 : eval_trivial(clause, has_contra, clause_len);
+        bool skip = clause_drop_mask[clause] == 1 || (!COALESCED && !class_active[clause / CLAUSES_PER_CLASS]);
+        int out = skip ? 0 : eval_trivial(clause, has_contra, clause_len);
         int selected_id = -1;
 
         const FBOUND_T* feat_bounds = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];

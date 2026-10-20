@@ -7,6 +7,7 @@ class FitBuffers:
     X: Any  # (n_samples, *dim) the epoch's inputs, cast for the kernels
     Y: Any  # (n_samples, n_classes) targets
     clause_drop_mask: Any  # (total_clauses,) one mask for the whole epoch, per Drop Clause
+    class_active: Any  # (n_classes,) uint8, 1 when the class gets feedback on the current sample
     clause_output: Any  # (total_clauses,) 1 when the clause fired on this sample
     selected_pids: Any  # (total_clauses,) patch each clause matched on, only valid where it fired
     votes: Any  # (n_classes,) weighted vote sum for the current sample

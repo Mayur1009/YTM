@@ -146,6 +146,7 @@ class CPUDevice(BaseDevice):
             buf.p_X,
             c_int(e),
             buf.p_clause_drop_mask,
+            buf.p_class_active,
             self.p_clause_position_bounds,
             self.p_clause_feat_bounds,
             self.p_clause_feat_ids,

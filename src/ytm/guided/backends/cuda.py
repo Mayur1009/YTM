@@ -32,6 +32,7 @@ class CUDADevice(CoreCUDADevice):
             X=None,
             Y=None,
             clause_drop_mask=clause_drop_mask,
+            class_active=cp.ones(cfg.n_classes, dtype=np.uint8),
             clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
             votes=cp.empty(cfg.n_classes, dtype=np.float32),

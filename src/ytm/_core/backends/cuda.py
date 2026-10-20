@@ -165,6 +165,7 @@ class CUDADevice(BaseDevice):
                 buf.X,
                 np.int32(e),
                 buf.clause_drop_mask,
+                buf.class_active,
                 pc.clause_position_bounds,
                 pc.clause_feat_bounds,
                 pc.clause_feat_ids,
