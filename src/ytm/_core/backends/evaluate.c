@@ -193,6 +193,20 @@ void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int
     }
 }
 
+static inline float vote_dot(const int8_t* restrict out, const float* restrict w, int n) {
+    float acc[16] = {0.0f};
+    int j = 0;
+    for (; j + 16 <= n; j += 16)
+        for (int k = 0; k < 16; k++)
+            acc[k] += (float)out[j + k] * w[j + k];
+    float s = 0.0f;
+    for (; j < n; j++)
+        s += (float)out[j] * w[j];
+    for (int k = 0; k < 16; k++)
+        s += acc[k];
+    return s;
+}
+
 /*
  * Class sums of N samples.
  *
@@ -208,14 +222,10 @@ void vote_sum(const int8_t* restrict clause_outputs, const float* restrict claus
     for (int e = 0; e < N; e++) {
         const int8_t* out_e = &clause_outputs[clause_output_offset(e, 0)];
         float* sums_e = &class_sums[(ull)e * CLASSES];
-        for (int c = 0; c < CLASSES; c++)
-            sums_e[c] = 0.0f;
-
-        for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
-            if (!out_e[clause])
-                continue;
-            ull class_id;
-            LOOP_CLASS_ID(class_id, clause) { sums_e[class_id] += clause_weights[weight_offset(class_id, clause)]; }
+        for (int class_id = 0; class_id < CLASSES; class_id++) {
+            ull first = COALESCED ? 0 : (ull)class_id * CLAUSES_PER_CLASS;
+            sums_e[class_id] =
+                vote_dot(&out_e[first], &clause_weights[weight_offset(class_id, first)], CLAUSES_PER_CLASS);
         }
     }
 }
