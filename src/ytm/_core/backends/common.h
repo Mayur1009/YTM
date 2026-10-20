@@ -136,11 +136,21 @@ INLINE_FN bool feat_in_bounds(FBOUND_T val, const FBOUND_T* RESTRICT feat_bounds
     return val >= feat_bounds[i * 2] && val <= feat_bounds[i * 2 + 1];
 }
 
+INLINE_FN bool feat_dropped(int fid, const uint8_t* RESTRICT lit_drop_mask, const NLITS_T* RESTRICT literal_offsets) {
+    if (lit_drop_mask == NULL)
+        return false;
+    return lit_drop_mask[N_POSITION_FEATS + (ALL_BINARY_FEATS ? fid : (int)literal_offsets[fid])];
+}
+
 // True when the patch matches a clause (strict AND matching).
 INLINE_FN bool match_patch(const FBOUND_T* RESTRICT X, int patch_idx_y, int patch_idx_x,
-                           const NFEAT_T* RESTRICT feat_ids, const FBOUND_T* RESTRICT feat_bounds, int n_feats) {
+                           const NFEAT_T* RESTRICT feat_ids, const FBOUND_T* RESTRICT feat_bounds, int n_feats,
+                           const uint8_t* RESTRICT lit_drop_mask, const NLITS_T* RESTRICT literal_offsets) {
     for (int i = 0; i < n_feats; ++i) {
-        if (!feat_in_bounds(get_feature_value(X, patch_idx_y, patch_idx_x, (int)feat_ids[i]), feat_bounds, i))
+        int fid = (int)feat_ids[i];
+        if (feat_dropped(fid, lit_drop_mask, literal_offsets))
+            continue;
+        if (!feat_in_bounds(get_feature_value(X, patch_idx_y, patch_idx_x, fid), feat_bounds, i))
             return false;
     }
     return true;

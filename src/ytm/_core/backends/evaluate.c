@@ -16,7 +16,7 @@ static inline bool match_window(const FBOUND_T* restrict Xe, const PBOUND_T* res
                                 const FBOUND_T* restrict feat_bounds, const NFEAT_T* restrict feat_ids, int n_feats) {
     for (int py = pos[0]; py <= pos[1]; py++)
         for (int px = pos[2]; px <= pos[3]; px++)
-            if (match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats))
+            if (match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats, NULL, NULL))
                 return true;
     return false;
 }
@@ -70,7 +70,7 @@ void eval_patchwise(const FBOUND_T* restrict X, const int N, const PBOUND_T* res
             }
 
             // match a patch
-            output[patch] = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
+            output[patch] = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids, NULL, NULL);
         }
     }
 }
@@ -112,7 +112,7 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
                 out = match_window(Xe, pos, feat_bounds, feat_ids, n_feats);
             } else {
                 // Non conv
-                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats);
+                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats, NULL, NULL);
             }
         }
 
@@ -129,6 +129,8 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
  *   e                       index of the current sample
  *   clause_drop_mask        1 for clauses dropped this epoch
  *   class_active            1 for classes that get feedback on this sample
+ *   lit_drop_mask           1 for literals that get no feedback
+ *   literal_offsets         first literal of each patch feature
  *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
  *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
  *   clause_feat_ids         per clause ids of its bounded features
@@ -140,7 +142,8 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
  *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
  */
 void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
-              const uint8_t* restrict class_active, const PBOUND_T* restrict clause_position_bounds,
+              const uint8_t* restrict class_active, const uint8_t* restrict lit_drop_mask,
+              const NLITS_T* restrict literal_offsets, const PBOUND_T* restrict clause_position_bounds,
               const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
               const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
               const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
@@ -170,7 +173,7 @@ void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int
                 int count = 0;
                 for (int py = pos[0]; py <= pos[1]; py++) {
                     for (int px = pos[2]; px <= pos[3]; px++) {
-                        if (!match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats))
+                        if (!match_patch(Xe, py, px, feat_ids, feat_bounds, n_feats, lit_drop_mask, literal_offsets))
                             continue;
                         count++;
                         if (rand_int(rng_k, &rng_counter, (uint)count) == 0)
@@ -181,7 +184,7 @@ void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int
             }
         } else {
             if (out < 0)
-                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats);
+                out = match_patch(Xe, 0, 0, feat_ids, feat_bounds, n_feats, lit_drop_mask, literal_offsets);
         }
 
         clause_output[clause] = (int8_t)out;

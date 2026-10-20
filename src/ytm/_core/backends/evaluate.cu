@@ -17,13 +17,17 @@ __device__ inline int eval_trivial(ull clause, const int8_t* __restrict__ has_co
 // else false.
 __device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* __restrict__ Xe,
                                            const FBOUND_T* __restrict__ feat_bounds,
-                                           const NFEAT_T* __restrict__ feat_ids, int n_feats) {
+                                           const NFEAT_T* __restrict__ feat_ids, int n_feats,
+                                           const uint8_t* __restrict__ lit_drop_mask,
+                                           const NLITS_T* __restrict__ literal_offsets) {
     const int lane = (int)warp.thread_rank();
     bool ok = true;
     for (int base = 0; base < n_feats; base += WARP_SIZE) {
         int i = base + lane;
         if (i < n_feats) {
-            if (!feat_in_bounds(get_feature_value(Xe, 0, 0, (int)feat_ids[i]), feat_bounds, i))
+            int fid = (int)feat_ids[i];
+            if (!feat_dropped(fid, lit_drop_mask, literal_offsets) &&
+                !feat_in_bounds(get_feature_value(Xe, 0, 0, fid), feat_bounds, i))
                 ok = false;
         }
         if (warp.any(!ok))
@@ -35,13 +39,16 @@ __device__ inline bool match_features_warp(const warp_t& warp, const FBOUND_T* _
 // Warp parallel patch matching. Returns 32 bits (warp ballot), where each bit is 1 if the patch mached.
 __device__ inline uint match_patches_warp(const warp_t& warp, const FBOUND_T* __restrict__ Xe,
                                           const PBOUND_T* __restrict__ pos, const FBOUND_T* __restrict__ feat_bounds,
-                                          const NFEAT_T* __restrict__ feat_ids, int n_feats, int base) {
+                                          const NFEAT_T* __restrict__ feat_ids, int n_feats, int base,
+                                          const uint8_t* __restrict__ lit_drop_mask,
+                                          const NLITS_T* __restrict__ literal_offsets) {
     const int n_x = pos[3] - pos[2] + 1;
     const int n_window = (pos[1] - pos[0] + 1) * n_x;
     const int i = base + (int)warp.thread_rank();
     bool match = false;
     if (i < n_window)
-        match = match_patch(Xe, pos[0] + i / n_x, pos[2] + i % n_x, feat_ids, feat_bounds, n_feats);
+        match = match_patch(Xe, pos[0] + i / n_x, pos[2] + i % n_x, feat_ids, feat_bounds, n_feats, lit_drop_mask,
+                            literal_offsets);
     return warp.ballot(match);
 }
 
@@ -99,7 +106,7 @@ eval_patchwise(const FBOUND_T* __restrict__ X, const int N, const PBOUND_T* __re
         int n_bounded_fids = (int)clause_n_feats[clause];
 
         // match a patch
-        *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids);
+        *output = match_patch(Xe, py, px, bounded_fids, cfb, n_bounded_fids, NULL, NULL);
     }
 }
 
@@ -143,12 +150,12 @@ extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int 
                 const int n_possible_patches = (pos[1] - pos[0] + 1) * (pos[3] - pos[2] + 1);
                 out = 0;
                 for (int base = 0; base < n_possible_patches && !out; base += WARP_SIZE) {
-                    int warp_out = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base);
+                    int warp_out = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base, NULL, NULL);
                     out = warp_out != 0; // out = 1 if any bit of warp_out is set.
                 }
             } else {
                 // Non conv
-                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats);
+                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats, NULL, NULL);
             }
         }
 
@@ -167,6 +174,8 @@ extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int 
  *   e                       index of the current sample
  *   clause_drop_mask        1 for clauses dropped this epoch
  *   class_active            1 for classes that get feedback on this sample
+ *   lit_drop_mask           1 for literals that get no feedback
+ *   literal_offsets         first literal of each patch feature
  *   clause_position_bounds  per clause [y_lo, y_hi, x_lo, x_hi] of allowed patches
  *   clause_feat_bounds      per clause [lo, hi] of each bounded feature
  *   clause_feat_ids         per clause ids of its bounded features
@@ -179,7 +188,8 @@ extern "C" __global__ void eval_infer(const FBOUND_T* __restrict__ X, const int 
  */
 extern "C" __global__ void
 eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e, const int8_t* __restrict__ clause_drop_mask,
-         const uint8_t* __restrict__ class_active, const PBOUND_T* __restrict__ clause_position_bounds,
+         const uint8_t* __restrict__ class_active, const uint8_t* __restrict__ lit_drop_mask,
+         const NLITS_T* __restrict__ literal_offsets, const PBOUND_T* __restrict__ clause_position_bounds,
          const FBOUND_T* __restrict__ clause_feat_bounds, const NFEAT_T* __restrict__ clause_feat_ids,
          const NFEAT_T* __restrict__ clause_n_feats, const int8_t* __restrict__ has_contra,
          const NLITS_T* __restrict__ clause_len, int8_t* __restrict__ clause_output,
@@ -212,7 +222,8 @@ eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e, const int8
                 // Reservoir sampling, lane 0 keeps the pick.
                 int count = 0;
                 for (int base = 0; base < n_window; base += WARP_SIZE) {
-                    uint ballot = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base);
+                    uint ballot = match_patches_warp(warp, Xe, pos, feat_bounds, feat_ids, n_feats, base, lit_drop_mask,
+                                                     literal_offsets);
                     int n_matches = __popc(ballot);
                     count += n_matches;
                     if (lane == 0 && n_matches > 0 && (int)rand_int(rng_k, &rng_counter, (uint)count) < n_matches) {
@@ -229,7 +240,7 @@ eval_fit(const ull seed, const FBOUND_T* __restrict__ X, const int e, const int8
             }
         } else {
             if (out < 0)
-                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats);
+                out = match_features_warp(warp, Xe, feat_bounds, feat_ids, n_feats, lit_drop_mask, literal_offsets);
         }
 
         if (lane == 0) {

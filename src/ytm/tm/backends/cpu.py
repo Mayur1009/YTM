@@ -26,6 +26,7 @@ class CPUDevice(CoreCPUDevice):
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
+            lit_drop_mask=np.zeros(cfg._n_literals, dtype=np.uint8),
             class_active=np.ones(cfg.n_classes, dtype=np.uint8),
             clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
             selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),

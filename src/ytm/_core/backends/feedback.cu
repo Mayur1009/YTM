@@ -11,11 +11,13 @@
  *   t1b_n             T1b list length
  *   t1b_cid           T1b list clause ids
  *   t1b_cnt           T1b count of each entry
+ *   lit_drop_mask     1 for literals that get no feedback
  *   global_ta_states  TA states of all clauses
  *   is_clause_synced  Flag to indicate synced and stale clauses.
  */
 extern "C" __global__ void update_t1b(const ull seed, const uint* __restrict__ t1b_n, const uint* __restrict__ t1b_cid,
-                                      const NCLASSES_T* __restrict__ t1b_cnt, TA_STATE_T* __restrict__ global_ta_states,
+                                      const NCLASSES_T* __restrict__ t1b_cnt, const uint8_t* __restrict__ lit_drop_mask,
+                                      TA_STATE_T* __restrict__ global_ta_states,
                                       int8_t* __restrict__ is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const uint n = *t1b_n;
@@ -40,8 +42,8 @@ extern "C" __global__ void update_t1b(const ull seed, const uint* __restrict__ t
         ull rng_k = rng_hash(seed, clause, (0x71B71B71ULL << 32) | ((ull)tile << 5) | (ull)lane);
         uint rng_counter = 0;
 
-        bool crossed =
-            dec_range(rng_k, &rng_counter, binom_params((int)t1b_cnt[i], S_INV), start, end, 0, LANE_COUNT, ta_states);
+        bool crossed = dec_range(rng_k, &rng_counter, binom_params((int)t1b_cnt[i], S_INV), start, end, 0, LANE_COUNT,
+                                 ta_states, lit_drop_mask);
         if (warp.any(crossed) && lane == 0)
             is_clause_synced[clause] = 0;
     }
@@ -70,6 +72,7 @@ __device__ inline int first_feat_from(const NLITS_T* __restrict__ literal_offset
  *   selected_patch_ids  patch each clause fired on
  *   X                   features of the batch
  *   literal_offsets     first literal of each patch feature
+ *   lit_drop_mask       1 for literals that get no feedback
  *   t1a_t2_n            T1a/T2 list length
  *   t1a_t2_cid          T1a/T2 list clause ids
  *   t1a_cnt             T1a count of each entry
@@ -79,8 +82,9 @@ __device__ inline int first_feat_from(const NLITS_T* __restrict__ literal_offset
  */
 extern "C" __global__ void update_t1a_t2(const ull seed, const int e, const NPATCHES_T* __restrict__ selected_patch_ids,
                                          const FBOUND_T* __restrict__ X, const NLITS_T* __restrict__ literal_offsets,
-                                         const uint* __restrict__ t1a_t2_n, const uint* __restrict__ t1a_t2_cid,
-                                         const NCLASSES_T* __restrict__ t1a_cnt, const NCLASSES_T* __restrict__ t2_cnt,
+                                         const uint8_t* __restrict__ lit_drop_mask, const uint* __restrict__ t1a_t2_n,
+                                         const uint* __restrict__ t1a_t2_cid, const NCLASSES_T* __restrict__ t1a_cnt,
+                                         const NCLASSES_T* __restrict__ t2_cnt,
                                          TA_STATE_T* __restrict__ global_ta_states,
                                          int8_t* __restrict__ is_clause_synced) {
     auto [warp, lane, warp_id, total_warps] = warp_grid();
@@ -117,7 +121,7 @@ extern "C" __global__ void update_t1a_t2(const ull seed, const int e, const NPAT
         uint rng_counter = 0;
 
         bool crossed = t1a_t2_fb(rng_k, &rng_counter, (int)t1a_cnt[i], (int)t2_cnt[i], Xe, patch_idx_y, patch_idx_x,
-                                 literal_offsets, ta_states, lane, fid_start, fid_end, tile == 0);
+                                 literal_offsets, ta_states, lit_drop_mask, lane, fid_start, fid_end, tile == 0);
         if (warp.any(crossed) && lane == 0)
             is_clause_synced[clause] = 0;
     }

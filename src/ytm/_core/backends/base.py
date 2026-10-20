@@ -9,7 +9,7 @@ import numpy as np
 from ..config import BaseTMConfig
 from ..device_config import DeviceConfig
 from ..utils import tqdm_bar
-from .buffers import PackedClauses
+from .buffers import FitBuffers, PackedClauses
 
 
 class BaseDevice(abc.ABC):
@@ -153,6 +153,16 @@ class BaseDevice(abc.ABC):
         if clause_drop_p <= 0.0:
             return self.xp.zeros(cfg._total_clauses, dtype=np.int8)
         return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
+
+    def set_feat_drop(self, buf: FitBuffers, fids: int | list[int], value: int) -> None:
+        cfg = self.config
+        half = cfg._n_literals // 2
+        for fid in [fids] if isinstance(fids, int) else fids:
+            start = cfg._n_position_feats + int(cfg._literal_offsets[fid])
+            end = cfg._n_position_feats + int(cfg._literal_offsets[fid + 1])
+            buf.lit_drop_mask[start:end] = value
+            if cfg.negated_literals:
+                buf.lit_drop_mask[half + start : half + end] = value
 
     # == initializations ==
     def _init_params(self):
