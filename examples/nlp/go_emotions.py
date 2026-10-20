@@ -30,7 +30,7 @@ from nltk.tokenize import TweetTokenizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
-from ytm.discrete import MultiOutputTM as DiscreteTM
+from ytm.tm import MultiOutputTM as DiscreteTM
 from ytm.guided import MultiOutputTM as GuidedTM
 from ytm.guided.backends.act_loss import ASL, SigmoidBCE
 from ytm.utils import Timer, print_table

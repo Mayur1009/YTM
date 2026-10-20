@@ -24,7 +24,7 @@ import pickle
 
 import numpy as np
 
-from ytm.discrete import BinaryTM as DiscreteTM
+from ytm.tm import BinaryTM as DiscreteTM
 from ytm.guided import BinaryTM as GuidedTM
 
 

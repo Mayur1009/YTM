@@ -20,7 +20,7 @@ import argparse
 import numpy as np
 from datasets import load_dataset
 
-from ytm.discrete import MultiClassTM as DiscreteTM
+from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.guided import MultiClassTM as GuidedTM
 from ytm.utils import Timer, print_table
 

@@ -24,7 +24,7 @@ from datasets import load_dataset
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_selection import SelectKBest, chi2
 
-from ytm.discrete import BinaryTM as DiscreteTM
+from ytm.tm import BinaryTM as DiscreteTM
 from ytm.guided import BinaryTM as GuidedTM
 from ytm.utils import Timer, print_table
 

@@ -23,7 +23,7 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import KBinsDiscretizer
 
-from ytm.discrete import MultiClassTM as DiscreteTM
+from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.guided import MultiClassTM as GuidedTM
 from ytm.utils import Timer, print_table
 

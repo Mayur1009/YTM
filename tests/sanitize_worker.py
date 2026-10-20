@@ -8,7 +8,7 @@ import numpy as np
 def build(spec: dict, device: str):
     kw = {k: tuple(v) if isinstance(v, list) else v for k, v in spec["kw"].items()}
     if spec["backend"] == "discrete":
-        from ytm.discrete import BinaryTM, MultiClassTM
+        from ytm.tm import BinaryTM, MultiClassTM
 
         if spec.get("kind") == "binary":
             kw.pop("n_classes", None)

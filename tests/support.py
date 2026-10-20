@@ -30,7 +30,7 @@ def host(tm, arr) -> np.ndarray:
 
 
 def discrete(kind: str, device: str = "cpu:1", **kw):
-    from ytm.discrete import BinaryTM, MultiClassTM
+    from ytm.tm import BinaryTM, MultiClassTM
 
     cfg: dict = {"n_clauses": 4, "T": 10.0, "s": 1.0, "dim": (4, 1, 1), "seed": 1}
     if kind == "multi":

@@ -27,7 +27,7 @@ import numpy as np
 from datasets import load_dataset
 from scipy.ndimage import gaussian_filter
 
-from ytm.discrete import MultiClassTM as DiscreteTM
+from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.guided import MultiClassTM as GuidedTM
 from ytm.utils import Timer, print_table
 

@@ -25,7 +25,7 @@ from sklearn.metrics import mean_absolute_error, r2_score, root_mean_squared_err
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import KBinsDiscretizer
 
-from ytm.discrete import RegressionTM as DiscreteTM
+from ytm.tm import RegressionTM as DiscreteTM
 from ytm.guided import RegressionTM as GuidedTM
 from ytm.guided.backends.act_loss import MAE, MSE, Huber
 from ytm.utils import Timer, print_table

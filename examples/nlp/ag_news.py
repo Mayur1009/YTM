@@ -26,7 +26,7 @@ from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_selection import SelectKBest, chi2
 
-from ytm.discrete import MultiClassTM as DiscreteTM
+from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.guided import MultiClassTM as GuidedTM
 from ytm.guided.backends.act_loss import SCE, SoftmaxCE
 from ytm.utils import Timer, print_table

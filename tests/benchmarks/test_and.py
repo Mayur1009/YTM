@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.stats import bootstrap, binomtest
 
-from ytm.discrete import BinaryTM as DiscreteBinaryTM
+from ytm.tm import BinaryTM as DiscreteBinaryTM
 from ytm.guided import BinaryTM as GuidedBinaryTM
 from ytm.guided.backends.act_loss import SigmoidBCE
 
