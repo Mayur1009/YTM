@@ -1,0 +1,11 @@
+{
+  "name": "ytm-cpu",
+  "image": "ghcr.io/prefix-dev/pixi:0.82.0-noble",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": { "username": "vscode" }
+  },
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "mounts": ["source=${localWorkspaceFolderBasename}-pixi-cpu,target=${containerWorkspaceFolder}/.pixi,type=volume"],
+  "postCreateCommand": "sudo chown vscode .pixi && pixi install",
+}
