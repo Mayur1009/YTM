@@ -56,12 +56,13 @@ void compute_loss_neg_ck(const float* restrict y_hat_neg_ck, const float* restri
     }
 }
 
-void decide_feedback_grad(const ull seed, const float* restrict grad, const float* restrict clause_weights,
+void decide_feedback_grad(const ull* restrict rng_keys, const int e, const float* restrict grad, const float* restrict clause_weights,
                           const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                           const int8_t* restrict clause_drop_mask, const float lambda_,
                           uint* restrict t1b_n, uint* restrict t1b_cid,
                           NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                           NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
+    const ull seed = rng_keys[e];
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int ck = clause_output[clause];
@@ -119,12 +120,13 @@ static inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float uprob,
     return fb;
 }
 
-void decide_feedback_delta_l(const ull seed, const float* restrict loss, const float* restrict loss_neg_ck,
+void decide_feedback_delta_l(const ull* restrict rng_keys, const int e, const float* restrict loss, const float* restrict loss_neg_ck,
                              const NLITS_T* restrict clause_len, const int8_t* restrict clause_output,
                              const int8_t* restrict clause_drop_mask, const float lambda_,
                              uint* restrict t1b_n, uint* restrict t1b_cid,
                              NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n, uint* restrict t1a_t2_cid,
                              NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
+    const ull seed = rng_keys[e];
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause_id = 0; clause_id < (ull)TOTAL_CLAUSES; clause_id++) {
         if (clause_drop_mask[clause_id] == 1)

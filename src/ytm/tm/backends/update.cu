@@ -13,8 +13,9 @@
 #define FB_T2 3
 #endif
 
-extern "C" __global__ void sample_classes(const ull seed, const float* __restrict__ label_probs, const int e,
+extern "C" __global__ void sample_classes(const ull* __restrict__ rng_keys, const float* __restrict__ label_probs, const int e,
                                           uint8_t* __restrict__ class_active) {
+    const ull seed = rng_keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(class_id, CLASSES) {
         uint rng_counter = 0;
@@ -33,12 +34,13 @@ extern "C" __global__ void calc_update_prob(const float* __restrict__ votes, con
 }
 
 extern "C" __global__ void
-decide_feedback(const ull seed, const int8_t* __restrict__ clause_output_arr, const NLITS_T* __restrict__ clause_len,
+decide_feedback(const ull* __restrict__ rng_keys, const int8_t* __restrict__ clause_output_arr, const NLITS_T* __restrict__ clause_len,
                 const int8_t* __restrict__ clause_drop_mask, const float* __restrict__ prob,
                 const float* __restrict__ label_probs, const uint8_t* __restrict__ class_active, const int e,
                 const float* __restrict__ clause_weights, uint8_t* __restrict__ feedback_type, uint* __restrict__ t1b_n,
                 uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
                 uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
+    const ull seed = rng_keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];

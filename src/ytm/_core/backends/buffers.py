@@ -7,10 +7,11 @@ import numpy as np
 
 @dataclass(kw_only=True)
 class FitBuffers:
-    _epoch_fields = ()
-    make_ptrs: bool = True
     xp: Any
     cfg: Any
+    make_ptrs: bool = True
+    _epoch_fields: tuple = ()
+
     X: Any = field(init=False, default=None)  # (n_samples, *dim) the epoch's inputs, cast for the kernels
     Y: Any = field(init=False, default=None)  # (n_samples, n_classes) targets
     clause_drop_mask: Any = field(init=False, default=None)  # (total_clauses,) one mask for the whole epoch, per Drop Clause

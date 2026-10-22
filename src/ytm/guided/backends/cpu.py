@@ -1,5 +1,5 @@
 import pathlib
-from ctypes import c_float, c_int, c_uint64
+from ctypes import c_float, c_int
 
 import numpy as np
 
@@ -33,7 +33,6 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
 
     def _fit_decide_fb(self, e: int) -> None:
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         cfg = self.config
         buf.t1b_n[0] = 0
         buf.t1a_t2_n[0] = 0
@@ -44,7 +43,8 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
 
         if cfg._fb_signal == FbSignal.GRAD:
             self.lib.decide_feedback_grad(
-                c_uint64(rng_key),
+                buf.p_rng_keys,
+                c_int(e),
                 buf.p_grad,
                 self.p_clause_weights,
                 self.p_clause_len,
@@ -64,7 +64,8 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
             self.lib.votes_activation_batch(buf.p_votes_neg_ck, c_int(cfg._total_clauses), buf.p_y_hat_neg_ck)
             self.lib.compute_loss_neg_ck(buf.p_y_hat_neg_ck, p_Y_e, buf.p_loss_neg_ck)
             self.lib.decide_feedback_delta_l(
-                c_uint64(rng_key),
+                buf.p_rng_keys,
+                c_int(e),
                 buf.p_loss,
                 buf.p_loss_neg_ck,
                 self.p_clause_len,

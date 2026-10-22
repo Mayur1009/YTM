@@ -1,5 +1,5 @@
 import pathlib
-from ctypes import c_int, c_uint64
+from ctypes import c_int
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.utils import read_file
@@ -19,20 +19,18 @@ class CPUDevice(CoreCPUDevice[DiscreteFitBuffers, TMConfig]):
 
     def _fit_eval(self, e: int) -> None:
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         if not self.config.coalesced:
-            self.lib.sample_classes(c_uint64(rng_key), buf.p_label_probs, c_int(e), buf.p_class_active)
+            self.lib.sample_classes(buf.p_rng_keys, buf.p_label_probs, c_int(e), buf.p_class_active)
         super()._fit_eval(e)
 
     def _fit_decide_fb(self, e: int) -> None:
         """Turn the votes into a per class update probability, then pick a feedback type per clause."""
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         buf.t1b_n[0] = 0
         buf.t1a_t2_n[0] = 0
         self.lib.calc_update_prob(buf.p_votes, buf.p_Y, c_int(e), buf.p_prob)
         self.lib.decide_feedback(
-            c_uint64(rng_key),
+            buf.p_rng_keys,
             buf.p_clause_output,
             self.p_clause_len,
             buf.p_clause_drop_mask,

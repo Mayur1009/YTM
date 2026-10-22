@@ -12,12 +12,13 @@
 #define FB_T2 3
 #endif
 
-void decide_feedback(const ull seed, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
+void decide_feedback(const ull* restrict rng_keys, const int8_t* restrict clause_output_arr, const NLITS_T* restrict clause_len,
                      const int8_t* restrict clause_drop_mask, const float* restrict prob,
                      const float* restrict label_probs, const uint8_t* restrict class_active, const int e,
                      const float* restrict clause_weights, uint8_t* restrict feedback_type, uint* restrict t1b_n,
                      uint* restrict t1b_cid, NCLASSES_T* restrict t1b_cnt, uint* restrict t1a_t2_n,
                      uint* restrict t1a_t2_cid, NCLASSES_T* restrict t1a_cnt, NCLASSES_T* restrict t2_cnt) {
+    const ull seed = rng_keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
 
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
@@ -103,7 +104,8 @@ void update_weights(const uint8_t* restrict feedback_type, const uint* restrict 
     }
 }
 
-void sample_classes(const ull seed, const float* restrict label_probs, const int e, uint8_t* restrict class_active) {
+void sample_classes(const ull* restrict rng_keys, const float* restrict label_probs, const int e, uint8_t* restrict class_active) {
+    const ull seed = rng_keys[e];
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     for (int class_id = 0; class_id < CLASSES; class_id++) {
         uint rng_counter = 0;

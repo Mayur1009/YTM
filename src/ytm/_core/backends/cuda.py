@@ -77,11 +77,11 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
     def _fit_apply_fb(self, e: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         self.cu.update_t1b(
             self.config._total_clauses * self._warp_size,
             (
-                np.uint64(rng_key),
+                buf.rng_keys,
+                np.int32(e),
                 buf.t1b_n,
                 buf.t1b_cid,
                 buf.t1b_cnt,
@@ -93,7 +93,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
         self.cu.update_t1a_t2(
             self.config._total_clauses * self._warp_size,
             (
-                np.uint64(rng_key),
+                buf.rng_keys,
                 np.int32(e),
                 buf.selected_pids,
                 buf.X,
@@ -147,14 +147,13 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
     # == fit steps ==
     def _fit_eval(self, e: int):
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         cfg = self.config
         pc = self.packed_clauses
 
         self.cu.eval_fit(
             cfg._total_clauses * self._warp_size,
             (
-                np.uint64(rng_key),
+                buf.rng_keys,
                 buf.X,
                 np.int32(e),
                 buf.clause_drop_mask,

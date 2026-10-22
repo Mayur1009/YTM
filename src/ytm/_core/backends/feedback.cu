@@ -15,10 +15,11 @@
  *   global_ta_states  TA states of all clauses
  *   is_clause_synced  Flag to indicate synced and stale clauses.
  */
-extern "C" __global__ void update_t1b(const ull seed, const uint* __restrict__ t1b_n, const uint* __restrict__ t1b_cid,
+extern "C" __global__ void update_t1b(const ull* __restrict__ rng_keys, const int e, const uint* __restrict__ t1b_n, const uint* __restrict__ t1b_cid,
                                       const NCLASSES_T* __restrict__ t1b_cnt, const uint8_t* __restrict__ lit_drop_mask,
                                       TA_STATE_T* __restrict__ global_ta_states,
                                       int8_t* __restrict__ is_clause_synced) {
+    const ull seed = rng_keys[e];
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const uint n = *t1b_n;
     if (n == 0)
@@ -80,13 +81,14 @@ __device__ inline int first_feat_from(const NLITS_T* __restrict__ literal_offset
  *   global_ta_states    TA states of all clauses
  *   is_clause_synced    Flag to indicate synced and stale clauses.
  */
-extern "C" __global__ void update_t1a_t2(const ull seed, const int e, const NPATCHES_T* __restrict__ selected_patch_ids,
+extern "C" __global__ void update_t1a_t2(const ull* __restrict__ rng_keys, const int e, const NPATCHES_T* __restrict__ selected_patch_ids,
                                          const FBOUND_T* __restrict__ X, const NLITS_T* __restrict__ literal_offsets,
                                          const uint8_t* __restrict__ lit_drop_mask, const uint* __restrict__ t1a_t2_n,
                                          const uint* __restrict__ t1a_t2_cid, const NCLASSES_T* __restrict__ t1a_cnt,
                                          const NCLASSES_T* __restrict__ t2_cnt,
                                          TA_STATE_T* __restrict__ global_ta_states,
                                          int8_t* __restrict__ is_clause_synced) {
+    const ull seed = rng_keys[e];
     auto [warp, lane, warp_id, total_warps] = warp_grid();
     const FBOUND_T* Xe = &X[sample_offset(e)];
     const uint n = *t1a_t2_n;

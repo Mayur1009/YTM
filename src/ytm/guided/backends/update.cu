@@ -65,11 +65,12 @@ extern "C" __global__ void compute_loss_neg_ck(const float* __restrict__ y_hat_n
 }
 
 extern "C" __global__ void
-decide_feedback_grad(const ull seed, const float* __restrict__ grad, const float* __restrict__ clause_weights,
+decide_feedback_grad(const ull* __restrict__ rng_keys, const int e, const float* __restrict__ grad, const float* __restrict__ clause_weights,
                      const NLITS_T* __restrict__ clause_len, const int8_t* __restrict__ clause_output,
                      const int8_t* __restrict__ clause_drop_mask, const float lambda_, uint* __restrict__ t1b_n,
                      uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
                      uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt, NCLASSES_T* __restrict__ t2_cnt) {
+    const ull seed = rng_keys[e];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int ck = clause_output[clause];
         bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
@@ -127,12 +128,13 @@ __device__ inline uint8_t select_fb_delta_l(const ull seed, ull rng_id, float up
 }
 
 extern "C" __global__ void
-decide_feedback_delta_l(const ull seed, const float* __restrict__ loss, const float* __restrict__ loss_neg_ck,
+decide_feedback_delta_l(const ull* __restrict__ rng_keys, const int e, const float* __restrict__ loss, const float* __restrict__ loss_neg_ck,
                         const NLITS_T* __restrict__ clause_len, const int8_t* __restrict__ clause_output,
                         const int8_t* __restrict__ clause_drop_mask, const float lambda_, uint* __restrict__ t1b_n,
                         uint* __restrict__ t1b_cid, NCLASSES_T* __restrict__ t1b_cnt, uint* __restrict__ t1a_t2_n,
                         uint* __restrict__ t1a_t2_cid, NCLASSES_T* __restrict__ t1a_cnt,
                         NCLASSES_T* __restrict__ t2_cnt) {
+    const ull seed = rng_keys[e];
     GRID_STRIDE_LOOP(clause_id, (ull)TOTAL_CLAUSES) {
         if (clause_drop_mask[clause_id] == 1)
             continue;

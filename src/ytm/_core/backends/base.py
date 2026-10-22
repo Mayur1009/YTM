@@ -82,9 +82,19 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
 
     def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> None:
         assert X.dtype == self.config._fbound_dtype, f"X must be {np.dtype(self.config._fbound_dtype)}, got {X.dtype}"
-        clause_drop_mask = self._fit_drop_mask(clause_drop_p)
-        rng_keys = self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64).tolist()
-        self.buf.start_epoch(X=X, Y=Y, clause_drop_mask=clause_drop_mask, rng_keys=rng_keys, **kwargs)
+
+        if clause_drop_p <= 0:
+            clause_drop_mask = self.xp.asarray(np.zeros(self.config._total_clauses, dtype=np.uint8))
+        else:
+            clause_drop_mask = self.xp.asarray((self._rng.random(self.config._total_clauses) <= clause_drop_p), dtype=np.uint8)
+
+        self.buf.start_epoch(
+            X=X,
+            Y=Y,
+            clause_drop_mask=clause_drop_mask,
+            rng_keys=self.xp.asarray(self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64)),
+            **kwargs,
+        )
 
     def post_epoch(self, total: float) -> Any:
         return None
@@ -176,12 +186,6 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
 
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
-
-    def _fit_drop_mask(self, clause_drop_p: float):
-        cfg = self.config
-        if clause_drop_p <= 0.0:
-            return self.xp.zeros(cfg._total_clauses, dtype=np.int8)
-        return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
 
     def set_feat_drop(self, fids: int | list[int], value: int) -> None:
         cfg = self.config

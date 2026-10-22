@@ -141,13 +141,14 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
  *   selected_patch_ids      output, picked patch per firing clause (patches only)
  *   patch_weights           output, per clause and patch pick counts when TRACK_PATCH_WEIGHTS
  */
-void eval_fit(const ull seed, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
+void eval_fit(const ull* restrict rng_keys, const FBOUND_T* restrict X, const int e, const int8_t* restrict clause_drop_mask,
               const uint8_t* restrict class_active, const uint8_t* restrict lit_drop_mask,
               const NLITS_T* restrict literal_offsets, const PBOUND_T* restrict clause_position_bounds,
               const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
               const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
               const NLITS_T* restrict clause_len, int8_t* restrict clause_output,
               NPATCHES_T* restrict selected_patch_ids, int* restrict patch_weights) {
+    const ull seed = rng_keys[e];
     const FBOUND_T* Xe = &X[sample_offset(e)];
 
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)

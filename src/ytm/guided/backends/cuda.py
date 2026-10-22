@@ -32,7 +32,6 @@ class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
 
     def _fit_decide_fb(self, e: int) -> None:
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         cfg = self.config
         buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
         buf.t1a_t2_n.data.memset_async(0, buf.t1a_t2_n.nbytes)
@@ -44,7 +43,8 @@ class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
             self.cu.decide_feedback_grad(
                 cfg._total_clauses,
                 (
-                    np.uint64(rng_key),
+                    buf.rng_keys,
+                    np.int32(e),
                     buf.grad,
                     self.clause_weights,
                     self.packed_clauses.clause_len,
@@ -73,7 +73,8 @@ class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
             self.cu.decide_feedback_delta_l(
                 cfg._total_clauses,
                 (
-                    np.uint64(rng_key),
+                    buf.rng_keys,
+                    np.int32(e),
                     buf.loss,
                     buf.loss_neg_ck,
                     self.packed_clauses.clause_len,

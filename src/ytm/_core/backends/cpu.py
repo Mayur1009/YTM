@@ -1,6 +1,6 @@
 import pathlib
 import warnings
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32
 
 import numpy as np
 
@@ -46,9 +46,9 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
     def _fit_apply_fb(self, e: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         self.lib.update_t1b(
-            c_uint64(rng_key),
+            buf.p_rng_keys,
+            c_int(e),
             buf.p_t1b_n,
             buf.p_t1b_cid,
             buf.p_t1b_cnt,
@@ -57,7 +57,7 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
             self.p_is_clause_synced,
         )
         self.lib.update_t1a_t2(
-            c_uint64(rng_key),
+            buf.p_rng_keys,
             c_int(e),
             buf.p_selected_pids,
             buf.p_X,
@@ -120,9 +120,8 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
     # == fit steps ==
     def _fit_eval(self, e: int):
         buf = self.buf
-        rng_key = buf.rng_keys[e]
         self.lib.eval_fit(
-            c_uint64(rng_key),
+            buf.p_rng_keys,
             buf.p_X,
             c_int(e),
             buf.p_clause_drop_mask,
