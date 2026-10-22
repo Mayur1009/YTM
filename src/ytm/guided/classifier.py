@@ -36,8 +36,8 @@ class MultiClassTM(Classifier):
         opt.setdefault("act_loss", SoftmaxCE())
         super().__init__(n_clauses, s, dim, n_classes, **opt)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack)
+    def predict(self, X: np.ndarray, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack)
         return np.argmax(class_sums, axis=1), class_sums
 
 
@@ -46,8 +46,8 @@ class MultiOutputTM(Classifier):
         opt.setdefault("act_loss", SigmoidBCE())
         super().__init__(n_clauses, s, dim, n_classes, **opt)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack)
+    def predict(self, X: np.ndarray, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack)
         threshold = self.decision_threshold
         preds = class_sums if threshold is None else (class_sums > threshold).astype(np.uint32)
         return preds, class_sums
@@ -59,8 +59,8 @@ class BinaryTM(Classifier):
         opt.setdefault("coalesced", False)
         super().__init__(n_clauses, s, dim, 1, **opt)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack)
+    def predict(self, X: np.ndarray, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack)
         threshold = self.decision_threshold
         preds = class_sums[:, 0] if threshold is None else (class_sums[:, 0] > threshold).astype(np.uint32)
         return preds, class_sums

@@ -125,3 +125,14 @@ def test_chunked_fit_matches_whole_fit(device, make, chunk, monkeypatch):
     assert len(loads) == 2 * -(-X.shape[0] // chunk)
     np.testing.assert_array_equal(whole.get_ta_states(), chunked.get_ta_states())
     np.testing.assert_array_equal(whole.get_weights(), chunked.get_weights())
+
+
+@pytest.mark.parametrize("make", [_discrete, _guided], ids=["discrete", "guided"])
+def test_auto_batched_inference_matches_one_batch(device, make, monkeypatch):
+    tm, X = _trained(make, device)
+    target = np.zeros(X.shape[0], dtype=np.int32)
+    whole = (tm.score(X), tm.transform(X), tm.transform_patchwise(X), tm.wac(X, target, +1))
+    monkeypatch.setattr(tm.dev, "_chunk_size", lambda N, bytes_per_smp: 7)
+    batched = (tm.score(X), tm.transform(X), tm.transform_patchwise(X), tm.wac(X, target, +1))
+    for a, b in zip(whole, batched, strict=True):
+        np.testing.assert_array_equal(a, b)

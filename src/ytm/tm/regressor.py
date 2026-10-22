@@ -43,8 +43,8 @@ class RegressionTM(BaseTM):
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
         return Y.reshape(-1, 1)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = True, force_repack: bool = False):
+    def predict(self, X: np.ndarray, clip_class_sums: bool = True, force_repack: bool = False):
         lo, hi = self.config.y_range
-        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
+        class_sums = self.score(X, force_repack=force_repack, clip_class_sums=clip_class_sums)
         preds = (class_sums[:, 0] / self.config._T_max) * (hi - lo) + lo
         return preds, class_sums

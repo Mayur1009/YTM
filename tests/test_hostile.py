@@ -78,14 +78,16 @@ def test_all_clauses_dropped_changes_nothing(device, make):
     assert np.array_equal(host(tm, tm.dev.clause_weights), before[1])
 
 
-@pytest.mark.parametrize("batch_size", [1, 3, 7, 100, -1])
-def test_scoring_does_not_depend_on_batch_size(device, batch_size):
+@pytest.mark.parametrize("batch_size", [1, 3, 7, 100])
+def test_scoring_does_not_depend_on_batch_size(device, batch_size, monkeypatch):
     """N=7 with batch sizes that do not divide it, exceed it, or equal 1: the tail batch must not be dropped or mis-offset."""
     tm = discrete("multi", device, n_classes=2, n_clauses=8)
     set_clauses(tm, {0: [0], 1: [1, 6], 2: [2], 5: [3]})
     set_weights(tm, np.arange(16, dtype=np.float32).reshape(2, 8) - 5)
     X = np.random.default_rng(3).integers(0, 2, (7, 4))
-    assert np.array_equal(tm.score(X, batch_size=batch_size, force_repack=True), tm.score(X, force_repack=True))
+    whole = tm.score(X, force_repack=True)
+    monkeypatch.setattr(tm.dev, "_chunk_size", lambda N, bytes_per_smp: batch_size)
+    assert np.array_equal(tm.score(X, force_repack=True), whole)
 
 
 @pytest.mark.parametrize("n_clauses", [1, 2, 3])

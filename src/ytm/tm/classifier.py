@@ -28,8 +28,8 @@ class Classifier(BaseTM):
 
 
 class MultiClassTM(Classifier):
-    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
+    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return np.argmax(class_sums, axis=1), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
@@ -49,8 +49,8 @@ class MultiClassTM(Classifier):
 
 
 class MultiOutputTM(Classifier):
-    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
+    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return (class_sums > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
@@ -79,8 +79,8 @@ class BinaryTM(Classifier):
         opt.setdefault("allow_polarity_change", False)
         super().__init__(n_clauses, T, s, dim, 1, **opt)
 
-    def predict(self, X: np.ndarray, batch_size: int = -1, clip_class_sums: bool = False, force_repack: bool = False):
-        class_sums = self.score(X, batch_size, force_repack=force_repack, clip_class_sums=clip_class_sums)
+    def predict(self, X: np.ndarray, clip_class_sums: bool = False, force_repack: bool = False):
+        class_sums = self.score(X, force_repack=force_repack, clip_class_sums=clip_class_sums)
         return (class_sums[:, 0] > self.decision_threshold).astype(np.uint32), class_sums
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:

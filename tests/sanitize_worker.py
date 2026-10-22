@@ -5,6 +5,7 @@ import sys
 
 import numpy as np
 
+
 def build(spec: dict, device: str):
     kw = {k: tuple(v) if isinstance(v, list) else v for k, v in spec["kw"].items()}
     if spec["backend"] == "discrete":
@@ -31,9 +32,10 @@ def main() -> None:
     target = np.zeros(n, dtype=np.int64) if cfg.n_classes == 1 else Y
     for _ in range(2):
         tm.fit(X, Y)
-    tm.predict(X, batch_size=3)
+    tm.dev._chunk_size = lambda N, bytes_per_smp: 3
+    tm.predict(X)
     tm.score(X)
-    tm.wac(X, target, +1, batch_size=3)
+    tm.wac(X, target, +1)
     for c in range(cfg.n_classes):
         tm.wic(c, +1)
     tm.get_clauses()

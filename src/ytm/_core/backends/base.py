@@ -159,25 +159,29 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
 
         self.clause_weights = self.xp.asarray(sign * mag, dtype=np.float32)
 
-    def infer(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def infer(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
+        N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out = np.empty((N, cfg.n_classes), dtype=np.float32)
         with self._ctx():
             self.pack_clauses(force_repack)
-            out = self.xp.empty((X.shape[0], cfg.n_classes), dtype=np.float32)
-            for start, end in self._batches(X.shape[0], batch_size, "Infer"):
-                out[start:end] = self._infer_batch(self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype), end - start)
-            return self._to_host(out)
+            for start, end in self._batches(N, "Infer", x_bytes + cfg._total_clauses + 2 * cfg.n_classes * 4):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._infer_batch(Xb, end - start))
+        return out
 
     @abc.abstractmethod
     def _infer_batch(self, Xb: ArrayT, bs: int) -> ArrayT: ...
 
-    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def transform(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
         out = np.empty((N, cfg._total_clauses), dtype=np.int8)
         with self._ctx():
             self.pack_clauses(force_repack)
-            for start, end in self._batches(N, batch_size, "Transform"):
+            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses):
                 Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
                 out[start:end] = self._to_host(self._clause_outputs(Xb, end - start))
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
@@ -188,19 +192,20 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
     @abc.abstractmethod
     def _patch_outputs(self, Xb: ArrayT, bs: int) -> ArrayT: ...
 
-    def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def transform_patchwise(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
         out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
         with self._ctx():
             self.pack_clauses(force_repack)
-            for start, end in self._batches(N, batch_size, "Transform"):
+            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses * cfg._n_patches):
                 Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
                 out[start:end] = self._to_host(self._patch_outputs(Xb, end - start))
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
-    def _batches(self, N: int, batch_size: int, desc: str) -> Iterator[tuple[int, int]]:
-        bs = N if batch_size == -1 else batch_size
+    def _batches(self, N: int, desc: str, bytes_per_sample: int) -> Iterator[tuple[int, int]]:
+        bs = self._chunk_size(N, bytes_per_sample)
         with tqdm_bar(None, total=N, desc=desc) as bar:
             for start in range(0, N, bs):
                 end = min(start + bs, N)
@@ -210,13 +215,15 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
     @abc.abstractmethod
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray: ...
 
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
         N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out_bytes = int(np.prod(cfg._dim)) * 4
         output = np.empty((N, *cfg._dim), dtype=np.float32)
         with self._ctx():
             self.pack_clauses(force_repack)
-            for start, end in self._batches(N, batch_size, "WAC"):
+            for start, end in self._batches(N, "WAC", x_bytes + cfg._total_clauses * cfg._n_patches + out_bytes + 4):
                 Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
                 target_b = self.xp.asarray(target_classes[start:end], dtype=np.int32)
                 output[start:end] = self._to_host(self._wac_batch(Xb, target_b, polarity, end - start))
