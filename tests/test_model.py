@@ -109,3 +109,19 @@ def test_set_ta_states_helper_invalidates_the_pack(device):
     assert tm.score(X)[0, 0] == 0
     set_clauses(tm, {})
     assert tm.score(X)[0, 0] == 3
+
+
+@pytest.mark.parametrize("make", [_discrete, _guided], ids=["discrete", "guided"])
+@pytest.mark.parametrize("chunk", [1, 7])
+def test_chunked_fit_matches_whole_fit(device, make, chunk, monkeypatch):
+    X, Y = _data()
+    whole, chunked = make(device), make(device)
+    monkeypatch.setattr(chunked.dev, "_chunk_size", lambda N, bytes_per_smp: chunk)
+    loads = []
+    load_chunk = chunked.dev.buf.load_chunk
+    monkeypatch.setattr(chunked.dev.buf, "load_chunk", lambda start, end: (loads.append((start, end)), load_chunk(start, end)))
+    for _ in range(2):
+        assert whole.fit(X, Y, clause_drop_p=0.2) == chunked.fit(X, Y, clause_drop_p=0.2)
+    assert len(loads) == 2 * -(-X.shape[0] // chunk)
+    np.testing.assert_array_equal(whole.get_ta_states(), chunked.get_ta_states())
+    np.testing.assert_array_equal(whole.get_weights(), chunked.get_weights())

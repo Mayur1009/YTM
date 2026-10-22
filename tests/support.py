@@ -89,6 +89,7 @@ def make_buffers(tm, X, Y):
             dev.pre_epoch(Xp, Yf, 0.0, lr=cfg.lr, lambda_=cfg.lambda_)
         else:
             dev.pre_epoch(Xp, Yf, 0.0, label_probs=np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
+        dev.buf.load_chunk(0, Xp.shape[0])
     return dev.buf
 
 
@@ -157,8 +158,8 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
     The feedback list comes from `fb` unless `ids` overrides it.
     """
     dev = tm.dev
-    buf.rng_keys = [key] * (e + 1)
     with _ctx(tm):
+        buf.rng_keys = dev.xp.asarray(np.full(e + 1, key, dtype=np.uint64))
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(e)
         _set_feedback(tm, buf, fb, ids)
@@ -168,8 +169,8 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
 def decide_feedback(tm, buf, votes, e: int = 0, key: int = 1) -> np.ndarray:
     """Evaluate, overwrite the votes with `votes`, let the device decide feedback, return it."""
     dev = tm.dev
-    buf.rng_keys = [key] * (e + 1)
     with _ctx(tm):
+        buf.rng_keys = dev.xp.asarray(np.full(e + 1, key, dtype=np.uint64))
         dev.pack_clauses(force_repack=True)
         dev._fit_eval(e)
         fill(tm, buf.votes, votes)
