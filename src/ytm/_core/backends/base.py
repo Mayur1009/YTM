@@ -55,30 +55,45 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     @abc.abstractmethod
     def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
+    @staticmethod
+    @abc.abstractmethod
+    def _fit_buffers_cls() -> type[BuffersT]: ...
+
+    def _chunk_size(self, N: int, bytes_per_smp: int) -> int:
+        return N
+
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs):
         with self._ctx():
             self.pre_epoch(X, Y, clause_drop_p, **kwargs)
+
+            N = X.shape[0]
+            chunk_N = self._chunk_size(N, self.buf.per_sample_bytes())
+
             total = 0.0
-            for e in tqdm_bar(range(X.shape[0]), desc="Fit"):
+            for e in tqdm_bar(range(N), desc="Fit"):
+                if e == self.buf.chunk_end:
+                    self.buf.load_chunk(e, min(e + chunk_N, N))
+
                 total += self.fit_sample(e)
+
             out = self.post_epoch(total)
             self.buf.end_epoch()
             return out
 
     def fit_sample(self, e: int) -> float:
+        i = e - self.buf.chunk_start
+
         self.pre_sample(e)
+
         self.pack_clauses()
-        self._fit_eval(e)
+        self._fit_eval(i)
         self._fit_voting()
-        self._fit_decide_fb(e)
-        self._fit_apply_fb(e)
+        self._fit_decide_fb(i)
+        self._fit_apply_fb(i)
         if self.config.weighted:
             self._fit_update_weights()
-        return self.post_sample(e)
 
-    @staticmethod
-    @abc.abstractmethod
-    def _fit_buffers_cls() -> type[BuffersT]: ...
+        return self.post_sample(e)
 
     def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> None:
         assert X.dtype == self.config._fbound_dtype, f"X must be {np.dtype(self.config._fbound_dtype)}, got {X.dtype}"
@@ -92,7 +107,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
             X=X,
             Y=Y,
             clause_drop_mask=clause_drop_mask,
-            rng_keys=self.xp.asarray(self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64)),
+            rng_keys=self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64),
             **kwargs,
         )
 

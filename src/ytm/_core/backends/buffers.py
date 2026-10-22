@@ -1,6 +1,6 @@
 from ctypes import POINTER
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 
@@ -10,7 +10,13 @@ class FitBuffers:
     xp: Any
     cfg: Any
     make_ptrs: bool = True
-    _epoch_fields: tuple = ()
+
+    epoch_fields: dict[str, Any] = field(init=False, default_factory=dict)
+    per_sample_fields: ClassVar[tuple[str, ...]] = ("X", "Y", "rng_keys")
+
+    N: int = field(init=False, default=0)
+    chunk_start: int = field(init=False, default=0)
+    chunk_end: int = field(init=False, default=0)
 
     X: Any = field(init=False, default=None)  # (n_samples, *dim) the epoch's inputs, cast for the kernels
     Y: Any = field(init=False, default=None)  # (n_samples, n_classes) targets
@@ -49,15 +55,29 @@ class FitBuffers:
         for name, value in fields.items():
             if name not in self.__dataclass_fields__:
                 raise AttributeError(f"{type(self).__name__} has no field {name!r}")
-            if isinstance(value, np.ndarray):
-                value = self.xp.asarray(value, order="C")
-            setattr(self, name, value)
-        self._epoch_fields = tuple(fields)
+            if name not in self.per_sample_fields:
+                if isinstance(value, np.ndarray):
+                    value = self.xp.asarray(value, order="C")
+                setattr(self, name, value)
+
+        self.epoch_fields = fields
+        self.chunk_start = self.chunk_end = 0
+        self.N = fields["X"].shape[0]
 
     def end_epoch(self) -> None:
-        for name in self._epoch_fields:
+        for name in self.epoch_fields:
             setattr(self, name, None)
-        self._epoch_fields = ()
+
+        self.epoch_fields = {}
+        self.chunk_start = self.chunk_end = self.N = 0
+
+    def load_chunk(self, start: int, end: int) -> None:
+        for name in self.per_sample_fields:
+            setattr(self, name, self.xp.asarray(self.epoch_fields[name][start:end], order="C"))
+        self.chunk_start, self.chunk_end = start, end
+
+    def per_sample_bytes(self) -> int:
+        return sum(self.epoch_fields[name][0].nbytes for name in self.per_sample_fields)
 
     if TYPE_CHECKING:
         from ctypes import _Pointer

@@ -122,6 +122,13 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
         with self.cuda_dev:
             return cp.asarray(arr)
 
+
+    def _chunk_size(self, N, bytes_per_smp):
+        with self.cuda_dev:
+            cp.get_default_memory_pool().free_all_blocks()
+            free = self.cuda_dev.mem_info[0]
+            return min(N, max(1, free // bytes_per_smp))
+
     def pack_clauses(self, force_repack: bool = False, full: bool = False):
         with self.cuda_dev:
             if force_repack:

@@ -29,7 +29,7 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
 
     def post_epoch(self, total) -> float:
         buf = self.buf
-        return float(total) / buf.X.shape[0]
+        return float(total) / buf.N
 
     def _fit_decide_fb(self, e: int) -> None:
         buf = self.buf
