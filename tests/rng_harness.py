@@ -31,6 +31,7 @@ STUB = """
 #define N_PATCHES_Y 19
 #define N_PATCHES_X 19
 #define N_PATCHES 361
+#define N_POSITION_FEATS 36
 #define N_RAW_PATCH_FEATS 100
 #define N_LITERALS 272
 #define ALL_BINARY_FEATS 0
