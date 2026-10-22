@@ -171,16 +171,33 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     @abc.abstractmethod
     def _infer_batch(self, Xb, bs: int): ...
 
-    @abc.abstractmethod
-    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False): ...
+    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, batch_size, "Transform"):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._clause_outputs(Xb, end - start))
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
     @abc.abstractmethod
-    def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray: ...
+    def _clause_outputs(self, Xb, bs: int): ...
+
+    @abc.abstractmethod
+    def _patch_outputs(self, Xb, bs: int): ...
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
-        out = self._patch_outputs(X, batch_size, force_repack)
-        return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
+        N = X.shape[0]
+        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, batch_size, "Transform"):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._patch_outputs(Xb, end - start))
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
     def _batches(self, N: int, batch_size: int, desc: str) -> Iterator[tuple[int, int]]:
         bs = N if batch_size == -1 else batch_size
@@ -193,8 +210,20 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     @abc.abstractmethod
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False): ...
 
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+        cfg = self.config
+        N = X.shape[0]
+        output = np.empty((N, *cfg._dim), dtype=np.float32)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, batch_size, "WAC"):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                target_b = self.xp.asarray(target_classes[start:end], dtype=np.int32)
+                output[start:end] = self._to_host(self._wac_batch(Xb, target_b, polarity, end - start))
+        return output
+
     @abc.abstractmethod
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False): ...
+    def _wac_batch(self, Xb, target_b, polarity: int, bs: int): ...
 
     def set_threads(self, n: int):
         raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")

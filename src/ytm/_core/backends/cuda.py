@@ -221,50 +221,25 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
         self._vote_sum(self._clause_outputs(Xb, bs), bs, class_sums)
         return class_sums
 
-    def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def _patch_outputs(self, Xb, bs: int):
         cfg = self.config
-        N = X.shape[0]
-        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
-
-        with self.cuda_dev:
-            self.pack_clauses(force_repack)
-
-            for start, end in self._batches(N, batch_size, "Transform"):
-                out[start:end] = self._clause_outputs(cp.asarray(X[start:end], dtype=cfg._fbound_dtype), end - start).get()
-
-        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
-
-    def _patch_outputs(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, desc: str = "Transform") -> np.ndarray:
-        cfg = self.config
-        N = X.shape[0]
         pc = self.packed_clauses
-        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
-
-        with self.cuda_dev:
-            self.pack_clauses(force_repack)
-
-            for start, end in self._batches(N, batch_size, desc):
-                bs = end - start
-                Xb = cp.asarray(X[start:end], dtype=cfg._fbound_dtype)
-                patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
-
-                self.cu.eval_patchwise(
-                    bs * cfg._total_clauses * cfg._n_patches,
-                    (
-                        Xb,
-                        np.int32(bs),
-                        pc.clause_position_bounds,
-                        pc.clause_feat_bounds,
-                        pc.clause_feat_ids,
-                        pc.clause_n_feats,
-                        pc.has_contra,
-                        pc.clause_len,
-                        patch_output,
-                    ),
-                )
-                out[start:end] = patch_output.get()
-
-        return out
+        patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+        self.cu.eval_patchwise(
+            bs * cfg._total_clauses * cfg._n_patches,
+            (
+                Xb,
+                np.int32(bs),
+                pc.clause_position_bounds,
+                pc.clause_feat_bounds,
+                pc.clause_feat_ids,
+                pc.clause_n_feats,
+                pc.has_contra,
+                pc.clause_len,
+                patch_output,
+            ),
+        )
+        return patch_output
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -296,36 +271,25 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
             )
             return output.get()
 
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
+    def _wac_batch(self, Xb, target_b, polarity: int, bs: int):
         cfg = self.config
         pc = self.packed_clauses
-        N = X.shape[0]
-        output = np.zeros((N, *cfg._dim), dtype=np.float32)
-
-        for start, end in self._batches(N, batch_size, "WAC"):
-            bs = end - start
-            patch_output = self._patch_outputs(X[start:end], -1, force_repack and start == 0, desc="WAC activations")
-
-            with self.cuda_dev:
-                patch_output_gpu = cp.asarray(patch_output)
-                target_classes_gpu = cp.asarray(target_classes[start:end], dtype=np.int32)
-                out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
-
-                self.cu.wac(
-                    bs * cfg._total_clauses * cfg._n_patches,
-                    (
-                        target_classes_gpu,
-                        np.int32(polarity),
-                        np.int32(bs),
-                        self.clause_weights,
-                        pc.clause_feat_bounds,
-                        pc.clause_feat_ids,
-                        pc.clause_n_feats,
-                        patch_output_gpu,
-                        pc.has_contra,
-                        self.therm_bits,
-                        out_b,
-                    ),
-                )
-                output[start:end] = out_b.get()
-        return output
+        patch_output = self._patch_outputs(Xb, bs)
+        out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
+        self.cu.wac(
+            bs * cfg._total_clauses * cfg._n_patches,
+            (
+                target_b,
+                np.int32(polarity),
+                np.int32(bs),
+                self.clause_weights,
+                pc.clause_feat_bounds,
+                pc.clause_feat_ids,
+                pc.clause_n_feats,
+                patch_output,
+                pc.has_contra,
+                self.therm_bits,
+                out_b,
+            ),
+        )
+        return out_b
