@@ -3,6 +3,7 @@ import contextlib
 import copy
 import types
 from collections.abc import Iterator
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 
@@ -11,12 +12,15 @@ from ..device_config import DeviceConfig
 from ..utils import tqdm_bar
 from .buffers import FitBuffers, PackedClauses
 
+BuffersT = TypeVar("BuffersT", bound=FitBuffers)
+ConfigT = TypeVar("ConfigT", bound=BaseTMConfig)
 
-class BaseDevice(abc.ABC):
+
+class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     xp: types.ModuleType
     clause_weights: np.ndarray
 
-    def __init__(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None):
+    def __init__(self, config: ConfigT, device_config: DeviceConfig, state: dict | None = None):
         self.config = config
         self.device_config = device_config
         self._rng = np.random.default_rng(self.config.seed + 1)
@@ -58,7 +62,7 @@ class BaseDevice(abc.ABC):
                 total += self.fit_sample(rng_key, buf, e)
             return self.post_epoch(buf, total)
 
-    def fit_sample(self, rng_key: int, buf, e: int) -> float:
+    def fit_sample(self, rng_key: int, buf: BuffersT, e: int) -> float:
         self.pre_sample(buf, e)
         self.pack_clauses()
         self._fit_eval(buf, e, rng_key)
@@ -71,9 +75,9 @@ class BaseDevice(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def _fit_buffers_cls() -> type[FitBuffers]: ...
+    def _fit_buffers_cls() -> type[BuffersT]: ...
 
-    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> FitBuffers:
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> BuffersT:
         return self._fit_buffers_cls()(
             make_ptrs=self.xp is np,
             xp=self.xp,
@@ -84,29 +88,29 @@ class BaseDevice(abc.ABC):
             **kwargs,
         )
 
-    def post_epoch(self, buf, total):
+    def post_epoch(self, buf: BuffersT, total: float) -> Any:
         return None
 
-    def pre_sample(self, buf, e: int) -> None:
+    def pre_sample(self, buf: BuffersT, e: int) -> None:
         pass
 
-    def post_sample(self, buf, e: int) -> float:
+    def post_sample(self, buf: BuffersT, e: int) -> float:
         return 0.0
 
     @abc.abstractmethod
-    def _fit_eval(self, buf, e: int, rng_key): ...
+    def _fit_eval(self, buf: BuffersT, e: int, rng_key: int): ...
 
     @abc.abstractmethod
-    def _fit_voting(self, buf): ...
+    def _fit_voting(self, buf: BuffersT): ...
 
     @abc.abstractmethod
-    def _fit_decide_fb(self, buf, e: int, rng_key: int): ...
+    def _fit_decide_fb(self, buf: BuffersT, e: int, rng_key: int): ...
 
     @abc.abstractmethod
-    def _fit_apply_fb(self, buf, e: int, rng_key): ...
+    def _fit_apply_fb(self, buf: BuffersT, e: int, rng_key: int): ...
 
     @abc.abstractmethod
-    def _fit_update_weights(self, buf): ...
+    def _fit_update_weights(self, buf: BuffersT): ...
 
     def _init_weights(self):
         cfg = self.config
@@ -186,7 +190,7 @@ class BaseDevice(abc.ABC):
             return self.xp.zeros(cfg._total_clauses, dtype=np.int8)
         return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
 
-    def set_feat_drop(self, buf: FitBuffers, fids: int | list[int], value: int) -> None:
+    def set_feat_drop(self, buf: BuffersT, fids: int | list[int], value: int) -> None:
         cfg = self.config
         half = cfg._n_literals // 2
         for fid in [fids] if isinstance(fids, int) else fids:

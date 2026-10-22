@@ -8,7 +8,7 @@ import pathlib
 import numpy as np
 
 from ..utils import read_file
-from .base import BaseDevice
+from .base import BaseDevice, BuffersT, ConfigT
 
 
 class Launcher:
@@ -46,7 +46,7 @@ class Kernel:
         return launcher
 
 
-class CUDADevice(BaseDevice):
+class CUDADevice(BaseDevice[BuffersT, ConfigT]):
     _VOTING_MIN_CHUNK_SIZE = 256  # smallest clause chunk one warp sums alone
 
     xp = cp
@@ -74,7 +74,7 @@ class CUDADevice(BaseDevice):
         names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
         return {name: read_file(core / name) for name in names}
 
-    def _fit_apply_fb(self, buf, e: int, rng_key: int) -> None:
+    def _fit_apply_fb(self, buf: BuffersT, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         self.cu.update_t1b(
             self.config._total_clauses * self._warp_size,
@@ -143,7 +143,7 @@ class CUDADevice(BaseDevice):
             )
 
     # == fit steps ==
-    def _fit_eval(self, buf, e: int, rng_key):
+    def _fit_eval(self, buf: BuffersT, e: int, rng_key: int):
         cfg = self.config
         pc = self.packed_clauses
 
@@ -182,7 +182,7 @@ class CUDADevice(BaseDevice):
         if chunks > 1:
             self.cu.vote_combine_chunks(n_sums, (self._chunk_sums, np.int32(N), np.int32(chunks), class_sums))
 
-    def _fit_voting(self, buf):
+    def _fit_voting(self, buf: BuffersT):
         self._vote_sum(buf.clause_output, 1, buf.votes, self._fit_vote_chunks)
 
     def _clause_outputs(self, Xb, bs: int):

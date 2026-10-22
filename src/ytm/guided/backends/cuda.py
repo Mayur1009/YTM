@@ -5,11 +5,11 @@ import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file
-from ..config import FbSignal
+from ..config import FbSignal, TMConfig
 from .buffers import GuidedFitBuffers
 
 
-class CUDADevice(CoreCUDADevice):
+class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent

@@ -1,6 +1,6 @@
 from ctypes import POINTER
 from dataclasses import InitVar, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -43,6 +43,11 @@ class FitBuffers:
         self.t1a_t2_cid = xp.empty(n, dtype=np.uint32)
         self.t1a_cnt = xp.empty(n, dtype=cfg._nclasses_dtype)
         self.t2_cnt = xp.empty(n, dtype=cfg._nclasses_dtype)
+
+    if TYPE_CHECKING:
+        from ctypes import _Pointer
+
+        def __getattr__(self, name: str) -> _Pointer[Any] | None: ...
 
     def __setattr__(self, name: str, value: Any) -> None:
         super().__setattr__(name, value)

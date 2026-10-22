@@ -3,10 +3,11 @@ from ctypes import c_int, c_uint64
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.utils import read_file
+from ..config import TMConfig
 from .buffers import DiscreteFitBuffers
 
 
-class CPUDevice(CoreCPUDevice):
+class CPUDevice(CoreCPUDevice[DiscreteFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.c"] = read_file(pathlib.Path(__file__).parent / "update.c")

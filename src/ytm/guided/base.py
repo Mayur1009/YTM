@@ -50,7 +50,8 @@ class BaseTM(CoreBaseTM):
         X = X[iota]
         Y = np.asarray(Y, dtype=np.float32, order="C")[iota]
 
-        return self.dev.fit_epoch(X, Y, clause_drop_p, lr=lr, lambda_=lambda_)
+        cfg = self.config
+        return self.dev.fit_epoch(X, Y, clause_drop_p, lr=cfg.lr if lr is None else lr, lambda_=cfg.lambda_ if lambda_ is None else lambda_)
 
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
         # `score`/`predict` already apply the activation.

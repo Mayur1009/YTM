@@ -6,11 +6,11 @@ import numpy as np
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.backends.cpu import float_p
 from ..._core.utils import read_file
-from ..config import FbSignal
+from ..config import FbSignal, TMConfig
 from .buffers import GuidedFitBuffers
 
 
-class CPUDevice(CoreCPUDevice):
+class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent

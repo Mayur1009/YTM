@@ -86,7 +86,7 @@ def make_buffers(tm, X, Y):
 
     with _ctx(tm):
         if guided_model:
-            return dev.pre_epoch(Xp, Yf, 0.0)
+            return dev.pre_epoch(Xp, Yf, 0.0, lr=cfg.lr, lambda_=cfg.lambda_)
         return dev.pre_epoch(Xp, Yf, 0.0, label_probs=np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
 
 

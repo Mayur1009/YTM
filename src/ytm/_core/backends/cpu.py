@@ -5,8 +5,7 @@ from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_u
 import numpy as np
 
 from ..utils import read_file
-from .base import BaseDevice
-from .buffers import FitBuffers
+from .base import BaseDevice, BuffersT, ConfigT
 from .toolchain import Toolchain
 
 int8_p = POINTER(c_int8)
@@ -15,7 +14,7 @@ uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
 
-class CPUDevice(BaseDevice):
+class CPUDevice(BaseDevice[BuffersT, ConfigT]):
     xp = np
 
     def _setup(self):
@@ -44,7 +43,7 @@ class CPUDevice(BaseDevice):
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
 
-    def _fit_apply_fb(self, buf: FitBuffers, e: int, rng_key: int) -> None:
+    def _fit_apply_fb(self, buf: BuffersT, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         self.lib.update_t1b(
             c_uint64(rng_key),
@@ -117,7 +116,7 @@ class CPUDevice(BaseDevice):
         )
 
     # == fit steps ==
-    def _fit_eval(self, buf: FitBuffers, e: int, rng_key):
+    def _fit_eval(self, buf: BuffersT, e: int, rng_key: int):
         self.lib.eval_fit(
             c_uint64(rng_key),
             buf.p_X,
@@ -137,7 +136,7 @@ class CPUDevice(BaseDevice):
             self.p_patch_weights,
         )
 
-    def _fit_voting(self, buf: FitBuffers):
+    def _fit_voting(self, buf: BuffersT):
         self.lib.vote_sum(buf.p_clause_output, self.p_clause_weights, c_int(1), buf.p_votes)
 
     def _clause_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:
