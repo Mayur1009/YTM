@@ -81,7 +81,7 @@ def make_buffers(tm, X, Y):
     """Fit buffers for `X` (raw, will be prepared) and `Y` (one row per sample, already encoded)."""
     dev, cfg = tm.dev, tm.config
     Xp = tm._prepare_X(np.asarray(X))
-    Yf = np.ascontiguousarray(Y, dtype=np.float32)
+    Yf = np.asarray(Y, dtype=np.float32, order="C")
     guided_model = hasattr(cfg, "lr")
 
     with _ctx(tm):
@@ -189,7 +189,7 @@ def update_weights(tm, buf, fb=None, ids=None) -> None:
 
 def activation(tm, votes) -> np.ndarray:
     """`votes -> y_hat` through the compiled activation, no clauses involved."""
-    votes = np.ascontiguousarray(votes, dtype=np.float32)
+    votes = np.asarray(votes, dtype=np.float32, order="C")
     y_hat = np.zeros_like(votes)
     dev = tm.dev
     if not is_cuda(tm):
@@ -206,8 +206,8 @@ def activation(tm, votes) -> np.ndarray:
 
 def loss_and_grad(tm, y_hat, y) -> tuple[float, np.ndarray]:
     """`compute_loss` through the compiled kernel. Returns (loss, grad) with grad = -dL/dz."""
-    y_hat = np.ascontiguousarray(y_hat, dtype=np.float32)
-    y = np.ascontiguousarray(y, dtype=np.float32)
+    y_hat = np.asarray(y_hat, dtype=np.float32, order="C")
+    y = np.asarray(y, dtype=np.float32, order="C")
     grad, loss = np.zeros_like(y_hat), np.zeros(1, dtype=np.float32)
     dev = tm.dev
     if not is_cuda(tm):

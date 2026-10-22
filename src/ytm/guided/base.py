@@ -35,7 +35,7 @@ class BaseTM(CoreBaseTM):
     ):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
         config = self._config_cls()(n_clauses=n_clauses, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
-        super().__init__(self._build_device(config, DeviceConfig(**dev_kw)))
+        super().__init__(config, DeviceConfig(**dev_kw))
 
     def _fit(
         self,

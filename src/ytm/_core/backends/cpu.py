@@ -14,7 +14,7 @@ uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
 
 
-class CPUDevice(BaseDevice[BuffersT, ConfigT]):
+class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
     xp = np
 
     def _setup(self):
@@ -32,7 +32,7 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
         self.lib: CDLL = self.toolchain.compile(self._build_code())
         self.set_threads(self._n_threads)
 
-    def _to_host(self, arr) -> np.ndarray:
+    def _to_host(self, arr: np.ndarray) -> np.ndarray:
         return arr.copy()
 
     def _to_dev(self, arr: np.ndarray) -> np.ndarray:
@@ -145,7 +145,7 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
 
     def _clause_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         cfg = self.config
-        Xb = np.ascontiguousarray(Xb, dtype=cfg._fbound_dtype)
+        Xb = np.asarray(Xb, dtype=cfg._fbound_dtype, order="C")
         clause_outputs = np.empty((bs, cfg._total_clauses), dtype=np.int8)
         self.lib.eval_infer(
             Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
@@ -188,7 +188,7 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
 
         # Per clause max normalisation, on a copy so `patch_weights` is left alone.
         pw = self._to_host(self.patch_weights).astype(np.float32)
-        pw_norm = np.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
+        pw_norm = pw / (pw.max(axis=-1, keepdims=True) + 1e-7)
 
         output = np.zeros(cfg._dim, dtype=np.float32)
         self.lib.wic(

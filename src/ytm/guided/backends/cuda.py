@@ -98,7 +98,7 @@ class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
             (buf.grad, np.float32(buf.lr), buf.clause_output, buf.clause_drop_mask, self.clause_weights),
         )
 
-    def _infer_batch(self, Xb, bs: int):
+    def _infer_batch(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         votes = super()._infer_batch(Xb, bs)
         y_hat = cp.empty_like(votes)
         self.cu.votes_activation_batch(bs, (votes, np.int32(bs), y_hat))

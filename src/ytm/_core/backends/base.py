@@ -14,16 +14,16 @@ from .buffers import FitBuffers, PackedClauses
 
 BuffersT = TypeVar("BuffersT", bound=FitBuffers)
 ConfigT = TypeVar("ConfigT", bound=BaseTMConfig)
+ArrayT = TypeVar("ArrayT")
 
 
-class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
+class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
     xp: types.ModuleType
-    clause_weights: np.ndarray
 
     def __init__(self, config: ConfigT, device_config: DeviceConfig, state: dict | None = None):
         self.config = config
         self.device_config = device_config
-        self._rng = np.random.default_rng(self.config.seed + 1)
+        self._rng = np.random.default_rng(self.config.seed)
         self._setup()
         with self._ctx():
             self._init_consts()
@@ -44,10 +44,10 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     def _bind(self): ...
 
     @abc.abstractmethod
-    def _to_host(self, arr) -> np.ndarray: ...
+    def _to_host(self, arr: ArrayT) -> np.ndarray: ...
 
     @abc.abstractmethod
-    def _to_dev(self, arr: np.ndarray): ...
+    def _to_dev(self, arr: np.ndarray) -> ArrayT: ...
 
     @abc.abstractmethod
     def _code_sections(self) -> dict[str, str]: ...
@@ -169,7 +169,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
             return self._to_host(out)
 
     @abc.abstractmethod
-    def _infer_batch(self, Xb, bs: int): ...
+    def _infer_batch(self, Xb: ArrayT, bs: int) -> ArrayT: ...
 
     def transform(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -183,10 +183,10 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
     @abc.abstractmethod
-    def _clause_outputs(self, Xb, bs: int): ...
+    def _clause_outputs(self, Xb: ArrayT, bs: int) -> ArrayT: ...
 
     @abc.abstractmethod
-    def _patch_outputs(self, Xb, bs: int): ...
+    def _patch_outputs(self, Xb: ArrayT, bs: int) -> ArrayT: ...
 
     def transform_patchwise(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -208,7 +208,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
                 bar.update(end - start)
 
     @abc.abstractmethod
-    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False): ...
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray: ...
 
     def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, batch_size: int = -1, force_repack: bool = False) -> np.ndarray:
         cfg = self.config
@@ -223,7 +223,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
         return output
 
     @abc.abstractmethod
-    def _wac_batch(self, Xb, target_b, polarity: int, bs: int): ...
+    def _wac_batch(self, Xb: ArrayT, target_b: ArrayT, polarity: int, bs: int) -> ArrayT: ...
 
     def set_threads(self, n: int):
         raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")

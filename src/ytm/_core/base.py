@@ -38,13 +38,16 @@ class ClauseInfo:
 
 
 class BaseTM(abc.ABC):
+    def __init__(self, config: BaseTMConfig, device_config: DeviceConfig):
+        self.dev = self._build_device(config, device_config)
+
     @staticmethod
     @abc.abstractmethod
     def _config_cls() -> type[BaseTMConfig]: ...
 
-    def __init__(self, dev: BaseDevice):
-        self.dev = dev
-        self._rng = np.random.default_rng(self.config.seed)
+    @property
+    def _rng(self) -> np.random.Generator:
+        return self.dev._rng
 
     @property
     def config(self) -> BaseTMConfig:
@@ -71,14 +74,12 @@ class BaseTM(abc.ABC):
         return {
             "config": {f.name: getattr(cfg, f.name) for f in fields(cfg) if f.init and f.name != "ta_init"},
             "params": self.dev.get_state_dict(),
-            "rng": self._rng,
         }
 
     def __setstate__(self, state: dict) -> None:
         """Unpickling always lands on `cpu:1`; use `.to()` afterwards to move it."""
         cfg = self._config_cls()(**state["config"])
         self.dev = self._build_device(cfg, DeviceConfig(), state["params"])
-        self._rng = state["rng"]
 
     @abc.abstractmethod
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
@@ -341,7 +342,9 @@ class BaseTM(abc.ABC):
             title = "Clauses (coalesced)" if cfg.coalesced else f"Class: {bank}"
             render(title, header, justify, [[rows[c] for c in s] for s in sections], footers)
 
-    def _clause_cells(self, clauses: ClauseInfo, class_id: int, clause_id: int, feat_names: list[str], sym: tuple[str, ...]) -> list[tuple[str, bool]]:
+    def _clause_cells(
+        self, clauses: ClauseInfo, class_id: int, clause_id: int, feat_names: list[str], sym: tuple[str, ...]
+    ) -> list[tuple[str, bool]]:
         """Unpadded (text, is_contra) cells of one clause: [row, col] when there are patches, then one per feature, "" when unconstrained."""
         cfg = self.config
         bank = 0 if cfg.coalesced else class_id
@@ -430,9 +433,7 @@ class BaseTM(abc.ABC):
         Console().print(table)
 
     @staticmethod
-    def _render_plain(
-        title: str, header: list[str], justify: list[str], sections: list[list[list]], footers: list[str | None]
-    ) -> None:
+    def _render_plain(title: str, header: list[str], justify: list[str], sections: list[list[list]], footers: list[str | None]) -> None:
         # (text, is_contra) segments are joined, contradictions are already visible in the text itself
         sections = [[[v if isinstance(v, str) else "".join(text for text, _ in v) for v in r] for r in rows] for rows in sections]
         widths = [max(len(h), *(len(r[i]) for rows in sections for r in rows)) for i, h in enumerate(header)]

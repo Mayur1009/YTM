@@ -46,7 +46,7 @@ class Kernel:
         return launcher
 
 
-class CUDADevice(BaseDevice[BuffersT, ConfigT]):
+class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
     _VOTING_MIN_CHUNK_SIZE = 256  # smallest clause chunk one warp sums alone
 
     xp = cp
@@ -114,7 +114,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
     def _bind(self):
         pass
 
-    def _to_host(self, arr) -> np.ndarray:
+    def _to_host(self, arr: cp.ndarray) -> np.ndarray:
         with self.cuda_dev:
             return arr.get()
 
@@ -196,7 +196,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
         buf = self.buf
         self._vote_sum(buf.clause_output, 1, buf.votes, self._fit_vote_chunks)
 
-    def _clause_outputs(self, Xb, bs: int):
+    def _clause_outputs(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         cfg = self.config
         pc = self.packed_clauses
         clause_outputs = cp.empty((bs, cfg._total_clauses), dtype=np.int8)
@@ -216,12 +216,12 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
         )
         return clause_outputs
 
-    def _infer_batch(self, Xb, bs: int):
+    def _infer_batch(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         class_sums = cp.zeros((bs, self.config.n_classes), dtype=np.float32)
         self._vote_sum(self._clause_outputs(Xb, bs), bs, class_sums)
         return class_sums
 
-    def _patch_outputs(self, Xb, bs: int):
+    def _patch_outputs(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         cfg = self.config
         pc = self.packed_clauses
         patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
@@ -249,7 +249,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
             self.pack_clauses(force_repack)
 
             pw = self.patch_weights.astype(np.float32)
-            pw_norm = cp.ascontiguousarray(pw / (pw.max(axis=-1, keepdims=True) + 1e-7))
+            pw_norm = pw / (pw.max(axis=-1, keepdims=True) + 1e-7)
             output = cp.zeros(cfg._dim, dtype=np.float32)
 
             self.cu.wic(
@@ -271,7 +271,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT]):
             )
             return output.get()
 
-    def _wac_batch(self, Xb, target_b, polarity: int, bs: int):
+    def _wac_batch(self, Xb: cp.ndarray, target_b: cp.ndarray, polarity: int, bs: int) -> cp.ndarray:
         cfg = self.config
         pc = self.packed_clauses
         patch_output = self._patch_outputs(Xb, bs)

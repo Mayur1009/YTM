@@ -4,7 +4,7 @@ from typing import Literal, TypedDict
 
 import numpy as np
 
-from .initializer import TAInit, ConstTAInit, UniformTAInit
+from .initializer import ConstTAInit, TAInit, UniformTAInit
 from .utils import Feedback, enum_to_header
 
 
@@ -68,19 +68,11 @@ class BaseTMConfig:
     seed: int | None = None
 
     def __post_init__(self):
-        self._check_seed()
         self._check_params()
         self._check_feat_bounds()
         self._derive_vars()
         self._derive_types()
         self._build_header()
-
-    def _check_seed(self):
-        """Set a random seed when seed <= 0 or None, else use the provided seed."""
-        if self.seed is None or self.seed <= 0:
-            self.seed = int(np.random.randint(1, 1 << 31))
-        else:
-            self.seed = int(self.seed)
 
     def _check_params(self):
         """Clamp scalar params and validate the init options."""
