@@ -1,5 +1,5 @@
 from ctypes import POINTER
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -7,12 +7,14 @@ import numpy as np
 
 @dataclass(kw_only=True)
 class FitBuffers:
+    _epoch_fields = ()
     make_ptrs: bool = True
     xp: Any
-    cfg: InitVar[Any]
-    X: Any  # (n_samples, *dim) the epoch's inputs, cast for the kernels
-    Y: Any  # (n_samples, n_classes) targets
-    clause_drop_mask: Any  # (total_clauses,) one mask for the whole epoch, per Drop Clause
+    cfg: Any
+    X: Any = field(init=False, default=None)  # (n_samples, *dim) the epoch's inputs, cast for the kernels
+    Y: Any = field(init=False, default=None)  # (n_samples, n_classes) targets
+    clause_drop_mask: Any = field(init=False, default=None)  # (total_clauses,) one mask for the whole epoch, per Drop Clause
+    rng_keys: Any = field(init=False, default=None)  # (n_samples,) rng key of each sample
     lit_drop_mask: Any = field(init=False)  # (n_literals,) mask to skip a feature
     class_active: Any = field(init=False)  # (n_classes,) uint8, 1 when the class gets feedback on the current sample
     clause_output: Any = field(init=False)  # (total_clauses,) 1 when the clause fired on this sample
@@ -26,11 +28,9 @@ class FitBuffers:
     t1a_cnt: Any = field(init=False)  # (total_clauses,) T1a count over classes
     t2_cnt: Any = field(init=False)  # (total_clauses,) T2 count over classes
 
-    def __post_init__(self, cfg) -> None:
-        xp = self.xp
+    def __post_init__(self) -> None:
+        cfg, xp = self.cfg, self.xp
         n = cfg._total_clauses
-        self.X = xp.ascontiguousarray(self.X, dtype=cfg._fbound_dtype)
-        self.Y = xp.ascontiguousarray(self.Y, dtype=np.float32)
         self.lit_drop_mask = xp.zeros(cfg._n_literals, dtype=np.uint8)
         self.class_active = xp.ones(cfg.n_classes, dtype=np.uint8)
         self.clause_output = xp.empty(n, dtype=np.int8)
@@ -43,6 +43,20 @@ class FitBuffers:
         self.t1a_t2_cid = xp.empty(n, dtype=np.uint32)
         self.t1a_cnt = xp.empty(n, dtype=cfg._nclasses_dtype)
         self.t2_cnt = xp.empty(n, dtype=cfg._nclasses_dtype)
+
+    def start_epoch(self, **fields: Any) -> None:
+        for name, value in fields.items():
+            if name not in self.__dataclass_fields__:
+                raise AttributeError(f"{type(self).__name__} has no field {name!r}")
+            if isinstance(value, np.ndarray):
+                value = self.xp.asarray(value, order="C")
+            setattr(self, name, value)
+        self._epoch_fields = tuple(fields)
+
+    def end_epoch(self) -> None:
+        for name in self._epoch_fields:
+            setattr(self, name, None)
+        self._epoch_fields = ()
 
     if TYPE_CHECKING:
         from ctypes import _Pointer

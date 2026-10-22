@@ -32,6 +32,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
             else:
                 self._restore_params(state)
             self._bind()
+            self.buf = self._fit_buffers_cls()(make_ptrs=self.xp is np, xp=self.xp, cfg=self.config)
 
     def _ctx(self):
         return contextlib.nullcontext()
@@ -56,61 +57,58 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
 
     def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs):
         with self._ctx():
-            buf = self.pre_epoch(X, Y, clause_drop_p, **kwargs)
+            self.pre_epoch(X, Y, clause_drop_p, **kwargs)
             total = 0.0
-            for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):
-                total += self.fit_sample(rng_key, buf, e)
-            return self.post_epoch(buf, total)
+            for e in tqdm_bar(range(X.shape[0]), desc="Fit"):
+                total += self.fit_sample(e)
+            out = self.post_epoch(total)
+            self.buf.end_epoch()
+            return out
 
-    def fit_sample(self, rng_key: int, buf: BuffersT, e: int) -> float:
-        self.pre_sample(buf, e)
+    def fit_sample(self, e: int) -> float:
+        self.pre_sample(e)
         self.pack_clauses()
-        self._fit_eval(buf, e, rng_key)
-        self._fit_voting(buf)
-        self._fit_decide_fb(buf, e, rng_key)
-        self._fit_apply_fb(buf, e, rng_key)
+        self._fit_eval(e)
+        self._fit_voting()
+        self._fit_decide_fb(e)
+        self._fit_apply_fb(e)
         if self.config.weighted:
-            self._fit_update_weights(buf)
-        return self.post_sample(buf, e)
+            self._fit_update_weights()
+        return self.post_sample(e)
 
     @staticmethod
     @abc.abstractmethod
     def _fit_buffers_cls() -> type[BuffersT]: ...
 
-    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> BuffersT:
-        return self._fit_buffers_cls()(
-            make_ptrs=self.xp is np,
-            xp=self.xp,
-            cfg=self.config,
-            X=X,
-            Y=Y,
-            clause_drop_mask=self._fit_drop_mask(clause_drop_p),
-            **kwargs,
-        )
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> None:
+        assert X.dtype == self.config._fbound_dtype, f"X must be {np.dtype(self.config._fbound_dtype)}, got {X.dtype}"
+        clause_drop_mask = self._fit_drop_mask(clause_drop_p)
+        rng_keys = self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64).tolist()
+        self.buf.start_epoch(X=X, Y=Y, clause_drop_mask=clause_drop_mask, rng_keys=rng_keys, **kwargs)
 
-    def post_epoch(self, buf: BuffersT, total: float) -> Any:
+    def post_epoch(self, total: float) -> Any:
         return None
 
-    def pre_sample(self, buf: BuffersT, e: int) -> None:
+    def pre_sample(self, e: int) -> None:
         pass
 
-    def post_sample(self, buf: BuffersT, e: int) -> float:
+    def post_sample(self, e: int) -> float:
         return 0.0
 
     @abc.abstractmethod
-    def _fit_eval(self, buf: BuffersT, e: int, rng_key: int): ...
+    def _fit_eval(self, e: int): ...
 
     @abc.abstractmethod
-    def _fit_voting(self, buf: BuffersT): ...
+    def _fit_voting(self): ...
 
     @abc.abstractmethod
-    def _fit_decide_fb(self, buf: BuffersT, e: int, rng_key: int): ...
+    def _fit_decide_fb(self, e: int): ...
 
     @abc.abstractmethod
-    def _fit_apply_fb(self, buf: BuffersT, e: int, rng_key: int): ...
+    def _fit_apply_fb(self, e: int): ...
 
     @abc.abstractmethod
-    def _fit_update_weights(self, buf: BuffersT): ...
+    def _fit_update_weights(self): ...
 
     def _init_weights(self):
         cfg = self.config
@@ -179,26 +177,21 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT]):
     def _build_code(self) -> str:
         return self.config._header + "\n".join(self._code_sections().values())
 
-    def _fit_iter(self, pbar) -> Iterator[tuple[int, int]]:
-        keys = self._rng.integers(1, 1 << 62, size=len(pbar), dtype=np.uint64).tolist()
-        for e in pbar:
-            yield e, keys[e]
-
     def _fit_drop_mask(self, clause_drop_p: float):
         cfg = self.config
         if clause_drop_p <= 0.0:
             return self.xp.zeros(cfg._total_clauses, dtype=np.int8)
         return self.xp.asarray((self._rng.random(cfg._total_clauses) <= clause_drop_p).astype(np.int8))
 
-    def set_feat_drop(self, buf: BuffersT, fids: int | list[int], value: int) -> None:
+    def set_feat_drop(self, fids: int | list[int], value: int) -> None:
         cfg = self.config
         half = cfg._n_literals // 2
         for fid in [fids] if isinstance(fids, int) else fids:
             start = cfg._n_position_feats + int(cfg._literal_offsets[fid])
             end = cfg._n_position_feats + int(cfg._literal_offsets[fid + 1])
-            buf.lit_drop_mask[start:end] = value
+            self.buf.lit_drop_mask[start:end] = value
             if cfg.negated_literals:
-                buf.lit_drop_mask[half + start : half + end] = value
+                self.buf.lit_drop_mask[half + start : half + end] = value
 
     # == initializations ==
     def _init_params(self):

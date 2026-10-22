@@ -43,8 +43,10 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
 
-    def _fit_apply_fb(self, buf: BuffersT, e: int, rng_key: int) -> None:
+    def _fit_apply_fb(self, e: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         self.lib.update_t1b(
             c_uint64(rng_key),
             buf.p_t1b_n,
@@ -116,7 +118,9 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
         )
 
     # == fit steps ==
-    def _fit_eval(self, buf: BuffersT, e: int, rng_key: int):
+    def _fit_eval(self, e: int):
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         self.lib.eval_fit(
             c_uint64(rng_key),
             buf.p_X,
@@ -136,7 +140,8 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT]):
             self.p_patch_weights,
         )
 
-    def _fit_voting(self, buf: BuffersT):
+    def _fit_voting(self):
+        buf = self.buf
         self.lib.vote_sum(buf.p_clause_output, self.p_clause_weights, c_int(1), buf.p_votes)
 
     def _clause_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:

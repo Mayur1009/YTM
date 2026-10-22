@@ -86,8 +86,10 @@ def make_buffers(tm, X, Y):
 
     with _ctx(tm):
         if guided_model:
-            return dev.pre_epoch(Xp, Yf, 0.0, lr=cfg.lr, lambda_=cfg.lambda_)
-        return dev.pre_epoch(Xp, Yf, 0.0, label_probs=np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
+            dev.pre_epoch(Xp, Yf, 0.0, lr=cfg.lr, lambda_=cfg.lambda_)
+        else:
+            dev.pre_epoch(Xp, Yf, 0.0, label_probs=np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
+    return dev.buf
 
 
 def fb_ids_from_dense(tm, fb) -> np.ndarray:
@@ -155,21 +157,23 @@ def apply_feedback(tm, buf, fb, e: int = 0, key: int = 1, ids=None) -> None:
     The feedback list comes from `fb` unless `ids` overrides it.
     """
     dev = tm.dev
+    buf.rng_keys = [key] * (e + 1)
     with _ctx(tm):
         dev.pack_clauses(force_repack=True)
-        dev._fit_eval(buf, e, key)
+        dev._fit_eval(e)
         _set_feedback(tm, buf, fb, ids)
-        dev._fit_apply_fb(buf, e, key)
+        dev._fit_apply_fb(e)
 
 
 def decide_feedback(tm, buf, votes, e: int = 0, key: int = 1) -> np.ndarray:
     """Evaluate, overwrite the votes with `votes`, let the device decide feedback, return it."""
     dev = tm.dev
+    buf.rng_keys = [key] * (e + 1)
     with _ctx(tm):
         dev.pack_clauses(force_repack=True)
-        dev._fit_eval(buf, e, key)
+        dev._fit_eval(e)
         fill(tm, buf.votes, votes)
-        dev._fit_decide_fb(buf, e, key)
+        dev._fit_decide_fb(e)
     # Only discrete keeps the per class types (its weights need them), guided only fills the lists.
     return host(tm, buf.feedback_type) if hasattr(buf, "feedback_type") else None
 
@@ -179,7 +183,7 @@ def update_weights(tm, buf, fb=None, ids=None) -> None:
     with _ctx(tm):
         if fb is not None:
             _set_feedback(tm, buf, fb, ids)
-        dev._fit_update_weights(buf)
+        dev._fit_update_weights()
 
 
 def activation(tm, votes) -> np.ndarray:

@@ -17,13 +17,17 @@ class CPUDevice(CoreCPUDevice[DiscreteFitBuffers, TMConfig]):
     def _fit_buffers_cls() -> type[DiscreteFitBuffers]:
         return DiscreteFitBuffers
 
-    def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+    def _fit_eval(self, e: int) -> None:
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         if not self.config.coalesced:
             self.lib.sample_classes(c_uint64(rng_key), buf.p_label_probs, c_int(e), buf.p_class_active)
-        super()._fit_eval(buf, e, rng_key)
+        super()._fit_eval(e)
 
-    def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+    def _fit_decide_fb(self, e: int) -> None:
         """Turn the votes into a per class update probability, then pick a feedback type per clause."""
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         buf.t1b_n[0] = 0
         buf.t1a_t2_n[0] = 0
         self.lib.calc_update_prob(buf.p_votes, buf.p_Y, c_int(e), buf.p_prob)
@@ -47,5 +51,6 @@ class CPUDevice(CoreCPUDevice[DiscreteFitBuffers, TMConfig]):
             buf.p_t2_cnt,
         )
 
-    def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
+    def _fit_update_weights(self) -> None:
+        buf = self.buf
         self.lib.update_weights(buf.p_feedback_type, buf.p_t1a_t2_n, buf.p_t1a_t2_cid, self.p_clause_weights)

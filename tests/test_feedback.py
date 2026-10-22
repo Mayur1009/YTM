@@ -240,7 +240,7 @@ def test_next_sample_does_not_reapply_the_previous_list(device):
     decide_feedback(tm, buf, [-10.0])
     assert int(host(tm, buf.t1b_n)[0]) + int(host(tm, buf.t1a_t2_n)[0]) == 0
     with _ctx(tm):
-        tm.dev._fit_apply_fb(buf, 0, 1)
+        tm.dev._fit_apply_fb(0)
     assert np.array_equal(host(tm, tm.dev.ta_states), before)
 
 

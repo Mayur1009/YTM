@@ -18,12 +18,16 @@ class CUDADevice(CoreCUDADevice[DiscreteFitBuffers, TMConfig]):
     def _fit_buffers_cls() -> type[DiscreteFitBuffers]:
         return DiscreteFitBuffers
 
-    def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+    def _fit_eval(self, e: int) -> None:
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         if not self.config.coalesced:
             self.cu.sample_classes(self.config.n_classes, (np.uint64(rng_key), buf.label_probs, np.int32(e), buf.class_active))
-        super()._fit_eval(buf, e, rng_key)
+        super()._fit_eval(e)
 
-    def _fit_decide_fb(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
+    def _fit_decide_fb(self, e: int) -> None:
+        buf = self.buf
+        rng_key = buf.rng_keys[e]
         cfg = self.config
         buf.t1b_n.data.memset_async(0, buf.t1b_n.nbytes)
         buf.t1a_t2_n.data.memset_async(0, buf.t1a_t2_n.nbytes)
@@ -56,7 +60,8 @@ class CUDADevice(CoreCUDADevice[DiscreteFitBuffers, TMConfig]):
             ),
         )
 
-    def _fit_update_weights(self, buf: DiscreteFitBuffers) -> None:
+    def _fit_update_weights(self) -> None:
+        buf = self.buf
         self.cu.update_weights(
             self.config._total_clauses,
             (buf.feedback_type, buf.t1a_t2_n, buf.t1a_t2_cid, self.clause_weights),
