@@ -4,13 +4,14 @@ from ctypes import c_float, c_int, c_uint64
 import numpy as np
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
-from ..._core.backends.cpu import bind_ptrs, float_p
-from ..._core.utils import read_file, tqdm_bar
+from ..._core.backends.cpu import float_p
+from ..._core.utils import read_file
 from ..config import FbSignal
+from .base import GuidedDevice
 from .buffers import GuidedFitBuffers
 
 
-class CPUDevice(CoreCPUDevice):
+class CPUDevice(GuidedDevice, CoreCPUDevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
@@ -18,64 +19,6 @@ class CPUDevice(CoreCPUDevice):
         sections["loss"] = self.config.act_loss.src
         sections["update.c"] = read_file(here / "update.c")
         return sections
-
-    def _fit_allocs(self, X: np.ndarray, Y: np.ndarray, clause_drop_mask: np.ndarray, lr: float, lambda_: float) -> GuidedFitBuffers:
-        cfg = self.config
-        for name, arr, dtype in (("X", X, cfg._fbound_dtype), ("Y", Y, np.float32)):
-            assert arr.dtype == dtype and arr.flags.c_contiguous, (
-                f"`{name}` must be C contiguous {np.dtype(dtype)}, got {arr.dtype} contiguous={arr.flags.c_contiguous}"
-            )
-
-        extra: dict[str, np.ndarray] = {}
-        if cfg._fb_signal == FbSignal.DELTA_L:
-            extra["votes_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
-            extra["y_hat_neg_ck"] = np.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
-            extra["loss_neg_ck"] = np.empty(cfg._total_clauses, dtype=np.float32)
-
-        buf = GuidedFitBuffers(
-            X=X,
-            Y=Y,
-            clause_drop_mask=clause_drop_mask,
-            lit_drop_mask=np.zeros(cfg._n_literals, dtype=np.uint8),
-            class_active=np.ones(cfg.n_classes, dtype=np.uint8),
-            clause_output=np.empty(cfg._total_clauses, dtype=np.int8),
-            selected_pids=np.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
-            votes=np.empty(cfg.n_classes, dtype=np.float32),
-            grad=np.empty(cfg.n_classes, dtype=np.float32),
-            y_hat=np.empty(cfg.n_classes, dtype=np.float32),
-            loss=np.empty(1, dtype=np.float32),
-            lr=lr,
-            lambda_=lambda_,
-            **extra,
-            **self._fb_list_allocs(),
-        )
-        return bind_ptrs(buf)
-
-    def fit_epoch(
-        self,
-        X: np.ndarray,
-        Y: np.ndarray,
-        clause_drop_p: float,
-        lr: float | None,
-        lambda_: float | None,
-    ) -> float:
-        cfg = self.config
-        buf = self._fit_allocs(
-            X,
-            Y,
-            self._fit_drop_mask(clause_drop_p),
-            lr=cfg.lr if lr is None else lr,
-            lambda_=cfg.lambda_ if lambda_ is None else lambda_,
-        )
-
-        running_loss = 0.0
-        pbar = tqdm_bar(range(X.shape[0]), desc="Fit")
-        for e, rng_key in self._fit_iter(pbar):
-            self.fit_sample(rng_key, buf, e)
-            running_loss += float(buf.loss[0])
-            pbar.set_postfix(loss=f"{running_loss / (e + 1):.4f}")
-
-        return running_loss / X.shape[0]
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config

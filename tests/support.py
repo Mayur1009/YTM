@@ -82,25 +82,12 @@ def make_buffers(tm, X, Y):
     dev, cfg = tm.dev, tm.config
     Xp = tm._prepare_X(np.asarray(X))
     Yf = np.ascontiguousarray(Y, dtype=np.float32)
-    mask = np.zeros(cfg._total_clauses, dtype=np.int8)
     guided_model = hasattr(cfg, "lr")
-
-    if not is_cuda(tm):
-        if guided_model:
-            return dev._fit_allocs(Xp, Yf, mask, lr=cfg.lr, lambda_=cfg.lambda_)
-        return dev._fit_allocs(Xp, Yf, mask, np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
-
-    import cupy as cp
 
     with _ctx(tm):
         if guided_model:
-            buf = dev._fit_allocs(cp.asarray(mask), lr=cfg.lr, lambda_=cfg.lambda_)
-        else:
-            buf = dev._fit_allocs(cp.asarray(mask))
-            buf.label_probs = cp.ones((Xp.shape[0], cfg.n_classes), dtype=cp.float32)
-        buf.X = cp.asarray(Xp, dtype=cfg._fbound_dtype)
-        buf.Y = cp.asarray(Yf)
-    return buf
+            return dev.pre_epoch(Xp, Yf, 0.0, None, None)
+        return dev.pre_epoch(Xp, Yf, 0.0, np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
 
 
 def fb_ids_from_dense(tm, fb) -> np.ndarray:

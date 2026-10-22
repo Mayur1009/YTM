@@ -56,18 +56,8 @@ class CPUDevice(BaseDevice):
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
 
-    def _fb_list_allocs(self) -> dict[str, np.ndarray]:
-        """The T1b list and the T1a/T2 list that decide_feedback fills, for the FitBuffers."""
-        n, cnt = self.config._total_clauses, self.config._nclasses_dtype
-        return {
-            "t1b_n": np.zeros(1, dtype=np.uint32),
-            "t1b_cid": np.empty(n, dtype=np.uint32),
-            "t1b_cnt": np.empty(n, dtype=cnt),
-            "t1a_t2_n": np.zeros(1, dtype=np.uint32),
-            "t1a_t2_cid": np.empty(n, dtype=np.uint32),
-            "t1a_cnt": np.empty(n, dtype=cnt),
-            "t2_cnt": np.empty(n, dtype=cnt),
-        }
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **extra) -> FitBuffers:
+        return bind_ptrs(super().pre_epoch(X, Y, clause_drop_p, *args, **extra))
 
     def _fit_apply_fb(self, buf: FitBuffers, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""

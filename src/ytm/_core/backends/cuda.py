@@ -74,19 +74,6 @@ class CUDADevice(BaseDevice):
         names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
         return {name: read_file(core / name) for name in names}
 
-    def _fb_list_allocs(self) -> dict:
-        """The T1b list and the T1a/T2 list that decide_feedback fills, for the FitBuffers."""
-        n, cnt = self.config._total_clauses, self.config._nclasses_dtype
-        return {
-            "t1b_n": cp.zeros(1, dtype=np.uint32),
-            "t1b_cid": cp.empty(n, dtype=np.uint32),
-            "t1b_cnt": cp.empty(n, dtype=cnt),
-            "t1a_t2_n": cp.zeros(1, dtype=np.uint32),
-            "t1a_t2_cid": cp.empty(n, dtype=np.uint32),
-            "t1a_cnt": cp.empty(n, dtype=cnt),
-            "t2_cnt": cp.empty(n, dtype=cnt),
-        }
-
     def _fit_apply_fb(self, buf, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
         self.cu.update_t1b(

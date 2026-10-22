@@ -50,10 +50,16 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
-    @abc.abstractmethod
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **kwargs): ...
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **kwargs):
+        with self._ctx():
+            buf = self.pre_epoch(X, Y, clause_drop_p, *args, **kwargs)
+            total = 0.0
+            for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):
+                total += self.fit_sample(rng_key, buf, e)
+            return self.post_epoch(buf, total)
 
-    def fit_sample(self, rng_key: int, buf, e: int):
+    def fit_sample(self, rng_key: int, buf, e: int) -> float:
+        self.pre_sample(buf, e)
         self.pack_clauses()
         self._fit_eval(buf, e, rng_key)
         self._fit_voting(buf)
@@ -61,6 +67,42 @@ class BaseDevice(abc.ABC):
         self._fit_apply_fb(buf, e, rng_key)
         if self.config.weighted:
             self._fit_update_weights(buf)
+        return self.post_sample(buf, e)
+
+    @staticmethod
+    @abc.abstractmethod
+    def _fit_buffers_cls() -> type[FitBuffers]: ...
+
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **extra) -> FitBuffers:
+        cfg = self.config
+        xp = self.xp
+        return self._fit_buffers_cls()(
+            X=xp.ascontiguousarray(X, dtype=cfg._fbound_dtype),
+            Y=xp.ascontiguousarray(Y, dtype=np.float32),
+            clause_drop_mask=self._fit_drop_mask(clause_drop_p),
+            lit_drop_mask=xp.zeros(cfg._n_literals, dtype=np.uint8),
+            class_active=xp.ones(cfg.n_classes, dtype=np.uint8),
+            clause_output=xp.empty(cfg._total_clauses, dtype=np.int8),
+            selected_pids=xp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
+            votes=xp.empty(cfg.n_classes, dtype=np.float32),
+            t1b_n=xp.zeros(1, dtype=np.uint32),
+            t1b_cid=xp.empty(cfg._total_clauses, dtype=np.uint32),
+            t1b_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
+            t1a_t2_n=xp.zeros(1, dtype=np.uint32),
+            t1a_t2_cid=xp.empty(cfg._total_clauses, dtype=np.uint32),
+            t1a_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
+            t2_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
+            **extra,
+        )
+
+    def post_epoch(self, buf, total):
+        return None
+
+    def pre_sample(self, buf, e: int) -> None:
+        pass
+
+    def post_sample(self, buf, e: int) -> float:
+        return 0.0
 
     @abc.abstractmethod
     def _fit_eval(self, buf, e: int, rng_key): ...

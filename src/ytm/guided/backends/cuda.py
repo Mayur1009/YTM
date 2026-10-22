@@ -1,16 +1,16 @@
 import pathlib
-from typing import Any
 
 import cupy as cp
 import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
-from ..._core.utils import read_file, tqdm_bar
+from ..._core.utils import read_file
 from ..config import FbSignal
+from .base import GuidedDevice
 from .buffers import GuidedFitBuffers
 
 
-class CUDADevice(CoreCUDADevice):
+class CUDADevice(GuidedDevice, CoreCUDADevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
@@ -18,61 +18,6 @@ class CUDADevice(CoreCUDADevice):
         sections["loss"] = self.config.act_loss.src
         sections["update.cu"] = read_file(here / "update.cu")
         return sections
-
-    def _fit_allocs(self, clause_drop_mask, lr: float, lambda_: float) -> GuidedFitBuffers:
-        cfg = self.config
-
-        extra: dict[str, Any] = {}
-        if cfg._fb_signal == FbSignal.DELTA_L:
-            extra["votes_neg_ck"] = cp.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
-            extra["y_hat_neg_ck"] = cp.empty((cfg._total_clauses, cfg.n_classes), dtype=np.float32)
-            extra["loss_neg_ck"] = cp.empty(cfg._total_clauses, dtype=np.float32)
-
-        return GuidedFitBuffers(
-            X=None,
-            Y=None,
-            clause_drop_mask=clause_drop_mask,
-            lit_drop_mask=cp.zeros(cfg._n_literals, dtype=np.uint8),
-            class_active=cp.ones(cfg.n_classes, dtype=np.uint8),
-            clause_output=cp.empty(cfg._total_clauses, dtype=np.int8),
-            selected_pids=cp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
-            votes=cp.empty(cfg.n_classes, dtype=np.float32),
-            grad=cp.empty(cfg.n_classes, dtype=np.float32),
-            y_hat=cp.empty(cfg.n_classes, dtype=np.float32),
-            loss=cp.empty(1, dtype=np.float32),
-            lr=lr,
-            lambda_=lambda_,
-            **extra,
-            **self._fb_list_allocs(),
-        )
-
-    def fit_epoch(
-        self,
-        X: np.ndarray,
-        Y: np.ndarray,
-        clause_drop_p: float,
-        lr: float | None,
-        lambda_: float | None,
-    ) -> float:
-        cfg = self.config
-        N = X.shape[0]
-
-        with self.cuda_dev:
-            buf = self._fit_allocs(
-                self._fit_drop_mask(clause_drop_p),
-                lr=cfg.lr if lr is None else lr,
-                lambda_=cfg.lambda_ if lambda_ is None else lambda_,
-            )
-
-            buf.X = cp.asarray(X, dtype=cfg._fbound_dtype)
-            buf.Y = cp.asarray(Y, dtype=np.float32)
-            running_loss = cp.zeros(1, dtype=np.float32)
-
-            for e, rng_key in self._fit_iter(tqdm_bar(range(N), desc="Fit")):
-                self.fit_sample(rng_key, buf, e)
-                running_loss += buf.loss
-
-            return float(running_loss[0]) / N
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
