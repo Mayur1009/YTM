@@ -51,7 +51,7 @@ class BaseTM(CoreBaseTM):
         encoded_Y = np.asarray(self._encode_Y(Y[iota]), dtype=np.float32, order="C")
         label_probs = np.asarray(self._label_sampler(encoded_Y, label_sampling), dtype=np.float32, order="C")
 
-        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, label_probs)
+        self.dev.fit_epoch(X, encoded_Y, clause_drop_p, label_probs=label_probs)
 
     def score(self, X: np.ndarray, batch_size: int = -1, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
         class_sums = super().score(X, batch_size, force_repack)

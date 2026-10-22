@@ -86,8 +86,8 @@ def make_buffers(tm, X, Y):
 
     with _ctx(tm):
         if guided_model:
-            return dev.pre_epoch(Xp, Yf, 0.0, None, None)
-        return dev.pre_epoch(Xp, Yf, 0.0, np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
+            return dev.pre_epoch(Xp, Yf, 0.0)
+        return dev.pre_epoch(Xp, Yf, 0.0, label_probs=np.ones((Xp.shape[0], cfg.n_classes), dtype=np.float32))
 
 
 def fb_ids_from_dense(tm, fb) -> np.ndarray:

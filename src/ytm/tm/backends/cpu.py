@@ -3,15 +3,18 @@ from ctypes import c_int, c_uint64
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.utils import read_file
-from .base import TMDevice
 from .buffers import DiscreteFitBuffers
 
 
-class CPUDevice(TMDevice, CoreCPUDevice):
+class CPUDevice(CoreCPUDevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.c"] = read_file(pathlib.Path(__file__).parent / "update.c")
         return sections
+
+    @staticmethod
+    def _fit_buffers_cls() -> type[DiscreteFitBuffers]:
+        return DiscreteFitBuffers
 
     def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         if not self.config.coalesced:

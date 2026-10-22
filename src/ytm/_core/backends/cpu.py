@@ -1,7 +1,6 @@
 import pathlib
 import warnings
 from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
-from dataclasses import fields
 
 import numpy as np
 
@@ -14,17 +13,6 @@ int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
 float_p = POINTER(c_float)
-
-
-def bind_ptrs(buf: FitBuffers) -> FitBuffers:
-    """Adds the ctypes pointers, derived once per epoch rather than per sample."""
-    for f in fields(buf):
-        arr = getattr(buf, f.name)
-        if isinstance(arr, np.ndarray):
-            setattr(buf, f"p_{f.name}", arr.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(arr.dtype))))
-        elif arr is None:
-            setattr(buf, f"p_{f.name}", None)
-    return buf
 
 
 class CPUDevice(BaseDevice):
@@ -55,9 +43,6 @@ class CPUDevice(BaseDevice):
         core = pathlib.Path(__file__).parent
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
         return {name: read_file(core / name) for name in names}
-
-    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **extra) -> FitBuffers:
-        return bind_ptrs(super().pre_epoch(X, Y, clause_drop_p, *args, **extra))
 
     def _fit_apply_fb(self, buf: FitBuffers, e: int, rng_key: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""

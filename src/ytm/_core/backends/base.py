@@ -50,9 +50,9 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **kwargs):
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs):
         with self._ctx():
-            buf = self.pre_epoch(X, Y, clause_drop_p, *args, **kwargs)
+            buf = self.pre_epoch(X, Y, clause_drop_p, **kwargs)
             total = 0.0
             for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):
                 total += self.fit_sample(rng_key, buf, e)
@@ -73,26 +73,15 @@ class BaseDevice(abc.ABC):
     @abc.abstractmethod
     def _fit_buffers_cls() -> type[FitBuffers]: ...
 
-    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **extra) -> FitBuffers:
-        cfg = self.config
-        xp = self.xp
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> FitBuffers:
         return self._fit_buffers_cls()(
-            X=xp.ascontiguousarray(X, dtype=cfg._fbound_dtype),
-            Y=xp.ascontiguousarray(Y, dtype=np.float32),
+            make_ptrs=self.xp is np,
+            xp=self.xp,
+            cfg=self.config,
+            X=X,
+            Y=Y,
             clause_drop_mask=self._fit_drop_mask(clause_drop_p),
-            lit_drop_mask=xp.zeros(cfg._n_literals, dtype=np.uint8),
-            class_active=xp.ones(cfg.n_classes, dtype=np.uint8),
-            clause_output=xp.empty(cfg._total_clauses, dtype=np.int8),
-            selected_pids=xp.empty(cfg._total_clauses if cfg._n_patches > 1 else 1, dtype=cfg._npatches_dtype),
-            votes=xp.empty(cfg.n_classes, dtype=np.float32),
-            t1b_n=xp.zeros(1, dtype=np.uint32),
-            t1b_cid=xp.empty(cfg._total_clauses, dtype=np.uint32),
-            t1b_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
-            t1a_t2_n=xp.zeros(1, dtype=np.uint32),
-            t1a_t2_cid=xp.empty(cfg._total_clauses, dtype=np.uint32),
-            t1a_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
-            t2_cnt=xp.empty(cfg._total_clauses, dtype=cfg._nclasses_dtype),
-            **extra,
+            **kwargs,
         )
 
     def post_epoch(self, buf, total):

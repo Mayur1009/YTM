@@ -6,11 +6,10 @@ import numpy as np
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..._core.utils import read_file
 from ..config import FbSignal
-from .base import GuidedDevice
 from .buffers import GuidedFitBuffers
 
 
-class CUDADevice(GuidedDevice, CoreCUDADevice):
+class CUDADevice(CoreCUDADevice):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
@@ -18,6 +17,16 @@ class CUDADevice(GuidedDevice, CoreCUDADevice):
         sections["loss"] = self.config.act_loss.src
         sections["update.cu"] = read_file(here / "update.cu")
         return sections
+
+    @staticmethod
+    def _fit_buffers_cls() -> type[GuidedFitBuffers]:
+        return GuidedFitBuffers
+
+    def post_sample(self, buf: GuidedFitBuffers, e: int) -> float:
+        return buf.loss[0].astype(np.float64)
+
+    def post_epoch(self, buf: GuidedFitBuffers, total) -> float:
+        return float(total) / buf.X.shape[0]
 
     def _fit_decide_fb(self, buf: GuidedFitBuffers, e: int, rng_key: int) -> None:
         cfg = self.config
