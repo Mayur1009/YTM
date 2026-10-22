@@ -8,7 +8,10 @@ from .config import RegressionConfig, T_Config
 
 class RegressionTM(BaseTM):
     config: RegressionConfig
-    config_cls = RegressionConfig
+
+    @staticmethod
+    def _config_cls() -> type[RegressionConfig]:
+        return RegressionConfig
 
     def __init__(
         self,

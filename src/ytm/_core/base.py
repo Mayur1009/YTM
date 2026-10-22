@@ -38,7 +38,9 @@ class ClauseInfo:
 
 
 class BaseTM(abc.ABC):
-    config_cls: type[BaseTMConfig]
+    @staticmethod
+    @abc.abstractmethod
+    def _config_cls() -> type[BaseTMConfig]: ...
 
     def __init__(self, dev: BaseDevice):
         self.dev = dev
@@ -74,7 +76,7 @@ class BaseTM(abc.ABC):
 
     def __setstate__(self, state: dict) -> None:
         """Unpickling always lands on `cpu:1`; use `.to()` afterwards to move it."""
-        cfg = self.config_cls(**state["config"])
+        cfg = self._config_cls()(**state["config"])
         self.dev = self._build_device(cfg, DeviceConfig(), state["params"])
         self._rng = state["rng"]
 

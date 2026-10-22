@@ -10,7 +10,10 @@ from .config import T_Config, TMConfig
 
 class BaseTM(CoreBaseTM):
     config: TMConfig
-    config_cls: type[TMConfig] = TMConfig
+
+    @staticmethod
+    def _config_cls() -> type[TMConfig]:
+        return TMConfig
 
     @staticmethod
     def _device_cls(kind: str):
@@ -31,7 +34,7 @@ class BaseTM(CoreBaseTM):
         **opt: Unpack[T_Config],
     ):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
-        config = self.config_cls(n_clauses=n_clauses, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
+        config = self._config_cls()(n_clauses=n_clauses, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
         super().__init__(self._build_device(config, DeviceConfig(**dev_kw)))
 
     def _fit(
