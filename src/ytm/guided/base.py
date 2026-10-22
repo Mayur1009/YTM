@@ -40,7 +40,6 @@ class BaseTM(CoreBaseTM):
         Y: np.ndarray,
         shuffle: bool = True,
         clause_drop_p: float = 0.0,
-        batch_size: int = -1,
         lr: float | None = None,
         lambda_: float | None = None,
     ) -> float:
@@ -51,7 +50,7 @@ class BaseTM(CoreBaseTM):
         X = X[iota]
         Y = np.asarray(Y, dtype=np.float32, order="C")[iota]
 
-        return self.dev.fit_epoch(X, Y, clause_drop_p, batch_size, lr, lambda_)
+        return self.dev.fit_epoch(X, Y, clause_drop_p, lr, lambda_)
 
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
         # `score`/`predict` already apply the activation.

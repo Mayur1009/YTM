@@ -51,7 +51,7 @@ class BaseDevice(abc.ABC):
     def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
 
     @abc.abstractmethod
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, *args, **kwargs): ...
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, *args, **kwargs): ...
 
     def fit_sample(self, rng_key: int, buf, e: int):
         self.pack_clauses()
@@ -106,8 +106,8 @@ class BaseDevice(abc.ABC):
         with self._ctx():
             self.pack_clauses(force_repack)
             out = self.xp.empty((X.shape[0], cfg.n_classes), dtype=np.float32)
-            for i, end, bs in self._batches(X.shape[0], batch_size, "Infer"):
-                out[i:end] = self._infer_batch(self.xp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs)
+            for start, end in self._batches(X.shape[0], batch_size, "Infer"):
+                out[start:end] = self._infer_batch(self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype), end - start)
             return self._to_host(out)
 
     @abc.abstractmethod
@@ -124,12 +124,13 @@ class BaseDevice(abc.ABC):
         out = self._patch_outputs(X, batch_size, force_repack)
         return out.reshape(out.shape[0], cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
-    def _batches(self, N: int, batch_size: int, desc: str):
-        if batch_size == -1:
-            batch_size = N
-        for i in tqdm_bar(range(0, N, batch_size), desc=desc):
-            end = min(i + batch_size, N)
-            yield i, end, end - i
+    def _batches(self, N: int, batch_size: int, desc: str) -> Iterator[tuple[int, int]]:
+        bs = N if batch_size == -1 else batch_size
+        with tqdm_bar(None, total=N, desc=desc) as bar:
+            for start in range(0, N, bs):
+                end = min(start + bs, N)
+                yield start, end
+                bar.update(end - start)
 
     @abc.abstractmethod
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False): ...

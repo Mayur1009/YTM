@@ -38,7 +38,7 @@ class CPUDevice(CoreCPUDevice):
         )
         return bind_ptrs(buf)
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, label_probs: np.ndarray) -> None:
         buf = self._fit_allocs(X, Y, self._fit_drop_mask(clause_drop_p), label_probs)
 
         for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):

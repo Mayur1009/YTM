@@ -195,8 +195,8 @@ class CPUDevice(BaseDevice):
         out = np.empty((N, cfg._total_clauses), dtype=np.int8)
         self.pack_clauses(force_repack)
 
-        for i, end, bs in self._batches(N, batch_size, "Transform"):
-            out[i:end] = self._clause_outputs(X[i:end], bs)
+        for start, end in self._batches(N, batch_size, "Transform"):
+            out[start:end] = self._clause_outputs(X[start:end], end - start)
 
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
@@ -206,18 +206,18 @@ class CPUDevice(BaseDevice):
         out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
         self.pack_clauses(force_repack)
 
-        for i, end, bs in self._batches(N, batch_size, desc):
-            Xb = np.ascontiguousarray(X[i:end], dtype=cfg._fbound_dtype)
+        for start, end in self._batches(N, batch_size, desc):
+            Xb = np.ascontiguousarray(X[start:end], dtype=cfg._fbound_dtype)
             self.lib.eval_patchwise(
                 Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
-                c_int(bs),
+                c_int(end - start),
                 self.p_clause_position_bounds,
                 self.p_clause_feat_bounds,
                 self.p_clause_feat_ids,
                 self.p_clause_n_feats,
                 self.p_has_contra,
                 self.p_clause_len,
-                out[i:end].ctypes.data_as(int8_p),
+                out[start:end].ctypes.data_as(int8_p),
             )
         return out
 
@@ -251,15 +251,15 @@ class CPUDevice(BaseDevice):
         N = X.shape[0]
         output = np.zeros((N, *cfg._dim), dtype=np.float32)
 
-        for i, end, bs in self._batches(N, batch_size, "WAC"):
-            patch_output = self._patch_outputs(X[i:end], -1, force_repack and i == 0, desc="WAC activations")
+        for start, end in self._batches(N, batch_size, "WAC"):
+            patch_output = self._patch_outputs(X[start:end], -1, force_repack and start == 0, desc="WAC activations")
             p_patch_output = patch_output.ctypes.data_as(int8_p)
-            out_b = output[i:end]
+            out_b = output[start:end]
             p_out_b = out_b.ctypes.data_as(float_p)
 
-            for e in range(bs):
+            for e in range(end - start):
                 self.lib.wac_sample(
-                    c_int(int(target_classes[i + e])),
+                    c_int(int(target_classes[start + e])),
                     c_int(polarity),
                     p_patch_output,
                     c_int(e),

@@ -18,12 +18,11 @@ class RegressionTM(BaseTM):
         Y: np.ndarray,
         shuffle: bool = True,
         clause_drop_p: float = 0.0,
-        batch_size: int = -1,
         lr: float | None = None,
         lambda_: float | None = None,
     ) -> float:
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, batch_size, lr, lambda_)
+        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, lr, lambda_)
 
     def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 1, "Y must be 1D array (samples,)"

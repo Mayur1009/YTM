@@ -21,11 +21,10 @@ class Classifier(BaseTM):
         Y: np.ndarray,
         shuffle: bool = True,
         clause_drop_p: float = 0.0,
-        batch_size: int = -1,
         label_sampling: bool = False,
     ):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, batch_size, label_sampling)
+        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, label_sampling)
 
 
 class MultiClassTM(Classifier):

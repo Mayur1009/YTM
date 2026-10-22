@@ -231,8 +231,8 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             self.pack_clauses(force_repack)
 
-            for i, end, bs in self._batches(N, batch_size, "Transform"):
-                out[i:end] = self._clause_outputs(cp.asarray(X[i:end], dtype=cfg._fbound_dtype), bs).get()
+            for start, end in self._batches(N, batch_size, "Transform"):
+                out[start:end] = self._clause_outputs(cp.asarray(X[start:end], dtype=cfg._fbound_dtype), end - start).get()
 
         return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
 
@@ -245,8 +245,9 @@ class CUDADevice(BaseDevice):
         with self.cuda_dev:
             self.pack_clauses(force_repack)
 
-            for i, end, bs in self._batches(N, batch_size, desc):
-                Xb = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
+            for start, end in self._batches(N, batch_size, desc):
+                bs = end - start
+                Xb = cp.asarray(X[start:end], dtype=cfg._fbound_dtype)
                 patch_output = cp.empty((bs, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
 
                 self.cu.eval_patchwise(
@@ -263,7 +264,7 @@ class CUDADevice(BaseDevice):
                         patch_output,
                     ),
                 )
-                out[i:end] = patch_output.get()
+                out[start:end] = patch_output.get()
 
         return out
 
@@ -303,12 +304,13 @@ class CUDADevice(BaseDevice):
         N = X.shape[0]
         output = np.zeros((N, *cfg._dim), dtype=np.float32)
 
-        for i, end, bs in self._batches(N, batch_size, "WAC"):
-            patch_output = self._patch_outputs(X[i:end], -1, force_repack and i == 0, desc="WAC activations")
+        for start, end in self._batches(N, batch_size, "WAC"):
+            bs = end - start
+            patch_output = self._patch_outputs(X[start:end], -1, force_repack and start == 0, desc="WAC activations")
 
             with self.cuda_dev:
                 patch_output_gpu = cp.asarray(patch_output)
-                target_classes_gpu = cp.asarray(target_classes[i:end], dtype=np.int32)
+                target_classes_gpu = cp.asarray(target_classes[start:end], dtype=np.int32)
                 out_b = cp.zeros((bs, *cfg._dim), dtype=np.float32)
 
                 self.cu.wac(
@@ -327,5 +329,5 @@ class CUDADevice(BaseDevice):
                         out_b,
                     ),
                 )
-                output[i:end] = out_b.get()
+                output[start:end] = out_b.get()
         return output

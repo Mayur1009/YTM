@@ -31,24 +31,17 @@ class CUDADevice(CoreCUDADevice):
             **self._fb_list_allocs(),
         )
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, batch_size: int, label_probs: np.ndarray) -> None:
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, label_probs: np.ndarray) -> None:
         cfg = self.config
-        N = X.shape[0]
-        bs = N if batch_size == -1 else batch_size
 
         with self.cuda_dev:
             buf = self._fit_allocs(self._fit_drop_mask(clause_drop_p))
-            samples = self._fit_iter(tqdm_bar(range(N), desc="Fit"))
+            buf.X = cp.asarray(X, dtype=cfg._fbound_dtype)
+            buf.Y = cp.asarray(Y, dtype=np.float32)
+            buf.label_probs = cp.asarray(label_probs, dtype=np.float32)
 
-            for i in range(0, N, bs):
-                end = min(i + bs, N)
-                buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
-                buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
-                buf.label_probs = cp.asarray(label_probs[i:end], dtype=np.float32)
-
-                for e in range(end - i):
-                    _, rng_key = next(samples)
-                    self.fit_sample(rng_key, buf, e)
+            for e, rng_key in self._fit_iter(tqdm_bar(range(X.shape[0]), desc="Fit")):
+                self.fit_sample(rng_key, buf, e)
 
     def _fit_eval(self, buf: DiscreteFitBuffers, e: int, rng_key: int) -> None:
         if not self.config.coalesced:

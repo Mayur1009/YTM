@@ -30,7 +30,7 @@ def main() -> None:
     Y = np.arange(n) % 2 if cfg.n_classes == 1 else rng.integers(0, cfg.n_classes, n)
     target = np.zeros(n, dtype=np.int64) if cfg.n_classes == 1 else Y
     for _ in range(2):
-        tm.fit(X, Y, batch_size=3)
+        tm.fit(X, Y)
     tm.predict(X, batch_size=3)
     tm.score(X)
     tm.wac(X, target, +1, batch_size=3)

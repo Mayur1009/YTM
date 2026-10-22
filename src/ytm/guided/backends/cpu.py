@@ -56,7 +56,6 @@ class CPUDevice(CoreCPUDevice):
         X: np.ndarray,
         Y: np.ndarray,
         clause_drop_p: float,
-        batch_size: int,
         lr: float | None,
         lambda_: float | None,
     ) -> float:

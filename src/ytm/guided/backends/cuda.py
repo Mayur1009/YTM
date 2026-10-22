@@ -51,13 +51,11 @@ class CUDADevice(CoreCUDADevice):
         X: np.ndarray,
         Y: np.ndarray,
         clause_drop_p: float,
-        batch_size: int,
         lr: float | None,
         lambda_: float | None,
     ) -> float:
         cfg = self.config
         N = X.shape[0]
-        bs = N if batch_size == -1 else batch_size
 
         with self.cuda_dev:
             buf = self._fit_allocs(
@@ -66,18 +64,13 @@ class CUDADevice(CoreCUDADevice):
                 lambda_=cfg.lambda_ if lambda_ is None else lambda_,
             )
 
+            buf.X = cp.asarray(X, dtype=cfg._fbound_dtype)
+            buf.Y = cp.asarray(Y, dtype=np.float32)
             running_loss = cp.zeros(1, dtype=np.float32)
-            samples = self._fit_iter(tqdm_bar(range(N), desc="Fit"))
 
-            for i in range(0, N, bs):
-                end = min(i + bs, N)
-                buf.X = cp.asarray(X[i:end], dtype=cfg._fbound_dtype)
-                buf.Y = cp.asarray(Y[i:end], dtype=np.float32)
-
-                for e in range(end - i):
-                    _, rng_key = next(samples)
-                    self.fit_sample(rng_key, buf, e)
-                    running_loss += buf.loss
+            for e, rng_key in self._fit_iter(tqdm_bar(range(N), desc="Fit")):
+                self.fit_sample(rng_key, buf, e)
+                running_loss += buf.loss
 
             return float(running_loss[0]) / N
 
