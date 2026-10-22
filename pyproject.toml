@@ -25,9 +25,10 @@ examples = [
     "wordcloud",
     "nltk"
 ]
-test = [
-    "pytest",
-]
+
+[dependency-groups]
+test = ["pytest"]
+dev = ["jupyterlab", "ipdb", "marimo", "rich", { include-group = "test" }]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not benchmark and not statistical and not sanitize'"
@@ -70,12 +71,6 @@ ytm = { path = ".", editable = true, extras = ["examples"] }
 clang = "*"
 llvm-openmp = "*"
 
-[tool.pixi.feature.dev.dependencies]
-jupyterlab = "*"
-ipdb = "*"
-marimo = "*"
-rich = "*"
-
 [tool.pixi.feature.cuda]
 platforms = ["linux-cuda", "win-cuda"]
 
@@ -83,5 +78,5 @@ platforms = ["linux-cuda", "win-cuda"]
 cuda = "*"
 
 [tool.pixi.environments]
-default = { features = ["dev", "test"] }
-cuda = { features = ["dev", "cuda", "test"] }
+default = { features = ["dev"] }
+cuda = { features = ["dev", "cuda"] }

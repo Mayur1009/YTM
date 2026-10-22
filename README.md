@@ -27,6 +27,12 @@ Requires Python >= 3.11.
     pip install "ytm[cuda] @ git+https://gitlab.com/Mayur1009/YTM.git"    # CPU + CUDA
     ```
 
+- Using `uv`:
+    ```bash
+    uv add "ytm @ git+https://gitlab.com/Mayur1009/YTM.git"          # CPU
+    uv add "ytm[cuda] @ git+https://gitlab.com/Mayur1009/YTM.git"    # CPU + CUDA
+    ```
+
 -  Using [pixi](https://pixi.sh) (*Recommended*):
     ```bash
     pixi add clang llvm-openmp                                                  # C compiler + OpenMP for CPU
@@ -80,6 +86,10 @@ The environment needed is defined in `pyproject.toml`.
 git clone https://gitlab.com/Mayur1009/YTM.git && cd YTM
 pixi install              # CPU, includes clang and llvm-openmp
 pixi install -e cuda      # CUDA
+
+# or with uv, needs a system C compiler with OpenMP (see Install)
+uv sync --group dev                 # CPU
+uv sync --group dev --extra cuda    # CUDA
 ```
 
 ### Tests
