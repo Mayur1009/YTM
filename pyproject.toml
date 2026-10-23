@@ -4,12 +4,18 @@ dependencies = [
     "numpy",
     "scipy",
     "tqdm",
+    "rich",
     "psutil",
 ]
 name = "YTM"
 requires-python = ">=3.11"
 version = "0.8.0+w1"
 
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+# Extras
 [project.optional-dependencies]
 cuda = [
     "cupy-cuda12x[ctk]",
@@ -28,8 +34,15 @@ examples = [
 
 [dependency-groups]
 test = ["pytest"]
-dev = ["jupyterlab", "ipdb", "marimo", "rich", { include-group = "test" }]
+dev = ["jupyterlab", "ipdb", "marimo", { include-group = "test" }]
+bench = ["tmu @ git+https://github.com/cair/tmu.git", "datasets"]
+bench-cuda = [
+    "PySparseCoalescedTsetlinMachineCUDA @ git+https://github.com/cair/PySparseCoalescedTsetlinMachineCUDA.git",
+    "pycuda",
+    { include-group = "bench" },
+]
 
+# Pytest
 [tool.pytest.ini_options]
 addopts = "-m 'not benchmark and not statistical and not sanitize'"
 markers = [
@@ -38,10 +51,45 @@ markers = [
     "sanitize: ASan/UBSan runs of tiny models, skipped by default (run with `pytest -m sanitize`)",
 ]
 
-[build-system]
-build-backend = "hatchling.build"
-requires = ["hatchling"]
+# Pixi environments
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = [
+    { name = "linux-cpu", platform = "linux-64" },
+    { name = "win-cpu", platform = "win-64" },
+    "osx-arm64",
 
+    # CUDA platforms
+    { name = "linux-cuda", platform = "linux-64", cuda = "12" },
+    { name = "win-cuda", platform = "win-64", cuda = "12" },
+]
+
+## Compiler and openmp
+[tool.pixi.dependencies]
+clang = "*"
+llvm-openmp = "*"
+
+[tool.pixi.pypi-dependencies]
+ytm = { path = ".", editable = true, extras = ["examples"] }
+
+## CUDA packages
+[tool.pixi.feature.cuda]
+platforms = ["linux-cuda", "win-cuda"]
+
+[tool.pixi.feature.cuda.dependencies]
+cuda = "*"
+
+### Temporary tmu patch
+[tool.pixi.feature.bench.target.osx-arm64.activation.env]
+CC = "$PIXI_PROJECT_ROOT/bench/tmu_cc_temp_workaround.sh"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+cuda = { features = ["dev", "cuda"], solve-group = "cuda" }
+bench = { features = ["bench"], solve-group = "default" }
+# bench-cuda = { features = ["cuda", "bench-cuda"], solve-group = "cuda" }
+
+# LSPs, linters and foramtters
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportUnusedImport = false
@@ -53,30 +101,3 @@ exclude = [
 
 [tool.ruff]
 line-length = 140
-
-[tool.pixi.workspace]
-channels = ["conda-forge"]
-platforms = [
-    { name = "linux-cpu", platform = "linux-64" },
-    { name = "win-cpu", platform = "win-64" },
-    "osx-arm64",
-    { name = "linux-cuda", platform = "linux-64", cuda = "12" },
-    { name = "win-cuda", platform = "win-64", cuda = "12" },
-]
-
-[tool.pixi.pypi-dependencies]
-ytm = { path = ".", editable = true, extras = ["examples"] }
-
-[tool.pixi.dependencies]
-clang = "*"
-llvm-openmp = "*"
-
-[tool.pixi.feature.cuda]
-platforms = ["linux-cuda", "win-cuda"]
-
-[tool.pixi.feature.cuda.dependencies]
-cuda = "*"
-
-[tool.pixi.environments]
-default = { features = ["dev"] }
-cuda = { features = ["dev", "cuda"] }

@@ -17,3 +17,6 @@ wandb
 
 # uv environments
 .venv
+
+# bench results
+bench/results/
