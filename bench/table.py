@@ -1,10 +1,11 @@
 import argparse
 import json
+import math
 import pathlib
 import statistics
 from collections import defaultdict
 
-RESULTS = pathlib.Path(__file__).parent / "results"
+RESULTS = pathlib.Path(__file__).parent / "final-results"
 TABLES = [
     ("Non-coalesced", "CPU", 0, "cpu", "tmu", "TMU"),
     ("Non-coalesced", "CUDA", 0, "cuda", "tmu", "TMU"),
@@ -44,7 +45,7 @@ def load(dataset: str | None) -> dict:
 
 
 def cell(a: dict | None, b: dict | None, metric: str, fmt: str, unit: str = "") -> str:
-    fmt_one = lambda r: f"{format(r[metric], fmt)}{unit}" if r else ""
+    fmt_one = lambda r: ("-" if math.isnan(r[metric]) else f"{format(r[metric], fmt)}{unit}") if r else ""
     return f"{fmt_one(a)} / {fmt_one(b)}"
 
 
@@ -54,7 +55,7 @@ def print_tables(results: dict) -> None:
         if not expnames:
             continue
         mem, mem_name = ("vram", "Peak VRAM (MB)") if device == "cuda" else ("ram", "Peak RAM (MB)")
-        print(f"## {arch}\n### {dev_name}\n\n(YTM / {other_name})\n")
+        print(f"### {arch}\n#### {dev_name}\n\n(YTM / {other_name})\n")
         print(f"| Experiment | Fit (epoch 1) | Fit (avg epoch 2-10) | Predict | {mem_name} | Acc |")
         print("|---|---|---|---|---|---|")
         for exp in expnames:
