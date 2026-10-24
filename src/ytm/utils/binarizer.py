@@ -20,8 +20,8 @@ class Binarizer:
         Strategy for computing thresholds. ``"uniform"`` spaces thresholds
         evenly between min and max. ``"quantile"`` places thresholds at
         equal-frequency percentiles.
-    type : {"thermometer", "onehot"}, default="thermometer"
-        Encoding type. ``"thermometer"`` sets all bits up to the bin index;
+    encoding : {"thermometer", "onehot"}, default="thermometer"
+        ``"thermometer"`` sets all bits up to the bin index.
         ``"onehot"`` sets exactly one bit.
 
     Examples
@@ -37,12 +37,12 @@ class Binarizer:
         bins: int,
         edge_bins: bool = False,
         method: Literal["uniform", "quantile"] = "uniform",
-        type: Literal["thermometer", "onehot"] = "thermometer",
+        encoding: Literal["thermometer", "onehot"] = "thermometer",
     ):
         self.bins = bins
         self.edge_bins = edge_bins
         self.method = method
-        self.type = type
+        self.encoding = encoding
 
     def fit(self, X: np.ndarray, thresholds=None, min_val=None, max_val=None) -> None:
         """Compute bin thresholds from data.
@@ -107,11 +107,7 @@ class Binarizer:
         return out
 
     def _collapse_thermometer(self, X):
-        def f(b):
-            nz = np.argwhere(b).ravel()
-            z = nz[-1] + 1 if len(nz) > 0 else 0
-            return z
-        out = np.apply_along_axis(f, -1, X)
+        out = X.any(axis=-1) * (X.shape[-1] - np.argmax(X[..., ::-1], axis=-1))
 
         if self.edge_bins:
             out = out - 1
@@ -134,7 +130,7 @@ class Binarizer:
 
         assert X.ndim >= 3, "Input should be at least a 3D array (N, ... , binned_dim)"
 
-        if self.type == "thermometer":
+        if self.encoding == "thermometer":
             if self.edge_bins:
                 assert X.shape[-1] == self.bins + 2, (
                     f"Last dim should contain {self.bins + 2} elements, got {X.shape[-1]}"
@@ -143,7 +139,7 @@ class Binarizer:
                 assert X.shape[-1] == self.bins, f"Last dim should contain {self.bins} elements, got {X.shape[-1]}"
             return self._collapse_thermometer(X)
 
-        elif self.type == "onehot":
+        elif self.encoding == "onehot":
             if self.edge_bins:
                 assert X.shape[-1] == self.bins + 3, (
                     f"Last dim should contain {self.bins + 3} elements, got {X.shape[-1]}"
@@ -154,7 +150,7 @@ class Binarizer:
                 )
             return self._collapse_onehot(X)
         else:
-            raise ValueError(f"Unknown type: {self.type}")
+            raise ValueError(f"Unknown encoding: {self.encoding}")
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         """Binarize ``X`` using the fitted thresholds.
@@ -167,15 +163,15 @@ class Binarizer:
         Returns
         -------
         ndarray of shape (N, ..., bins) or (N, ..., bins+1)
-            Binarized output. Last dimension size depends on ``type`` and
+            Binarized output. Last dimension size depends on ``encoding`` and
             ``edge_bins``.
         """
-        if self.type == "thermometer":
+        if self.encoding == "thermometer":
             return self._transform_thermometer(X)
-        elif self.type == "onehot":
+        elif self.encoding == "onehot":
             return self._transform_onehot(X)
         else:
-            raise ValueError(f"Unknown type: {self.type}")
+            raise ValueError(f"Unknown encoding: {self.encoding}")
 
     def fit_transform(self, X: np.ndarray) -> np.ndarray:
         """Fit thresholds and binarize ``X`` in one step.

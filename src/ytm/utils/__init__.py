@@ -91,14 +91,14 @@ def print_table(id: str, rows: dict[str, dict], force_no_rich: bool = False) -> 
             table.add_row(f"[bold dim]{name}[/]", *(str(row.get(h, "-")) for h in headers))
         _console.print(table)
     else:
-        col_width = 10
-        sep = "+" + "+".join(["-" * (col_width + 2)] * (len(headers) + 1)) + "+"
-        header = f"| {id:>{col_width}} |" + "".join(f" {h:>{col_width}} |" for h in headers)
+        table = [[id, *headers]] + [[name, *(str(row.get(h, "-")) for h in headers)] for name, row in rows.items()]
+        widths = [max(len(str(cell)) for cell in col) for col in zip(*table)]
+        sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+        lines = ["|" + "|".join(f" {cell!s:>{w}} " for cell, w in zip(line, widths)) + "|" for line in table]
         print(sep)
-        print(header)
+        print(lines[0])
         print(sep)
-        for name, row in rows.items():
-            line = f"| {name:>{col_width}} |" + "".join(f" {row.get(h, '-')!s:>{col_width}} |" for h in headers)
+        for line in lines[1:]:
             print(line)
         print(sep)
 
