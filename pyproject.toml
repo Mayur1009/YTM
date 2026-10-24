@@ -4,7 +4,6 @@ dependencies = [
     "numpy",
     "scipy",
     "tqdm",
-    "rich",
     "psutil",
 ]
 name = "YTM"
@@ -34,7 +33,7 @@ examples = [
 
 [dependency-groups]
 test = ["pytest"]
-dev = ["jupyterlab", "ipdb", "marimo", { include-group = "test" }]
+dev = ["jupyterlab", "ipdb", "marimo", "rich", { include-group = "test" }]
 bench = ["tmu @ git+https://github.com/cair/tmu.git", "datasets"]
 bench-cuda = [
     "PySparseCoalescedTsetlinMachineCUDA @ git+https://github.com/cair/PySparseCoalescedTsetlinMachineCUDA.git",
