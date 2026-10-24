@@ -20,6 +20,39 @@ class ActFn(IntEnum):
 
 @dataclass(kw_only=True)
 class TMConfig(BaseTMConfig):
+    """Settings for the guided TM models. Also takes every parameter of :class:`~ytm._core.config.BaseTMConfig`.
+
+    Parameters
+    ----------
+    lr : float, default=1.0
+        Learning rate of the clause weights: ``w += lr * grad``. ``fit`` can override it per call.
+
+    lambda_ : float, default=1.0
+        Feedback rate. A clause gets feedback with probability ``1 - exp(-lambda_ * |grad|)``.
+        ``fit`` can override it per call.
+
+    weight_init : float or str, default="random"
+        Initial clause weight magnitude.
+
+        - ``"random"``: uniform in ``[0, 1)``.
+        - ``"random:N"``: uniform in ``[0, N)``, ``N`` a positive float.
+        - A number >= 0 sets every weight to that magnitude.
+
+    act_loss : ActLoss, default=SoftmaxCE()
+        Output activation and loss. Its activation must be ``"softmax"``, ``"sigmoid"`` or
+        ``"identity"``.
+
+    fb_signal : {"delta_l", "grad"}, default="delta_l"
+        Signal that decides clause feedback.
+
+        - ``"delta_l"``: change in loss when the clause output flips.
+        - ``"grad"``: gradient of the loss for the clause's class, signed by the clause polarity.
+
+    See Also
+    --------
+    ytm.guided.backends.act_loss : Available activation and loss pairs.
+    """
+
     lr: float = 1.0
     lambda_: float = 1.0
     weight_init: Literal["random"] | float | str = "random"

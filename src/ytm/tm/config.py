@@ -17,6 +17,22 @@ def _clamp_f32(x: float) -> float:
 
 @dataclass(kw_only=True)
 class TMConfig(BaseTMConfig):
+    """Settings for the discrete TM models. Also takes every parameter of :class:`~ytm._core.config.BaseTMConfig`.
+
+    Parameters
+    ----------
+    T : float or tuple of (float, float)
+        Vote threshold. A float ``T`` clips class sums to ``[-T, T]``. A tuple gives
+        ``[T_min, T_max]``.
+
+    q : float, default=1.0
+        Negative class sampling rate. With more than one class, each non-target class gets feedback
+        with probability ``q / (n_classes - 1)``. The target class always gets feedback.
+
+    weight_init : int, default=1
+        Initial clause weight magnitude, a positive int.
+    """
+
     T: float | tuple[float, float]
     q: float = 1.0
     weight_init: int = 1
@@ -45,6 +61,15 @@ class TMConfig(BaseTMConfig):
 
 @dataclass(kw_only=True)
 class RegressionConfig(TMConfig):
+    """Settings for the discrete regression TM. Also takes every parameter of :class:`~ytm.tm.config.TMConfig`.
+
+    Parameters
+    ----------
+    y_range : tuple of (float, float), default=(0.0, 1.0)
+        Range ``(lo, hi)`` of the targets, ``lo < hi``. Targets are scaled linearly from this
+        range to ``[0, T_max]``. Every target must lie inside it.
+    """
+
     y_range: tuple[float, float] = (0.0, 1.0)
 
     def _derive_vars(self):

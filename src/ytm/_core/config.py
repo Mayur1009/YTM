@@ -21,7 +21,7 @@ class Feedback(IntEnum):
     T2 = 3
 
 
-def _get_unsinged_type(val: int):
+def _get_unsigned_type(val: int):
     if val <= (1 << 8):
         _dtype, _ctype = np.uint8, "uint8_t"
     elif val <= (1 << 16):
@@ -32,8 +32,105 @@ def _get_unsinged_type(val: int):
     return _dtype, _ctype
 
 
-@dataclass()
+@dataclass
 class BaseTMConfig:
+    """Settings shared by all TM models.
+
+    Parameters
+    ----------
+    n_clauses : int
+        Number of clauses per class or clause bank, at least 1. When ``coalesced``, all classes
+        share one clause bank, so total clauses = ``n_clauses``. When not coalesced, total
+        clauses = ``n_clauses * n_classes``.
+
+    s : float
+        Specificity, at least 1.0.
+
+    dim : int or tuple of int
+        Input shape: ``D``, ``(H, W)`` or ``(H, W, C)``. Missing trailing sizes are set to 1.
+
+    n_classes : int
+        Number of outputs (classes or labels).
+
+    feat_mins, feat_maxs : int or array-like of int, default=0, 1
+        Inclusive integer range of each feature. For binary features, use 0 and 1 (the
+        defaults). For thermometer encoded features, a feature uses ``feat_maxs - feat_mins``
+        thermometer bits.
+
+        - A single int sets the same min or max for all features.
+        - Without convolution, an array with one entry per feature sets min and max per feature.
+        - With convolution, pass an int, or a tuple of length ``C`` for min and max per channel.
+
+    patch_dim : tuple of (int, int), default=None
+        Convolution window ``(h, w)``. None means the whole image (no convolution).
+        An entry <= 0 or larger than the image uses the full size in that axis.
+
+    stride : tuple of (int, int), default=(1, 1)
+        Window step in y and x.
+
+    track_patch_weights : bool, default=True
+        Count, per clause and patch, which patches the clause picks. Needed by ``wic`` on
+        convolutional models.
+
+    coalesced : bool, default=True
+        One clause bank shared by all classes with per-class weights. False gives each class
+        its own bank.
+
+    negative_clauses : bool, default=True
+        Start half the clauses with negative polarity (voting against a class).
+
+    negated_literals : bool, default=True
+        Append the negation of each literal. Doubles the literal count.
+
+    position_literals : bool, default=True
+        Add thermometer-coded patch position literals. Only used when there is more than one patch.
+
+    max_includes : int, default=None
+        Literal budget of a clause. None, <= 0 or more than the literal count means no limit.
+
+    n_states : int, default=256
+        TA states per literal, at least 2.
+
+    include_state : int, default=None
+        Lowest state that counts as include. None or -1 means ``n_states // 2``.
+
+    ta_init : str, int or TAInit, default="middle"
+        Initial TA states.
+
+        - ``"middle"``: just below include.
+        - ``"random"``: uniform over all states.
+        - ``"random_include"``: uniform over the two states around the include boundary.
+        - ``"random:N"``: uniform in a band of ``N`` states on each side of the boundary.
+        - An int sets every TA to that state.
+        - A ``TAInit`` (TA initializer) defines how to initialize the states or clauses.
+
+    weighted : bool, default=True
+        Learn clause weights. False keeps the initial weights.
+
+    max_weight : float, default=2**30
+        Largest weight magnitude.
+
+    allow_polarity_change : bool, default=True
+        Let a weight cross zero and flip the clause's polarity.
+
+    skip_t1a_fb, skip_t1b_fb, skip_t2_fb : bool, default=False
+        Turn off Type Ia, Type Ib or Type II feedback.
+
+    boost_tp_inc : bool, default=True
+        Type Ia increment steps for true literals always happen, instead of with probability
+        ``1 - 1/s``.
+
+    boost_tp_dec : bool, default=False
+        Type Ia decrement steps always happen, instead of with probability ``1/s``.
+
+    seed : int, default=None
+        RNG seed. None picks a random seed.
+
+    See Also
+    --------
+    ytm._core.initializer : Available TA initializers.
+    """
+
     n_clauses: int
     s: float
     dim: int | tuple[int, ...]
@@ -47,7 +144,7 @@ class BaseTMConfig:
     patch_dim: tuple[int, int] | None = None
     stride: tuple[int, int] = (1, 1)
 
-    # conlutional interpretability
+    # convolutional interpretability
     track_patch_weights: bool = True
 
     # clause bank
@@ -66,7 +163,6 @@ class BaseTMConfig:
 
     # clause weights
     weighted: bool = True
-    weight_init: float | str = 1
     max_weight: float = float(1 << 30)
     allow_polarity_change: bool = True
 
@@ -81,23 +177,28 @@ class BaseTMConfig:
     seed: int | None = None
 
     def __post_init__(self):
-        self._check_params()
-        self._check_feat_bounds()
+        self._resolve_scalars()
+        self._resolve_geometry()
+        self._resolve_states()
+        self._resolve_ta_init()
+        self._resolve_feat_bounds()
         self._derive_vars()
         self._derive_types()
         self._build_header()
 
-    def _check_params(self):
-        """Clamp scalar params and validate the init options."""
-        self._n_clauses = max(1, int(self.n_clauses))
-        self._s = max(1.0, float(self.s))
+    def _resolve_scalars(self):
+        assert self.n_clauses >= 1, f"n_clauses must be at least 1, got {self.n_clauses}"
+        assert self.s >= 1.0, f"s must be at least 1.0, got {self.s}"
+        self._n_clauses = self.n_clauses
+        self._s = float(self.s)
 
+    def _resolve_geometry(self):
         dim = (self.dim,) if isinstance(self.dim, int) else tuple(self.dim)
         assert 1 <= len(dim) <= 3, f"dim must be an int or a tuple of length 1, 2 or 3, got {self.dim}"
         assert all(isinstance(d, (int, np.integer)) for d in dim), f"dim entries must be ints, got {self.dim}"
 
         # (H,) -> (H, 1, 1), (H, W) -> (H, W, 1), (H, W, C) stays as is.
-        padded = [int(d) for d in dim] + [1] * (3 - len(dim))
+        padded = [d for d in dim] + [1] * (3 - len(dim))
         self._dim: tuple[int, int, int] = (padded[0], padded[1], padded[2])
 
         # patch dim
@@ -117,7 +218,7 @@ class BaseTMConfig:
         assert all(isinstance(st, (int, np.integer)) and st > 0 for st in self.stride), (
             f"stride entries must be positive ints, got {self.stride}"
         )
-        self._stride = (int(self.stride[0]), int(self.stride[1]))
+        self._stride = (self.stride[0], self.stride[1])
 
         # number of patches and raw features
         self._n_patches_y = ((self._dim[0] - self._patch_dim[0]) // self._stride[0]) + 1
@@ -125,6 +226,7 @@ class BaseTMConfig:
         self._n_patches = self._n_patches_y * self._n_patches_x
         self._n_raw_patch_feats = self._patch_dim[0] * self._patch_dim[1] * self._dim[2]
 
+    def _resolve_states(self):
         # TA states, need at least an include and an exclude state
         assert self.n_states >= 2, f"n_states must be at least 2, got {self.n_states}"
 
@@ -137,6 +239,7 @@ class BaseTMConfig:
             )
             self._include_state = self.include_state
 
+    def _resolve_ta_init(self):
         # TA initial state
         if isinstance(self.ta_init, int) and not isinstance(self.ta_init, bool):
             assert 0 <= self.ta_init < self.n_states, f"ta_init int must be in [0, {self.n_states}), got {self.ta_init}"
@@ -175,7 +278,7 @@ class BaseTMConfig:
                 f", or TAInit, got {type(self.ta_init).__name__}"
             )
 
-    def _resolve_feat_bound(self, name: str, value: int | Sequence[int] | np.ndarray) -> np.ndarray:
+    def _broadcast_feat_bound(self, name: str, value: int | Sequence[int] | np.ndarray) -> np.ndarray:
         n_feat = self._n_raw_patch_feats
         depth = self._dim[2]
 
@@ -192,10 +295,10 @@ class BaseTMConfig:
 
         return arr.reshape(-1)
 
-    def _check_feat_bounds(self):
+    def _resolve_feat_bounds(self):
         """Broadcast feat bounds to one int32 entry per raw patch feature."""
-        self._feat_mins = self._resolve_feat_bound("feat_mins", self.feat_mins)
-        self._feat_maxs = self._resolve_feat_bound("feat_maxs", self.feat_maxs)
+        self._feat_mins = self._broadcast_feat_bound("feat_mins", self.feat_mins)
+        self._feat_maxs = self._broadcast_feat_bound("feat_maxs", self.feat_maxs)
         self._therm_bits = self._feat_maxs - self._feat_mins
         self._all_binary_feats = bool(np.all(self._therm_bits == 1))
 
@@ -231,25 +334,25 @@ class BaseTMConfig:
 
     def _derive_types(self):
         # TA states
-        self._ta_dtype, self._ta_ctype = _get_unsinged_type(self.n_states)
+        self._ta_dtype, self._ta_ctype = _get_unsigned_type(self.n_states)
 
         # therm bits
-        self._fbound_dtype, self._fbound_ctype = _get_unsinged_type(int(self._therm_bits.max()) + 1)
+        self._fbound_dtype, self._fbound_ctype = _get_unsigned_type(int(self._therm_bits.max()) + 1)
 
         # number of features
-        self._nfeat_dtype, self._nfeat_ctype = _get_unsinged_type(self._n_raw_patch_feats + 1)
+        self._nfeat_dtype, self._nfeat_ctype = _get_unsigned_type(self._n_raw_patch_feats + 1)
 
         # number of patches
-        self._npatches_dtype, self._npatches_ctype = _get_unsinged_type(self._n_patches)
+        self._npatches_dtype, self._npatches_ctype = _get_unsigned_type(self._n_patches)
 
         # patch index bounds
-        self._pbound_dtype, self._pbound_ctype = _get_unsinged_type(max(self._n_patches_y, self._n_patches_x))
+        self._pbound_dtype, self._pbound_ctype = _get_unsigned_type(max(self._n_patches_y, self._n_patches_x))
 
         # number of literals
-        self._nlits_dtype, self._nlits_ctype = _get_unsinged_type(self._n_literals + 1)
+        self._nlits_dtype, self._nlits_ctype = _get_unsigned_type(self._n_literals + 1)
 
         # number of classes, per clause feedback counts go 0..n_classes
-        self._nclasses_dtype, self._nclasses_ctype = _get_unsinged_type(self.n_classes + 1)
+        self._nclasses_dtype, self._nclasses_ctype = _get_unsigned_type(self.n_classes + 1)
 
         self._therm_bits = self._therm_bits.astype(self._fbound_dtype)
         self._literal_offsets = self._literal_offsets.astype(self._nlits_dtype)
@@ -357,7 +460,7 @@ class T_BaseTMConfig(TypedDict, total=False):
     patch_dim: tuple[int, int] | None
     stride: tuple[int, int]
 
-    # conlutional interpretability
+    # convolutional interpretability
     track_patch_weights: bool
 
     # clause bank

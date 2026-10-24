@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ytm._core.config import _get_unsinged_type
+from ytm._core.config import _get_unsigned_type
 
 from .support import FB_NONE, FB_T1A, apply_feedback, discrete, host, make_buffers, set_clauses, set_ta_states, set_weights
 
@@ -12,7 +12,7 @@ from .support import FB_NONE, FB_T1A, apply_feedback, discrete, host, make_buffe
 )
 def test_type_choice_at_the_thresholds(val, dtype):
     """The chosen type must hold every value 0..val-1: 256 fits uint8 (max 255), 257 needs uint16."""
-    assert _get_unsinged_type(val)[0] is dtype
+    assert _get_unsigned_type(val)[0] is dtype
 
 
 @pytest.mark.parametrize("n_states", [256, 257, 65536, 65537])

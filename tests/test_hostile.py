@@ -37,13 +37,19 @@ def test_extreme_T_keeps_probabilities_and_state_in_bounds(device, T):
     assert np.all(np.isfinite(tm.score(X)))
 
 
-@pytest.mark.parametrize("s", [1.0, 1e30, 1e-30])
+@pytest.mark.parametrize("s", [1.0, 1e30])
 def test_extreme_s_keeps_ta_states_in_bounds(device, s):
-    """s=1e30 makes geom_sample return ~1e30: the float->int cast must stay behind the loop guard. s<1 is clamped to 1."""
+    """s=1e30 makes geom_sample return ~1e30: the float->int cast must stay behind the loop guard."""
     tm = discrete("multi", device, n_classes=2, s=s, n_states=NS)
     X, Y = _xy()
     tm.fit(X, Y)
     _assert_sane(tm)
+
+
+@pytest.mark.parametrize("kw", [{"s": 1e-30}, {"s": 0.5}, {"n_clauses": 0}, {"n_clauses": -1}])
+def test_invalid_s_or_n_clauses_raises(kw):
+    with pytest.raises(AssertionError):
+        discrete("multi", **kw)
 
 
 @pytest.mark.parametrize("lr", [0.0, 1e-30, 1e30])

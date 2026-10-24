@@ -39,9 +39,6 @@ def _small_patch_tm(device):
     return discrete("binary", device, n_clauses=2, dim=(10, 10, 1), patch_dim=(8, 8), stride=(5, 5), feat_maxs=1)
 
 
-# RED, real bug: `wic` writes the raw patch feature index instead of the image offset when N_PATCHES == 1.
-# Cause: interpret.c:51 `output[k] += cp * wm;` in the `#else` branch of `wic`; it should use `feature_offset(k, 0, 0)`.
-# Reproducer: this geometry, clause 0 includes feature 8, weight +2 -> got 2.0 at [0, 8], expected 2.0 at [1, 0].
 def test_wic_puts_a_patch_feature_at_its_image_pixel_when_patch_is_smaller_than_the_image(device):
     """Patch feature 8 is window pixel (1,0) = image flat index 10; `wic` wrote it at the raw index 8."""
     tm = _small_patch_tm(device)
@@ -69,8 +66,6 @@ def test_wac_puts_a_patch_feature_at_its_image_pixel_when_patch_is_smaller_than_
     assert np.array_equal(out, expected)
 
 
-# RED, real bug: src/ytm/_core/base.py:39 `cfg._feat_mins.reshape(cfg._dim)` in the `n_patches == 1` branch of `_prepare_X`;
-# `_feat_mins` has one entry per patch feature (64 here), `_dim` has 100 pixels, so it raises ValueError.
 def test_score_runs_when_a_single_window_is_smaller_than_the_image(device):
     """One window smaller than the image made `_prepare_X` reshape 64 bounds into 100 pixels, so score/fit/wac raised ValueError."""
     tm = _small_patch_tm(device)
