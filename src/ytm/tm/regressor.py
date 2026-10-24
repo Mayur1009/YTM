@@ -37,11 +37,7 @@ class RegressionTM(BaseTM):
         clause_drop_p: float = 0.0,
     ):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p)
-
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        assert Y.ndim == 1, "Y must be 1D array (samples,)"
-        return Y.reshape(-1, 1)
+        return self._fit(X, self.config.prepare_Y(Y), shuffle, clause_drop_p)
 
     def predict(self, X: np.ndarray, clip_class_sums: bool = True, force_repack: bool = False):
         lo, hi = self.config.y_range

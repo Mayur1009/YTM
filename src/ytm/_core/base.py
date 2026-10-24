@@ -6,7 +6,6 @@ import numpy as np
 from .backends.base import BaseDevice
 from .config import BaseTMConfig
 from .device_config import DeviceConfig
-from .utils import prepare_X
 
 
 @dataclass
@@ -84,32 +83,18 @@ class BaseTM(abc.ABC):
     @abc.abstractmethod
     def _fit(self, X: np.ndarray, Y: np.ndarray, *args, **kwargs): ...
 
-    def _prepare_X(self, X: np.ndarray) -> np.ndarray:
-        return prepare_X(self.config, X)
-
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
-        n_classes = self.config.n_classes
-        if Y.ndim == 2 and Y.shape[1] == n_classes:
-            return Y
-        Y = Y.reshape(-1)
-        if n_classes == 1:
-            assert np.isin(Y, (0, 1)).all(), "Binary Y must contain only {0, 1}."
-            return Y.reshape(-1, 1)
-        assert np.isin(Y, np.arange(n_classes)).all(), f"Class labels must be in [0, {n_classes})."
-        return (Y[:, None] == np.arange(n_classes)).astype(np.int8)
-
     def score(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        return self.dev.infer(self._prepare_X(X), force_repack)
+        return self.dev.infer(self.config.prepare_X(X), force_repack)
 
     @abc.abstractmethod
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
         """Map class sums from `score`/`predict` to [0, 1]."""
 
     def transform(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        return self.dev.transform(self._prepare_X(X), force_repack)
+        return self.dev.transform(self.config.prepare_X(X), force_repack)
 
     def transform_patchwise(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        return self.dev.transform_patchwise(self._prepare_X(X), force_repack)
+        return self.dev.transform_patchwise(self.config.prepare_X(X), force_repack)
 
     def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
         if self.config._n_patches > 1 and not self.config.track_patch_weights:
@@ -117,7 +102,7 @@ class BaseTM(abc.ABC):
         return self.dev.wic(class_id, polarity, pw_th, force_repack)
 
     def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
-        return self.dev.wac(self._prepare_X(X), target_classes, polarity, force_repack)
+        return self.dev.wac(self.config.prepare_X(X), target_classes, polarity, force_repack)
 
     def set_threads(self, n: int) -> None:
         self.dev.set_threads(max(1, n))

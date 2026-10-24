@@ -2,8 +2,6 @@ import abc
 
 import numpy as np
 
-from .utils import prepare_X
-
 __all__ = ["ConstTAInit", "SampleTAInit", "TAInit", "UniformTAInit"]
 
 
@@ -137,7 +135,7 @@ class SampleTAInit(TAInit):
     ):
         assert cfg is not None, "SampleTAInit needs the model config"
         assert shape == (cfg._total_clauses, cfg._n_literals), f"shape {shape} does not match the config"
-        X = prepare_X(cfg, self.X)
+        X = cfg.prepare_X(self.X)
         Y = None if self.Y is None else self._hot_Y(cfg.n_classes)
 
         cls = self._pick_class(rng, cfg)

@@ -24,7 +24,7 @@ class Classifier(BaseTM):
         label_sampling: bool = False,
     ):
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, label_sampling)
+        return self._fit(X, self.config.prepare_Y(Y), shuffle, clause_drop_p, label_sampling)
 
 
 class MultiClassTM(Classifier):

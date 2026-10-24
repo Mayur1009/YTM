@@ -80,7 +80,7 @@ def set_weights(tm, weights) -> None:
 def make_buffers(tm, X, Y):
     """Fit buffers for `X` (raw, will be prepared) and `Y` (one row per sample, already encoded)."""
     dev, cfg = tm.dev, tm.config
-    Xp = tm._prepare_X(np.asarray(X))
+    Xp = cfg.prepare_X(X)
     Yf = np.asarray(Y, dtype=np.float32, order="C")
     guided_model = hasattr(cfg, "lr")
 

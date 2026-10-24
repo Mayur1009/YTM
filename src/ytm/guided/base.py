@@ -47,7 +47,7 @@ class BaseTM(CoreBaseTM):
         lambda_: float | None = None,
     ) -> float:
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        X = self._prepare_X(X)
+        X = self.config.prepare_X(X)
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
         X = X[iota]

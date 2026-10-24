@@ -46,7 +46,7 @@ class BaseTM(CoreBaseTM):
         clause_drop_p: float = 0.0,
         label_sampling: bool = False,
     ) -> None:
-        X = self._prepare_X(X)
+        X = self.config.prepare_X(X)
 
         iota = self._rng.permutation(X.shape[0]) if shuffle else np.arange(X.shape[0])
         X = X[iota]
@@ -67,8 +67,6 @@ class BaseTM(CoreBaseTM):
         return (np.clip(class_sums, t_min, t_max) - t_min) / (t_max - t_min)
 
     def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
-        assert np.isin(Y, (0, 1)).all(), "Y must be binary (0 or 1)"
         return np.where(Y == 1, self.config._T_max, self.config._T_min).astype(np.float32)
 
     def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:

@@ -28,7 +28,7 @@ class Classifier(BaseTM):
         lambda_: float | None = None,
     ) -> float:
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples."
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, lr, lambda_)
+        return self._fit(X, self.config.prepare_Y(Y), shuffle, clause_drop_p, lr, lambda_)
 
 
 class MultiClassTM(Classifier):

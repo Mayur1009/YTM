@@ -22,11 +22,8 @@ class RegressionTM(BaseTM):
         lambda_: float | None = None,
     ) -> float:
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
-        return self._fit(X, self._prepare_Y(Y), shuffle, clause_drop_p, lr, lambda_)
-
-    def _prepare_Y(self, Y: np.ndarray) -> np.ndarray:
         assert Y.ndim == 1, "Y must be 1D array (samples,)"
-        return Y.reshape(-1, 1)
+        return self._fit(X, Y.reshape(-1, 1), shuffle, clause_drop_p, lr, lambda_)
 
     def predict(self, X: np.ndarray, force_repack: bool = False):
         class_sums = self.score(X, force_repack=force_repack)

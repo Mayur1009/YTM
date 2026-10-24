@@ -294,6 +294,46 @@ class BaseTMConfig:
 {enum_to_header("FB", Feedback)}
 """
 
+    def prepare_X(self, X: np.ndarray) -> np.ndarray:
+        """Check X against the feature bounds and shift it to `[0, therm_bits]`, shaped `(N, *self._dim)`."""
+        X = np.asarray(X, order="C")
+
+        # number of features match
+        assert np.prod(X.shape[1:]) == np.prod(self._dim), f"Expected input features to match dim {self._dim}, but got {X.shape[1:]}"
+
+        # Check if values are in provided bounds
+        if self._patch_is_image:
+            lo, hi, axes = self._feat_mins.reshape(self._dim), self._feat_maxs.reshape(self._dim), 0
+        else:
+            lo, hi, axes = self._feat_mins[: self._dim[2]], self._feat_maxs[: self._dim[2]], (0, 1, 2)
+        Xv = X.reshape(X.shape[0], *self._dim)
+        assert np.all(Xv.min(axis=axes) >= lo), f"X has values below feat_mins, min is {int(Xv.min())}"
+        assert np.all(Xv.max(axis=axes) <= hi), f"X has values above feat_maxs, max is {int(Xv.max())}"
+
+        # Shift X, so that the model always sees X in [0, therm_bits]
+        return np.asarray((Xv - lo) if np.any(lo) else Xv, dtype=self._fbound_dtype, order="C")
+
+    def prepare_Y(self, Y: np.ndarray) -> np.ndarray:
+        """Check Y, and convert any type of provided Y to multihot/onehot."""
+        n_classes = self.n_classes
+        Y = np.asarray(Y, order="C")
+
+        if Y.ndim == 2 and Y.shape[1] == n_classes:
+            # Y is already, multi hot (multilabel) or one hot (multiclass)
+            assert np.isin(Y, (0, 1)).all(), "Multi hot or one hot Y must contain only {0, 1}."
+            return Y
+
+        Y = Y.reshape(-1)
+        if n_classes == 1:
+            # Binary case
+            assert np.isin(Y, (0, 1)).all(), "Binary Y must contain only {0, 1}."
+            return Y.reshape(-1, 1)
+
+        # Multiclass, given as [0, n_classes)
+        assert np.isin(Y, np.arange(n_classes)).all(), f"Class labels must be in [0, {n_classes})."
+
+        return (Y[:, None] == np.arange(n_classes)).astype(np.int8)
+
 
 class T_BaseTMConfig(TypedDict, total=False):
     # discrete input

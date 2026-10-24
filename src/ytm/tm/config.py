@@ -51,6 +51,13 @@ class RegressionConfig(TMConfig):
         super()._derive_vars()
         assert self.y_range[0] < self.y_range[1], f"`y_range[0]` must be < `y_range[1]`, got {self.y_range}"
 
+    def prepare_Y(self, Y: np.ndarray) -> np.ndarray:
+        Y = np.asarray(Y, order="C")
+        assert Y.ndim == 1, "Y must be 1D array (samples,)"
+        lo, hi = self.y_range
+        assert np.all((Y >= lo) & (Y <= hi)), f"Y must be in y_range {self.y_range}, got [{Y.min()}, {Y.max()}]"
+        return Y.reshape(-1, 1)
+
 
 class T_Config(T_BaseTMConfig, T_DeviceConfig, total=False):
     q: float
