@@ -87,7 +87,7 @@ CC = "$PIXI_PROJECT_ROOT/bench/tmu_cc_temp_workaround.sh"
 default = { features = ["dev"], solve-group = "default" }
 cuda = { features = ["dev", "cuda"], solve-group = "cuda" }
 bench = { features = ["bench"], solve-group = "default" }
-# bench-cuda = { features = ["cuda", "bench-cuda"], solve-group = "cuda" }
+bench-cuda = { features = ["cuda", "bench-cuda"], solve-group = "cuda" }
 
 # LSPs, linters and foramtters
 [tool.basedpyright]

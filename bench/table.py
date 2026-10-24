@@ -23,7 +23,8 @@ def summarize(run: dict) -> dict:
     epochs = run["epochs"]
     peak = lambda key: max(max(e["fit"][key] or 0, e["predict"][key] or 0) for e in epochs) / 1e6
     return {
-        "fit": statistics.mean(e["fit"]["elapsed"] for e in epochs),
+        "fit1": epochs[0]["fit"]["elapsed"],
+        "fit": statistics.mean(e["fit"]["elapsed"] for e in epochs[1:]) if len(epochs) > 1 else float("nan"),
         "predict": statistics.mean(e["predict"]["elapsed"] for e in epochs),
         "ram": peak("ram_peak"),
         "vram": peak("vram_peak"),
@@ -42,8 +43,8 @@ def load(dataset: str | None) -> dict:
     return {key: {m: statistics.mean(r[m] for r in runs) for m in runs[0]} for key, runs in groups.items()}
 
 
-def cell(a: dict | None, b: dict | None, metric: str, fmt: str) -> str:
-    fmt_one = lambda r: format(r[metric], fmt) if r else ""
+def cell(a: dict | None, b: dict | None, metric: str, fmt: str, unit: str = "") -> str:
+    fmt_one = lambda r: f"{format(r[metric], fmt)}{unit}" if r else ""
     return f"{fmt_one(a)} / {fmt_one(b)}"
 
 
@@ -52,14 +53,19 @@ def print_tables(results: dict) -> None:
         expnames = sorted({k[1] for k in results if k[2] == coalesced and k[3] == device})
         if not expnames:
             continue
-        mem, mem_name = ("vram", "Peak VRAM MB") if device == "cuda" else ("ram", "Peak RAM MB")
-        names = f"(YTM / {other_name})"
-        print(f"## {arch}\n\n### {dev_name}\n")
-        print(f"| Experiment | Fit s/epoch {names} | Predict s {names} | {mem_name} {names} | Acc % {names} |")
-        print("|---|---|---|---|---|")
+        mem, mem_name = ("vram", "Peak VRAM (MB)") if device == "cuda" else ("ram", "Peak RAM (MB)")
+        print(f"## {arch}\n### {dev_name}\n\n(YTM / {other_name})\n")
+        print(f"| Experiment | Fit (epoch 1) | Fit (avg epoch 2-10) | Predict | {mem_name} | Acc |")
+        print("|---|---|---|---|---|---|")
         for exp in expnames:
             a, b = results.get(("ytm", exp, coalesced, device)), results.get((other, exp, coalesced, device))
-            cells = [cell(a, b, "fit", ".2f"), cell(a, b, "predict", ".2f"), cell(a, b, mem, ".0f"), cell(a, b, "acc", ".2f")]
+            cells = [
+                cell(a, b, "fit1", ".2f", "s"),
+                cell(a, b, "fit", ".2f", "s"),
+                cell(a, b, "predict", ".2f", "s"),
+                cell(a, b, mem, ".0f"),
+                cell(a, b, "acc", ".2f", "%"),
+            ]
             print(f"| {exp} | " + " | ".join(cells) + " |")
         print()
 
