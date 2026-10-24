@@ -35,10 +35,12 @@ class _Sampler(threading.Thread):
         self.cpu_samples: list[int] = []
         self.gpu_samples: list[int] = []
         self._gpu_handle = None
+        self._nvml = False
 
         if _HAS_NVML:
             try:
                 pynvml.nvmlInit()
+                self._nvml = True
                 self._gpu_handle = self._find_gpu(cuda_id)
             except pynvml.NVMLError:
                 warnings.warn("NVML initialization failed. GPU metrics disabled.")
@@ -72,7 +74,7 @@ class _Sampler(threading.Thread):
         """Signal the thread to stop, join it, and shut down NVML if active."""
         self._stop_event.set()
         self.join()
-        if self._gpu_handle:
+        if self._nvml:
             pynvml.nvmlShutdown()
 
 
@@ -82,6 +84,9 @@ class Profiler:
     Samples RAM (and optionally VRAM) at a fixed poll rate while the block
     executes. Call :meth:`get_profile` or :meth:`summary` after the block
     to inspect results. Requires ``pynvml`` for GPU metrics.
+
+    RAM is the process RSS. VRAM is the per-process memory reported by NVML,
+    which includes the CUDA context and any memory pool, not only arrays in use.
 
     Parameters
     ----------
@@ -125,6 +130,18 @@ class Profiler:
 
     @property
     def elapsed(self) -> float:
+        """Elapsed time in seconds. Must be accessed after the context exits.
+
+        Returns
+        -------
+        float
+            Wall-clock seconds between ``__enter__`` and ``__exit__``.
+
+        Raises
+        ------
+        RuntimeError
+            If accessed before the context has started or exited.
+        """
         if not hasattr(self, "_start_time"):
             raise RuntimeError("Profiler has not been started yet.")
         if not hasattr(self, "_end_time"):
@@ -165,7 +182,7 @@ class Profiler:
         p.summary()
 
 
-def _fmt_bytes(b: int | float) -> str:
+def _fmt_bytes(b: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if abs(b) < 1024:
             return f"{b:.2f} {unit}"
@@ -179,6 +196,27 @@ class Profile:
 
     All memory values are in bytes. VRAM fields are ``None`` if no GPU was
     detected or ``pynvml`` is not installed.
+
+    Attributes
+    ----------
+    elapsed : float
+        Wall-clock seconds of the profiled block.
+    ram_start : int
+        RAM at the first sample.
+    ram_peak : int
+        Highest RAM sample.
+    ram_mean : int
+        Mean of all RAM samples.
+    ram_delta : int
+        Last RAM sample minus first.
+    vram_start : int or None
+        VRAM at the first sample.
+    vram_peak : int or None
+        Highest VRAM sample.
+    vram_mean : int or None
+        Mean of all VRAM samples.
+    vram_delta : int or None
+        Last VRAM sample minus first.
     """
     elapsed: float
     ram_start: int
