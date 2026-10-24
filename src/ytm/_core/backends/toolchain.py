@@ -1,3 +1,25 @@
+"""C compiler setup and build cache for the cpu backend.
+
+The compiler and flags are picked once per machine by building small probe libraries, and the
+choice is cached. Compiled kernels are cached too, keyed by their source, the compiler, the flags
+and the host name, so a cache shared between machines never loads a library built for another CPU.
+
+Environment variables
+---------------------
+CC
+    Compiler command. Default: the first of ``clang``, ``gcc``, ``cc`` on the PATH.
+CFLAGS, LDFLAGS
+    Extra compile and link flags, appended after the defaults.
+YTM_CACHE_DIR
+    Cache directory. Default: ``$XDG_CACHE_HOME/ytm`` or ``~/.cache/ytm``.
+YTM_NO_CACHE
+    Set to turn both caches off.
+YTM_CACHE_SRC
+    Set to also write each kernel's C source next to its cached library.
+OMP_PREFIX, HOMEBREW_PREFIX
+    macOS only: extra places to look for ``libomp``.
+"""
+
 import hashlib
 import itertools
 import json
@@ -31,15 +53,13 @@ int ytm_probe(int requested) {
 """
 
 
-def _flag_candidates():
+def _flag_candidates() -> list[tuple[list[str], list[str]]]:
     cflags = ["-fPIC", "-O3", "-march=native", "-mtune=native", *shlex.split(os.environ.get("CFLAGS", ""))]
     ldflags = ["-shared", "-lm", *shlex.split(os.environ.get("LDFLAGS", ""))]
-    base = [(list(cflags), list(ldflags))]
-    darwin = [(list(cflags), list(ldflags))]
+    out = [(list(cflags), list(ldflags))]
     if platform.system() == "Darwin" and pathlib.Path("/usr/bin/ld").exists():
-        darwin.append((list(cflags), ldflags + ["-fuse-ld=/usr/bin/ld"]))
-
-    return {"Linux": base, "Windows": base, "Darwin": darwin}
+        out.append((list(cflags), ldflags + ["-fuse-ld=/usr/bin/ld"]))
+    return out
 
 
 def _darwin_openmp_prefixes() -> list[pathlib.Path]:
@@ -65,23 +85,39 @@ def _darwin_openmp_prefixes() -> list[pathlib.Path]:
     return out
 
 
-def _omp_flag_candidates():
-    darwin = [(["-Xpreprocessor", "-fopenmp"], ["-Wl,-undefined,dynamic_lookup"], None)]
+def _omp_flag_candidates() -> list[tuple[list[str], list[str], pathlib.Path | None]]:
+    if platform.system() != "Darwin":
+        return [(["-fopenmp"], [], None)]
+
+    out: list[tuple[list[str], list[str], pathlib.Path | None]] = [(["-Xpreprocessor", "-fopenmp"], ["-Wl,-undefined,dynamic_lookup"], None)]
     for prefix in _darwin_openmp_prefixes():
-        darwin.append(
+        out.append(
             (
                 ["-Xpreprocessor", "-fopenmp", f"-I{prefix / 'include'}"],
                 ["-Wl,-undefined,dynamic_lookup"],
                 prefix / "lib" / "libomp.dylib",
             )
         )
+    return out
 
-    ret = {
-        "Linux": [(["-fopenmp"], [], None)],
-        "Windows": [(["-fopenmp"], [], None)],
-        "Darwin": darwin,
-    }
-    return ret
+
+def _resolve_cachedir() -> pathlib.Path | None:
+    if os.environ.get("YTM_NO_CACHE"):
+        return None
+    if directory := os.environ.get("YTM_CACHE_DIR"):
+        cachedir = pathlib.Path(directory)
+    elif xdg := os.environ.get("XDG_CACHE_HOME"):
+        cachedir = pathlib.Path(xdg) / "ytm"
+    elif os.environ.get("HOME"):
+        cachedir = pathlib.Path.home() / ".cache" / "ytm"
+    else:
+        return None
+
+    try:
+        cachedir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return cachedir
 
 
 def compiler_cmd() -> list[str]:
@@ -94,56 +130,44 @@ def compiler_cmd() -> list[str]:
 
 
 class Toolchain:
+    """Builds C code into shared libraries for the cpu backend.
+
+    Parameters
+    ----------
+    openmp : bool, default=True
+        Try to build with OpenMP. If no flags work, it builds without, and
+        ``is_openmp_working`` is False with the reasons in ``omp_failures``.
+    """
+
     def __init__(self, openmp: bool = True):
         self.openmp = openmp
         self._base_flags = _flag_candidates()
-
-        if self.openmp:
-            self._omp_flags = _omp_flag_candidates()
-        else:
-            self._omp_flags = {
-                "Linux": [([], [], None)],
-                "Windows": [([], [], None)],
-                "Darwin": [([], [], None)],
-            }
+        self._omp_flags = _omp_flag_candidates() if openmp else [([], [], None)]
 
         self.tempdir = pathlib.Path(tempfile.mkdtemp(prefix="ytm-"))
         weakref.finalize(self, shutil.rmtree, self.tempdir, ignore_errors=True)
 
         self.save_src = bool(os.environ.get("YTM_CACHE_SRC"))
-        self.cachedir: pathlib.Path | None = None
-        if not os.environ.get("YTM_NO_CACHE"):
-            if directory := os.environ.get("YTM_CACHE_DIR"):
-                self.cachedir = pathlib.Path(directory)
-            elif xdg := os.environ.get("XDG_CACHE_HOME"):
-                self.cachedir = pathlib.Path(xdg) / "ytm"
-            elif os.environ.get("HOME"):
-                self.cachedir = pathlib.Path.home() / ".cache" / "ytm"
-
-            if self.cachedir is not None:
-                try:
-                    self.cachedir.mkdir(parents=True, exist_ok=True)
-                except OSError:
-                    self.cachedir = None
-
+        self.cachedir = _resolve_cachedir()
         self.comp = compiler_cmd()
+        self.omp_failures: list[str] = []
+        self._decide_flags()
 
+    def _decide_flags(self) -> None:
         if (cached := self._load_decision()) is not None:
             self.cflags, self.ldflags, self.omp_runtime, self.is_openmp_working = cached
             if not self.is_openmp_working:
                 self.omp_failures = [f"  cached decision in {self._cache_path()}, set YTM_NO_CACHE=1 to disable cache and get errors."]
-        else:
-            system = platform.system()
-            self.omp_failures = []
+            return
 
-            found = self._resolve_flags(self._omp_flags[system], self.omp_failures) if self.openmp else None
-            self.is_openmp_working = found is not None
-            if found is None:
-                found = self._resolve_flags([([], [], None)], self.omp_failures)
+        found = self._resolve_flags(self._omp_flags, self.omp_failures) if self.openmp else None
+        self.is_openmp_working = found is not None
+        if found is None:
+            found = self._resolve_flags([([], [], None)], self.omp_failures)
 
-            base_cf, base_lf = self._base_flags[system][0]
-            self.cflags, self.ldflags, self.omp_runtime = found or (list(base_cf), list(base_lf), None)
-            self._cache_toolchain()
+        base_cf, base_lf = self._base_flags[0]
+        self.cflags, self.ldflags, self.omp_runtime = found or (list(base_cf), list(base_lf), None)
+        self._cache_toolchain()
 
     def _cache_key(self) -> str:
         found = shutil.which(self.comp[0])
@@ -155,6 +179,7 @@ class Toolchain:
             f"{stat.st_size}:{stat.st_mtime_ns}" if stat else "",
             platform.system(),
             platform.machine(),
+            platform.node(),
             sys.prefix,
             str(self.openmp),
             repr(self._base_flags),
@@ -217,9 +242,7 @@ class Toolchain:
         return bool(lib.ytm_probe(min(2, os.cpu_count() or 1)))
 
     def _resolve_flags(self, candidates, failures: list[str]):
-        base = self._base_flags[platform.system()]
-
-        for tag, ((omp_cf, omp_lf, preload), (base_cf, base_lf)) in enumerate(itertools.product(candidates, base)):
+        for tag, ((omp_cf, omp_lf, preload), (base_cf, base_lf)) in enumerate(itertools.product(candidates, self._base_flags)):
             cand_cf, cand_lf = base_cf + omp_cf, base_lf + omp_lf
             is_omp = bool(omp_cf)
             what = f"  {' '.join(cand_cf + cand_lf)}"
@@ -259,12 +282,13 @@ class Toolchain:
 
     def _artifact_key(self, code: str) -> str:
         h = hashlib.sha256()
-        for part in (code, *self.comp, *self.cflags, *self.ldflags, platform.machine()):
+        for part in (code, *self.comp, *self.cflags, *self.ldflags, platform.machine(), platform.node()):
             h.update(part.encode())
             h.update(b"\0")
         return h.hexdigest()
 
     def compile(self, code: str) -> CDLL:
+        """Build ``code`` into a shared library and load it, reusing a cached build if there is one."""
         if self.cachedir is None:
             return self._build(code, self.cflags, self.ldflags)
 
