@@ -270,8 +270,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
 
     def _init_clauses(self):
         cfg = self.config
-        shape = (cfg._total_clauses, cfg._n_literals)
-        states = cfg._ta_init(self._rng, shape, cfg.n_states, cfg=cfg, weights=self._to_host(self.clause_weights))
+        states = cfg._ta_init(self._rng, cfg, self._to_host(self.clause_weights))
         self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
 
     def _init_patch_weights(self):
