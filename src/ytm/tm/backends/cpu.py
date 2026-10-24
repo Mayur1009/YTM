@@ -3,18 +3,18 @@ from ctypes import c_int
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..config import TMConfig
-from .buffers import DiscreteFitBuffers
+from .buffers import TMFitBuffers
 
 
-class CPUDevice(CoreCPUDevice[DiscreteFitBuffers, TMConfig]):
+class CPUDevice(CoreCPUDevice[TMFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.c"] = (pathlib.Path(__file__).parent / "update.c").read_text()
         return sections
 
     @staticmethod
-    def _fit_buffers_cls() -> type[DiscreteFitBuffers]:
-        return DiscreteFitBuffers
+    def _fit_buffers_cls() -> type[TMFitBuffers]:
+        return TMFitBuffers
 
     def _fit_eval(self, e: int) -> None:
         buf = self.buf

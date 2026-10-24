@@ -4,18 +4,18 @@ import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
 from ..config import TMConfig
-from .buffers import DiscreteFitBuffers
+from .buffers import TMFitBuffers
 
 
-class CUDADevice(CoreCUDADevice[DiscreteFitBuffers, TMConfig]):
+class CUDADevice(CoreCUDADevice[TMFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         sections["update.cu"] = (pathlib.Path(__file__).parent / "update.cu").read_text()
         return sections
 
     @staticmethod
-    def _fit_buffers_cls() -> type[DiscreteFitBuffers]:
-        return DiscreteFitBuffers
+    def _fit_buffers_cls() -> type[TMFitBuffers]:
+        return TMFitBuffers
 
     def _fit_eval(self, e: int) -> None:
         buf = self.buf
