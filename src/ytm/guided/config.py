@@ -77,6 +77,11 @@ class TMConfig(BaseTMConfig):
         assert self.act_loss.act.upper() in ActFn.__members__, (
             f"act_loss.act must be one of {[m.lower() for m in ActFn.__members__]}, got {self.act_loss.act!r}"
         )
+        for name in ("weights", "pos_weights", "neg_weights"):
+            w = getattr(self.act_loss, name, None)
+            assert w is None or len(w) == self.n_classes, (
+                f"act_loss.{name} must have one entry per class ({self.n_classes}), got {len(w)}"
+            )
         assert self.fb_signal.upper() in FbSignal.__members__, (
             f"fb_signal must be one of {[m.lower() for m in FbSignal.__members__]}, got {self.fb_signal!r}"
         )
