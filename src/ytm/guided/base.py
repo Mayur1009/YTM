@@ -44,7 +44,7 @@ class BaseTM(CoreBaseTM):
         clause_drop_p: float = 0.0,
         lr: float | None = None,
         lambda_: float | None = None,
-    ) -> float:
+    ):
         assert Y.ndim == 2, f"Y must be 2D array (samples, outputs), got {Y.ndim}D"
         X = self.config.prepare_X(X)
 
