@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal, TypedDict
 
 
@@ -35,6 +35,13 @@ class DeviceConfig:
 
     def __post_init__(self):
         self.kind, self.n = parse_device(self.device)
+
+
+def split_device_kwargs(opt: dict) -> tuple[dict, dict]:
+    """Split a kwargs dict into the model config fields and the DeviceConfig fields."""
+    names = {f.name for f in fields(DeviceConfig)}
+    dev_kw = {k: opt.pop(k) for k in list(opt) if k in names}
+    return opt, dev_kw
 
 
 class T_DeviceConfig(TypedDict, total=False):

@@ -5,7 +5,6 @@ import numpy as np
 
 from ..._core.backends.cpu import CPUDevice as CoreCPUDevice
 from ..._core.backends.cpu import float_p
-from ..._core.utils import read_file
 from ..config import FbSignal, TMConfig
 from .buffers import GuidedFitBuffers
 
@@ -14,9 +13,9 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
-        sections["act.h"] = read_file(here / "act.h")
+        sections["act.h"] = (here / "act.h").read_text()
         sections["loss"] = self.config.act_loss.src
-        sections["update.c"] = read_file(here / "update.c")
+        sections["update.c"] = (here / "update.c").read_text()
         return sections
 
     @staticmethod

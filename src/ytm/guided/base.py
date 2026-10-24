@@ -3,8 +3,7 @@ from typing import Unpack
 import numpy as np
 
 from .._core.base import BaseTM as CoreBaseTM
-from .._core.device_config import DeviceConfig
-from .._core.utils import split_device_kwargs
+from .._core.device_config import DeviceConfig, split_device_kwargs
 from .config import T_Config, TMConfig
 
 

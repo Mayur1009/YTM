@@ -2,9 +2,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Literal
 
-from .._core.config import BaseTMConfig, T_BaseTMConfig
+from .._core.config import BaseTMConfig, T_BaseTMConfig, enum_to_header
 from .._core.device_config import T_DeviceConfig
-from .._core.utils import enum_to_header
 from .backends.act_loss import ActLoss, SoftmaxCE
 
 

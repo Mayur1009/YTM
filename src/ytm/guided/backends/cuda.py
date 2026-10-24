@@ -4,7 +4,6 @@ import cupy as cp
 import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
-from ..._core.utils import read_file
 from ..config import FbSignal, TMConfig
 from .buffers import GuidedFitBuffers
 
@@ -13,9 +12,9 @@ class CUDADevice(CoreCUDADevice[GuidedFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
         here = pathlib.Path(__file__).parent
-        sections["act.h"] = read_file(here / "act.h")
+        sections["act.h"] = (here / "act.h").read_text()
         sections["loss"] = self.config.act_loss.src
-        sections["update.cu"] = read_file(here / "update.cu")
+        sections["update.cu"] = (here / "update.cu").read_text()
         return sections
 
     @staticmethod

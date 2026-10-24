@@ -4,8 +4,6 @@ import functools
 
 import numpy as np
 
-from ytm._core.utils import read_file
-
 from .rng_harness import CORE, STUB
 
 KERNELS = r"""
@@ -31,7 +29,7 @@ extern "C" __global__ void k_binom(ull key, uint start, int n, int n_trials, flo
 def _mod():
     import cupy as cp
 
-    code = STUB + "".join(read_file(CORE / f) for f in ("cuda.h", "common.h", "rng.h")) + KERNELS
+    code = STUB + "".join((CORE / f).read_text() for f in ("cuda.h", "common.h", "rng.h")) + KERNELS
     return cp.RawModule(code=code, backend="nvrtc", options=())
 
 

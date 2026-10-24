@@ -3,7 +3,6 @@ import pathlib
 import numpy as np
 
 from ..._core.backends.cuda import CUDADevice as CoreCUDADevice
-from ..._core.utils import read_file
 from ..config import TMConfig
 from .buffers import DiscreteFitBuffers
 
@@ -11,7 +10,7 @@ from .buffers import DiscreteFitBuffers
 class CUDADevice(CoreCUDADevice[DiscreteFitBuffers, TMConfig]):
     def _code_sections(self) -> dict[str, str]:
         sections = super()._code_sections()
-        sections["update.cu"] = read_file(pathlib.Path(__file__).parent / "update.cu")
+        sections["update.cu"] = (pathlib.Path(__file__).parent / "update.cu").read_text()
         return sections
 
     @staticmethod

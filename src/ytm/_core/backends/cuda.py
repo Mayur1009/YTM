@@ -7,7 +7,6 @@ import pathlib
 
 import numpy as np
 
-from ..utils import read_file
 from .base import BaseDevice, BuffersT, ConfigT
 
 
@@ -72,7 +71,7 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
         """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
         core = pathlib.Path(__file__).parent
         names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
-        return {name: read_file(core / name) for name in names}
+        return {name: (core / name).read_text() for name in names}
 
     def _fit_apply_fb(self, e: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""

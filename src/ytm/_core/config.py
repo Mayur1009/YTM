@@ -1,11 +1,24 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Literal, TypedDict
 
 import numpy as np
 
 from .initializer import ConstTAInit, TAInit, UniformTAInit
-from .utils import Feedback, enum_to_header
+
+
+def enum_to_header(prefix: str, enum_cls: type[IntEnum]) -> str:
+    return "".join(f"#define {prefix}_{m.name} {m.value}\n" for m in enum_cls)
+
+
+class Feedback(IntEnum):
+    """Feedback codes shared by the C side and the python side. The header is generated from this."""
+
+    NONE = 0
+    T1A = 1
+    T1B = 2
+    T2 = 3
 
 
 def _get_unsinged_type(val: int):

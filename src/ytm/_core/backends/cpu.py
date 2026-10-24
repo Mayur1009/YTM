@@ -4,7 +4,6 @@ from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32
 
 import numpy as np
 
-from ..utils import read_file
 from .base import BaseDevice, BuffersT, ConfigT
 from .toolchain import Toolchain
 
@@ -41,7 +40,7 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
     def _code_sections(self) -> dict[str, str]:
         core = pathlib.Path(__file__).parent
         names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
-        return {name: read_file(core / name) for name in names}
+        return {name: (core / name).read_text() for name in names}
 
     def _fit_apply_fb(self, e: int) -> None:
         """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""

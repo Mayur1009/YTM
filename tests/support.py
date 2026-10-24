@@ -10,7 +10,7 @@ from ctypes import POINTER, c_float
 
 import numpy as np
 
-from ytm._core.utils import Feedback
+from ytm._core.config import Feedback
 
 FB_NONE, FB_T1A, FB_T1B, FB_T2 = (int(f) for f in (Feedback.NONE, Feedback.T1A, Feedback.T1B, Feedback.T2))
 

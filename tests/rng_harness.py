@@ -11,7 +11,6 @@ import pathlib
 import numpy as np
 
 from ytm._core.backends.toolchain import Toolchain
-from ytm._core.utils import read_file
 
 CORE = pathlib.Path(__file__).parents[1] / "src" / "ytm" / "_core" / "backends"
 
@@ -82,7 +81,7 @@ float w_prob_at_least_one(int n_trials, float p) { return prob_at_least_one(n_tr
 
 @functools.cache
 def _lib() -> ctypes.CDLL:
-    code = STUB + "".join(read_file(CORE / f) for f in ("cpu.h", "common.h", "rng.h")) + WRAPPERS
+    code = STUB + "".join((CORE / f).read_text() for f in ("cpu.h", "common.h", "rng.h")) + WRAPPERS
     lib = Toolchain(openmp=False).compile(code)
     lib.w_rng_hash.restype = ctypes.c_uint64
     lib.w_geom_counter.restype = ctypes.c_uint32

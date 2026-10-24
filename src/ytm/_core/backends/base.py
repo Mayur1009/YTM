@@ -7,9 +7,9 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
+from ... import pbar
 from ..config import BaseTMConfig
 from ..device_config import DeviceConfig
-from ..utils import tqdm_bar
 from .buffers import FitBuffers, PackedClauses
 
 BuffersT = TypeVar("BuffersT", bound=FitBuffers)
@@ -70,7 +70,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
             chunk_N = self._chunk_size(N, self.buf.per_sample_bytes())
 
             total = 0.0
-            for e in tqdm_bar(range(N), desc="Fit"):
+            for e in pbar.bar(range(N), desc="Fit"):
                 if e == self.buf.chunk_end:
                     self.buf.load_chunk(e, min(e + chunk_N, N))
 
@@ -206,7 +206,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
 
     def _batches(self, N: int, desc: str, bytes_per_sample: int) -> Iterator[tuple[int, int]]:
         bs = self._chunk_size(N, bytes_per_sample)
-        with tqdm_bar(None, total=N, desc=desc) as bar:
+        with pbar.bar(None, total=N, desc=desc) as bar:
             for start in range(0, N, bs):
                 end = min(start + bs, N)
                 yield start, end

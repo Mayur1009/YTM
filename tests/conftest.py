@@ -1,8 +1,8 @@
 import pytest
 
-from ytm._core.utils import tqdm_disable
+from ytm import pbar
 
-tqdm_disable()
+pbar.disable()
 
 
 def _cuda_usable() -> bool:
