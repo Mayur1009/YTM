@@ -51,23 +51,20 @@ def test_wic_puts_a_patch_feature_at_its_image_pixel_when_patch_is_smaller_than_
 
 
 def test_wac_puts_a_patch_feature_at_its_image_pixel_when_patch_is_smaller_than_the_image(device):
-    """PROBE (extra): same geometry as the wic test; wac must also place patch feature 8 at image pixel (1,0).
-
-    Calls `tm.dev.wac` with a hand-prepared X because `tm.wac` -> `_prepare_X` cannot handle this geometry at all
-    (`_feat_mins.reshape(_dim)` on a per-patch-feature array raises ValueError), a separate finding."""
+    """Same geometry as the wic test; wac must also place patch feature 8 at image pixel (1,0)."""
     tm = _small_patch_tm(device)
     set_clauses(tm, {0: [8]})
     set_weights(tm, [[2, 0]])
-    X = np.zeros((1, 10, 10, 1), dtype=tm.config._fbound_dtype)
+    X = np.zeros((1, 10, 10, 1), dtype=np.uint8)
     X[0, 1, 0, 0] = 1
-    out = tm.dev.wac(X, np.array([0]), +1, force_repack=True).reshape(10, 10)
+    out = tm.wac(X, np.array([0]), +1, force_repack=True).reshape(10, 10)
     expected = np.zeros((10, 10), dtype=np.float32)
     expected[1, 0] = 2
     assert np.array_equal(out, expected)
 
 
 def test_score_runs_when_a_single_window_is_smaller_than_the_image(device):
-    """One window smaller than the image made `_prepare_X` reshape 64 bounds into 100 pixels, so score/fit/wac raised ValueError."""
+    """One window smaller than the image: `prepare_X` must not reshape the 64 patch bounds into the 100 pixels."""
     tm = _small_patch_tm(device)
     X = np.zeros((2, 10, 10, 1), dtype=np.uint8)
     assert tm.score(X).shape == (2, 1)

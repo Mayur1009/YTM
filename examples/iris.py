@@ -23,8 +23,8 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import KBinsDiscretizer
 
-from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.guided import MultiClassTM as GuidedTM
+from ytm.tm import MultiClassTM as DiscreteTM
 from ytm.utils import Timer, print_table
 
 
@@ -114,4 +114,4 @@ if __name__ == "__main__":
 
     if show_clauses:
         # Bounds are in bin units, 0 .. bins - 1
-        tm.print_clauses(["sepal_len", "sepal_wid", "petal_len", "petal_wid"], sort="w0,len")
+        tm.get_clauses().print(["sepal_len", "sepal_wid", "petal_len", "petal_wid"], sort="w0,len")

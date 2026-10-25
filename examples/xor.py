@@ -24,8 +24,8 @@ import pickle
 
 import numpy as np
 
-from ytm.tm import BinaryTM as DiscreteTM
 from ytm.guided import BinaryTM as GuidedTM
+from ytm.tm import BinaryTM as DiscreteTM
 
 
 def make_xor(N: int, nbits: int, noisybits: int, noise: float, rng: np.random.Generator):
@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
     if show_clauses:
         # Relevant bits are x0, x1, ..., the random ones n0, n1, ...
-        tm.print_clauses([f"x{i}" for i in range(nbits)] + [f"n{i}" for i in range(noisybits)], sort="w0,len")
+        tm.get_clauses().print([f"x{i}" for i in range(nbits)] + [f"n{i}" for i in range(noisybits)], sort="w0,len")
 
     if save is not None:
         with open(save, "wb") as f:
