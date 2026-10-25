@@ -56,12 +56,34 @@ class BaseTM(CoreBaseTM):
         self.dev.fit_epoch(X, encoded_Y, clause_drop_p, label_probs=label_probs)
 
     def score(self, X: np.ndarray, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
+        """Calculate class sums for the given X.
+
+        Parameters
+        ----------
+        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+            Inputs, each feature within ``[feat_mins, feat_maxs]``.
+
+        force_repack : bool, default=False
+            Repack every clause first, not only the changed ones.
+
+        clip_class_sums : bool, default=False
+            Clip the class sums to ``[T_min, T_max]``.
+
+        Returns
+        -------
+        ndarray of shape (N, n_classes), float32
+            Class sums.
+        """
         class_sums = super().score(X, force_repack)
         if clip_class_sums:
             class_sums = np.clip(class_sums, self.config._T_min, self.config._T_max)
         return class_sums
 
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
+        """Convert the class sums to probabilities.
+
+        ``(clip(class_sums, T_min, T_max) - T_min) / (T_max - T_min)``
+        """
         t_min, t_max = self.config._T_min, self.config._T_max
         return (np.clip(class_sums, t_min, t_max) - t_min) / (t_max - t_min)
 

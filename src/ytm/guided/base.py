@@ -56,5 +56,5 @@ class BaseTM(CoreBaseTM):
         return self.dev.fit_epoch(X, Y, clause_drop_p, lr=cfg.lr if lr is None else lr, lambda_=cfg.lambda_ if lambda_ is None else lambda_)
 
     def to_prob(self, class_sums: np.ndarray) -> np.ndarray:
-        # `score`/`predict` already apply the activation.
+        """No-op, simply returns the activated class sums (``class_sums``) as is."""
         return class_sums
