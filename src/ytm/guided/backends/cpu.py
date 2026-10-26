@@ -22,14 +22,6 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
     def _fit_buffers_cls() -> type[GuidedFitBuffers]:
         return GuidedFitBuffers
 
-    def post_sample(self, e: int) -> float:
-        buf = self.buf
-        return buf.loss[0].astype(np.float64)
-
-    def post_epoch(self, total) -> float:
-        buf = self.buf
-        return float(total) / buf.N
-
     def _fit_decide_fb(self, e: int) -> None:
         buf = self.buf
         cfg = self.config
@@ -83,6 +75,14 @@ class CPUDevice(CoreCPUDevice[GuidedFitBuffers, TMConfig]):
     def _fit_update_weights(self) -> None:
         buf = self.buf
         self.lib.update_weights(buf.p_grad, c_float(buf.lr), buf.p_clause_output, buf.p_clause_drop_mask, self.p_clause_weights)
+
+    def post_epoch(self, total) -> float:
+        buf = self.buf
+        return float(total) / buf.N
+
+    def post_sample(self, e: int) -> float:
+        buf = self.buf
+        return buf.loss[0].astype(np.float64)
 
     def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         votes = super()._infer_batch(Xb, bs)

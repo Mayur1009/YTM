@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
 from ..._core.backends.buffers import FitBuffers
-from ..config import FbSignal
+from ..config import FbSignal, TMConfig
 
 
 @dataclass(kw_only=True)
@@ -45,7 +45,7 @@ class GuidedFitBuffers(FitBuffers):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        cfg, xp = self.cfg, self.xp
+        cfg, xp = cast(TMConfig, self.cfg), self.xp
         self.grad = xp.empty(cfg.n_classes, dtype=np.float32)
         self.y_hat = xp.empty(cfg.n_classes, dtype=np.float32)
         self.loss = xp.empty(1, dtype=np.float32)

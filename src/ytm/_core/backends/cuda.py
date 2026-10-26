@@ -50,6 +50,9 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
 
     xp = cp
 
+    def _ctx(self):
+        return self.cuda_dev
+
     def _setup(self):
         dev = self.device_config
 
@@ -67,49 +70,6 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
         self._fit_vote_chunks = -(-cfg._n_clauses // self._VOTING_MIN_CHUNK_SIZE)
         self._chunk_sums = cp.empty(cfg.n_classes * self._fit_vote_chunks, dtype=np.float32)
 
-    def _code_sections(self) -> dict[str, str]:
-        """The sources to concatenate, in order. Subclasses can add, replace or drop entries."""
-        core = pathlib.Path(__file__).parent
-        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
-        return {name: (core / name).read_text() for name in names}
-
-    def _fit_apply_fb(self, e: int) -> None:
-        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
-        buf = self.buf
-        self.cu.update_t1b(
-            self.config._total_clauses * self._warp_size,
-            (
-                buf.rng_keys,
-                np.int32(e),
-                buf.t1b_n,
-                buf.t1b_cid,
-                buf.t1b_cnt,
-                buf.lit_drop_mask,
-                self.ta_states,
-                self.packed_clauses.is_clause_synced,
-            ),
-        )
-        self.cu.update_t1a_t2(
-            self.config._total_clauses * self._warp_size,
-            (
-                buf.rng_keys,
-                np.int32(e),
-                buf.selected_pids,
-                buf.X,
-                self.literal_offsets,
-                buf.lit_drop_mask,
-                buf.t1a_t2_n,
-                buf.t1a_t2_cid,
-                buf.t1a_cnt,
-                buf.t2_cnt,
-                self.ta_states,
-                self.packed_clauses.is_clause_synced,
-            ),
-        )
-
-    def _ctx(self):
-        return self.cuda_dev
-
     def _bind(self):
         pass
 
@@ -121,6 +81,10 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
         with self.cuda_dev:
             return cp.asarray(arr)
 
+    def _code_sections(self) -> dict[str, str]:
+        core = pathlib.Path(__file__).parent
+        names = ("cuda.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.cu", "evaluate.cu", "interpret.cu", "feedback.cu")
+        return {name: (core / name).read_text() for name in names}
 
     def _chunk_size(self, N, bytes_per_smp):
         with self.cuda_dev:
@@ -195,6 +159,44 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
         buf = self.buf
         self._vote_sum(buf.clause_output, 1, buf.votes, self._fit_vote_chunks)
 
+    def _fit_apply_fb(self, e: int) -> None:
+        buf = self.buf
+        self.cu.update_t1b(
+            self.config._total_clauses * self._warp_size,
+            (
+                buf.rng_keys,
+                np.int32(e),
+                buf.t1b_n,
+                buf.t1b_cid,
+                buf.t1b_cnt,
+                buf.lit_drop_mask,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
+        self.cu.update_t1a_t2(
+            self.config._total_clauses * self._warp_size,
+            (
+                buf.rng_keys,
+                np.int32(e),
+                buf.selected_pids,
+                buf.X,
+                self.literal_offsets,
+                buf.lit_drop_mask,
+                buf.t1a_t2_n,
+                buf.t1a_t2_cid,
+                buf.t1a_cnt,
+                buf.t2_cnt,
+                self.ta_states,
+                self.packed_clauses.is_clause_synced,
+            ),
+        )
+
+    def _infer_batch(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
+        class_sums = cp.zeros((bs, self.config.n_classes), dtype=np.float32)
+        self._vote_sum(self._clause_outputs(Xb, bs), bs, class_sums)
+        return class_sums
+
     def _clause_outputs(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         cfg = self.config
         pc = self.packed_clauses
@@ -214,11 +216,6 @@ class CUDADevice(BaseDevice[BuffersT, ConfigT, cp.ndarray]):
             ),
         )
         return clause_outputs
-
-    def _infer_batch(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
-        class_sums = cp.zeros((bs, self.config.n_classes), dtype=np.float32)
-        self._vote_sum(self._clause_outputs(Xb, bs), bs, class_sums)
-        return class_sums
 
     def _patch_outputs(self, Xb: cp.ndarray, bs: int) -> cp.ndarray:
         cfg = self.config

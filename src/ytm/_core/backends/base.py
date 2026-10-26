@@ -20,6 +20,7 @@ ArrayT = TypeVar("ArrayT")
 class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
     xp: types.ModuleType
 
+    # =========Initialization and helpers============
     def __init__(self, config: ConfigT, device_config: DeviceConfig, state: dict | None = None):
         self.config = config
         self.device_config = device_config
@@ -35,105 +36,60 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
             self.buf = self._fit_buffers_cls()(make_ptrs=self.xp is np, xp=self.xp, cfg=self.config)
 
     def _ctx(self):
+        """Context to run methods in. Useful for CUDA which needs cuda context for running on the correct device. For CPU, it is nullcontext."""
         return contextlib.nullcontext()
 
     @abc.abstractmethod
-    def _setup(self): ...
+    def _setup(self):
+        """Prepare the device, resolve the toolchain, compile the kernels."""
 
     @abc.abstractmethod
-    def _bind(self): ...
+    def _bind(self):
+        """Bind the model arrays to the kernels, create pointers."""
 
     @abc.abstractmethod
-    def _to_host(self, arr: ArrayT) -> np.ndarray: ...
+    def _to_host(self, arr: ArrayT) -> np.ndarray:
+        """Copy an array from device to host"""
 
     @abc.abstractmethod
-    def _to_dev(self, arr: np.ndarray) -> ArrayT: ...
+    def _to_dev(self, arr: np.ndarray) -> ArrayT:
+        """Move ``arr`` from host to device."""
 
     @abc.abstractmethod
-    def _code_sections(self) -> dict[str, str]: ...
+    def _code_sections(self) -> dict[str, str]:
+        """Kernel sources to compile. Stored by name, so that subclasses can add/replace/drop entries as needed."""
 
-    @abc.abstractmethod
-    def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
-
-    @staticmethod
-    @abc.abstractmethod
-    def _fit_buffers_cls() -> type[BuffersT]: ...
+    def _build_code(self) -> str:
+        """Create source for compilation by combining header and code sections."""
+        return self.config._header + "\n".join(self._code_sections().values())
 
     def _chunk_size(self, N: int, bytes_per_smp: int) -> int:
+        """Return chunk size based on the available memory of the device, for automatic chunking."""
         return N
 
-    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs):
-        with self._ctx():
-            self.pre_epoch(X, Y, clause_drop_p, **kwargs)
+    def _batches(self, N: int, desc: str, bytes_per_sample: int) -> Iterator[tuple[int, int]]:
+        bs = self._chunk_size(N, bytes_per_sample)
+        with pbar.bar(None, total=N, desc=desc) as bar:
+            for start in range(0, N, bs):
+                end = min(start + bs, N)
+                yield start, end
+                bar.update(end - start)
 
-            N = X.shape[0]
-            chunk_N = self._chunk_size(N, self.buf.per_sample_bytes())
+    def _init_params(self):
+        self._init_weights()
+        self._init_clauses()
+        self._init_packed_clauses()
+        self._init_patch_weights()
 
-            total = 0.0
-            for e in pbar.bar(range(N), desc="Fit"):
-                if e == self.buf.chunk_end:
-                    self.buf.load_chunk(e, min(e + chunk_N, N))
+    def _init_consts(self):
+        cfg = self.config
+        self.therm_bits = self.xp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
+        self.literal_offsets = self.xp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
 
-                total += self.fit_sample(e)
-
-            out = self.post_epoch(total)
-            self.buf.end_epoch()
-            return out
-
-    def fit_sample(self, e: int) -> float:
-        i = e - self.buf.chunk_start
-
-        self.pre_sample(e)
-
-        self.pack_clauses()
-        self._fit_eval(i)
-        self._fit_voting()
-        self._fit_decide_fb(i)
-        self._fit_apply_fb(i)
-        if self.config.weighted:
-            self._fit_update_weights()
-
-        return self.post_sample(e)
-
-    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> None:
-        assert X.dtype == self.config._fbound_dtype, f"X must be {np.dtype(self.config._fbound_dtype)}, got {X.dtype}"
-
-        if clause_drop_p <= 0:
-            clause_drop_mask = self.xp.asarray(np.zeros(self.config._total_clauses, dtype=np.uint8))
-        else:
-            clause_drop_mask = self.xp.asarray((self._rng.random(self.config._total_clauses) <= clause_drop_p), dtype=np.uint8)
-
-        self.buf.start_epoch(
-            X=X,
-            Y=Y,
-            clause_drop_mask=clause_drop_mask,
-            rng_keys=self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64),
-            **kwargs,
-        )
-
-    def post_epoch(self, total: float) -> Any:
-        return None
-
-    def pre_sample(self, e: int) -> None:
-        pass
-
-    def post_sample(self, e: int) -> float:
-        return 0.0
-
-    @abc.abstractmethod
-    def _fit_eval(self, e: int): ...
-
-    @abc.abstractmethod
-    def _fit_voting(self): ...
-
-    @abc.abstractmethod
-    def _fit_decide_fb(self, e: int): ...
-
-    @abc.abstractmethod
-    def _fit_apply_fb(self, e: int): ...
-
-    @abc.abstractmethod
-    def _fit_update_weights(self): ...
+    def _init_clauses(self):
+        cfg = self.config
+        states = cfg._ta_init(self._rng, cfg, self._to_host(self.clause_weights))
+        self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
 
     def _init_weights(self):
         cfg = self.config
@@ -159,120 +115,6 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
 
         self.clause_weights = self.xp.asarray(sign * mag, dtype=np.float32)
 
-    def infer(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        N = X.shape[0]
-        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
-        out = np.empty((N, cfg.n_classes), dtype=np.float32)
-        with self._ctx():
-            self.pack_clauses(force_repack)
-            for start, end in self._batches(N, "Infer", x_bytes + cfg._total_clauses + 2 * cfg.n_classes * 4):
-                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
-                out[start:end] = self._to_host(self._infer_batch(Xb, end - start))
-        return out
-
-    @abc.abstractmethod
-    def _infer_batch(self, Xb: ArrayT, bs: int) -> ArrayT: ...
-
-    def transform(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        N = X.shape[0]
-        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
-        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
-        with self._ctx():
-            self.pack_clauses(force_repack)
-            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses):
-                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
-                out[start:end] = self._to_host(self._clause_outputs(Xb, end - start))
-        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
-
-    @abc.abstractmethod
-    def _clause_outputs(self, Xb: ArrayT, bs: int) -> ArrayT: ...
-
-    @abc.abstractmethod
-    def _patch_outputs(self, Xb: ArrayT, bs: int) -> ArrayT: ...
-
-    def transform_patchwise(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        N = X.shape[0]
-        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
-        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
-        with self._ctx():
-            self.pack_clauses(force_repack)
-            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses * cfg._n_patches):
-                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
-                out[start:end] = self._to_host(self._patch_outputs(Xb, end - start))
-        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
-
-    def _batches(self, N: int, desc: str, bytes_per_sample: int) -> Iterator[tuple[int, int]]:
-        bs = self._chunk_size(N, bytes_per_sample)
-        with pbar.bar(None, total=N, desc=desc) as bar:
-            for start in range(0, N, bs):
-                end = min(start + bs, N)
-                yield start, end
-                bar.update(end - start)
-
-    @abc.abstractmethod
-    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray: ...
-
-    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
-        cfg = self.config
-        N = X.shape[0]
-        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
-        out_bytes = int(np.prod(cfg._dim)) * 4
-        output = np.empty((N, *cfg._dim), dtype=np.float32)
-        with self._ctx():
-            self.pack_clauses(force_repack)
-            for start, end in self._batches(N, "WAC", x_bytes + cfg._total_clauses * cfg._n_patches + out_bytes + 4):
-                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
-                target_b = self.xp.asarray(target_classes[start:end], dtype=np.int32)
-                output[start:end] = self._to_host(self._wac_batch(Xb, target_b, polarity, end - start))
-        return output
-
-    @abc.abstractmethod
-    def _wac_batch(self, Xb: ArrayT, target_b: ArrayT, polarity: int, bs: int) -> ArrayT: ...
-
-    def set_threads(self, n: int):
-        raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")
-
-    def _build_code(self) -> str:
-        return self.config._header + "\n".join(self._code_sections().values())
-
-    def set_feat_drop(self, fids: int | list[int], value: int) -> None:
-        cfg = self.config
-        half = cfg._n_literals // 2
-        for fid in [fids] if isinstance(fids, int) else fids:
-            start = cfg._n_position_feats + int(cfg._literal_offsets[fid])
-            end = cfg._n_position_feats + int(cfg._literal_offsets[fid + 1])
-            self.buf.lit_drop_mask[start:end] = value
-            if cfg.negated_literals:
-                self.buf.lit_drop_mask[half + start : half + end] = value
-
-    # == initializations ==
-    def _init_params(self):
-        self._init_weights()
-        self._init_clauses()
-        self._init_packed_clauses()
-        self._init_patch_weights()
-
-    def _restore_params(self, state: dict):
-        cfg = self.config
-        self.clause_weights = self.xp.array(state["clause_weights"], dtype=np.float32, order="C")
-        self.ta_states = self.xp.array(state["ta_states"], dtype=cfg._ta_dtype, order="C")
-        self.patch_weights = self.xp.array(state["patch_weights"], dtype=np.int32, order="C")
-        self._rng = copy.deepcopy(state["rng"])
-        self._init_packed_clauses()
-
-    def _init_consts(self):
-        cfg = self.config
-        self.therm_bits = self.xp.asarray(cfg._therm_bits, dtype=cfg._fbound_dtype)
-        self.literal_offsets = self.xp.asarray(cfg._literal_offsets, dtype=cfg._nlits_dtype)
-
-    def _init_clauses(self):
-        cfg = self.config
-        states = cfg._ta_init(self._rng, cfg, self._to_host(self.clause_weights))
-        self.ta_states = self.xp.asarray(states, dtype=cfg._ta_dtype)
-
     def _init_patch_weights(self):
         cfg = self.config
         shape = (cfg._total_clauses, cfg._n_patches) if cfg.track_patch_weights else (1, 1)
@@ -290,7 +132,189 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
             is_clause_synced=self.xp.zeros(cfg._total_clauses, dtype=np.int8),
         )
 
-    # == Getters ==
+    def set_threads(self, n: int):
+        raise NotImplementedError(f"set_threads is not supported on {self.device_config.device!r}.")
+
+    def set_feat_drop(self, fids: int | list[int], value: int) -> None:
+        """Set a feature to be ignored."""
+        cfg = self.config
+        half = cfg._n_literals // 2
+        for fid in [fids] if isinstance(fids, int) else fids:
+            start = cfg._n_position_feats + int(cfg._literal_offsets[fid])
+            end = cfg._n_position_feats + int(cfg._literal_offsets[fid + 1])
+            self.buf.lit_drop_mask[start:end] = value
+            if cfg.negated_literals:
+                self.buf.lit_drop_mask[half + start : half + end] = value
+
+    # =========Pack clauses============
+    @abc.abstractmethod
+    def pack_clauses(self, force_repack: bool = False, full: bool = False): ...
+
+    # =========Fit methods and hooks============
+    @staticmethod
+    @abc.abstractmethod
+    def _fit_buffers_cls() -> type[BuffersT]:
+        """FitBuffers class to use for this model. Needed when subclasses want to set there on Buffer class."""
+
+    def fit_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs):
+        """Fit one epoch."""
+        with self._ctx():
+            self.pre_epoch(X, Y, clause_drop_p, **kwargs)
+
+            N = X.shape[0]
+            chunk_N = self._chunk_size(N, self.buf.per_sample_bytes())
+
+            total = 0.0
+            for e in pbar.bar(range(N), desc="Fit"):
+                if e == self.buf.chunk_end:
+                    self.buf.load_chunk(e, min(e + chunk_N, N))
+
+                total += self.fit_sample(e)
+
+            out = self.post_epoch(total)
+            self.buf.end_epoch()
+            return out
+
+    def fit_sample(self, e: int) -> float:
+        """Fit one sample ``e``."""
+        i = e - self.buf.chunk_start
+
+        self.pre_sample(e)
+
+        self.pack_clauses()
+        self._fit_eval(i)
+        self._fit_voting()
+        self._fit_decide_fb(i)
+        self._fit_apply_fb(i)
+        if self.config.weighted:
+            self._fit_update_weights()
+
+        return self.post_sample(e)
+
+    @abc.abstractmethod
+    def _fit_eval(self, e: int):
+        """Evaluate every clause on sample ``e`` of the current chunk, and select the patch each clause fires on."""
+
+    @abc.abstractmethod
+    def _fit_voting(self):
+        """Sum the weighted clause outputs into the class votes."""
+
+    @abc.abstractmethod
+    def _fit_decide_fb(self, e: int):
+        """Decide each clause's feedback type for sample ``e`` from the votes and the target. The decision per class is combined, so that applying feedback does not need to happen per class."""
+
+    @abc.abstractmethod
+    def _fit_apply_fb(self, e: int):
+        """Apply the decided feedback to the TA states, T1b first, then T1a and T2."""
+
+    @abc.abstractmethod
+    def _fit_update_weights(self):
+        """Update the clause weights from the decided feedback. Only runs when ``weighted``."""
+
+    ## ========Hooks========
+    def pre_epoch(self, X: np.ndarray, Y: np.ndarray, clause_drop_p: float, **kwargs) -> None:
+        assert X.dtype == self.config._fbound_dtype, f"X must be {np.dtype(self.config._fbound_dtype)}, got {X.dtype}"
+
+        if clause_drop_p <= 0:
+            clause_drop_mask = self.xp.asarray(np.zeros(self.config._total_clauses, dtype=np.uint8))
+        else:
+            clause_drop_mask = self.xp.asarray((self._rng.random(self.config._total_clauses) <= clause_drop_p), dtype=np.uint8)
+
+        self.buf.start_epoch(
+            X=X,
+            Y=Y,
+            clause_drop_mask=clause_drop_mask,
+            rng_keys=self._rng.integers(1, 1 << 62, size=X.shape[0], dtype=np.uint64),
+            **kwargs,
+        )
+
+    def post_epoch(self, total: float) -> Any:
+        return None
+
+    def pre_sample(self, e: int) -> None:
+        pass
+
+    def post_sample(self, e: int) -> float:
+        return 0.0
+
+    # =========Inference============
+    def infer(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+        """Inference. Calculate class sums for X."""
+        cfg = self.config
+        N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out = np.empty((N, cfg.n_classes), dtype=np.float32)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, "Infer", x_bytes + cfg._total_clauses + 2 * cfg.n_classes * 4):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._infer_batch(Xb, end - start))
+        return out
+
+    @abc.abstractmethod
+    def _infer_batch(self, Xb: ArrayT, bs: int) -> ArrayT:
+        """Class sums of a batch of ``bs`` samples, shape (bs, n_classes)."""
+
+    # =========Transform============
+    def transform(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+        """Calculate clause activations."""
+        cfg = self.config
+        N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out = np.empty((N, cfg._total_clauses), dtype=np.int8)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._clause_outputs(Xb, end - start))
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses)
+
+    def transform_patchwise(self, X: np.ndarray, force_repack: bool = False) -> np.ndarray:
+        """Patchwise Clause activations."""
+        cfg = self.config
+        N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out = np.empty((N, cfg._total_clauses, cfg._n_patches), dtype=np.int8)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, "Transform", x_bytes + cfg._total_clauses * cfg._n_patches):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                out[start:end] = self._to_host(self._patch_outputs(Xb, end - start))
+        return out.reshape(N, cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
+
+    @abc.abstractmethod
+    def _clause_outputs(self, Xb: ArrayT, bs: int) -> ArrayT:
+        """Clause activations for a batch of samples."""
+
+    @abc.abstractmethod
+    def _patch_outputs(self, Xb: ArrayT, bs: int) -> ArrayT:
+        """Patchwise Clause activations for a batch of samples."""
+
+    # =========WAC and WIC============
+    @abc.abstractmethod
+    def wic(self, class_id: int, polarity: int, pw_th: float = 0.0, force_repack: bool = False) -> np.ndarray:
+        """Calculate WIC score."""
+
+    def wac(self, X: np.ndarray, target_classes: np.ndarray, polarity: int, force_repack: bool = False) -> np.ndarray:
+        """Calculate WAC score."""
+        cfg = self.config
+        N = X.shape[0]
+        x_bytes = int(np.prod(X.shape[1:])) * np.dtype(cfg._fbound_dtype).itemsize
+        out_bytes = int(np.prod(cfg._dim)) * 4
+        output = np.empty((N, *cfg._dim), dtype=np.float32)
+        with self._ctx():
+            self.pack_clauses(force_repack)
+            for start, end in self._batches(N, "WAC", x_bytes + cfg._total_clauses * cfg._n_patches + out_bytes + 4):
+                Xb = self.xp.asarray(X[start:end], dtype=cfg._fbound_dtype)
+                target_b = self.xp.asarray(target_classes[start:end], dtype=np.int32)
+                output[start:end] = self._to_host(self._wac_batch(Xb, target_b, polarity, end - start))
+        return output
+
+    @abc.abstractmethod
+    def _wac_batch(self, Xb: ArrayT, target_b: ArrayT, polarity: int, bs: int) -> ArrayT:
+        """Calculate WAC score for a batch."""
+
+    # =========Getters============
     def get_ta_states(self) -> np.ndarray:
         cfg = self.config
         return self._to_host(self.ta_states).reshape(cfg._n_clause_banks, cfg._n_clauses, cfg._n_literals)
@@ -305,6 +329,7 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
         return self._to_host(self.patch_weights).reshape(cfg._n_clause_banks, cfg._n_clauses, cfg._n_patches_y, cfg._n_patches_x)
 
     def get_packed_clauses(self) -> PackedClauses:
+        """Return packed clauses."""
         pc = self.packed_clauses
         return PackedClauses(
             clause_feat_bounds=self._to_host(pc.clause_feat_bounds),
@@ -316,8 +341,9 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
             is_clause_synced=self._to_host(pc.is_clause_synced),
         )
 
-    # == serialization ==
+    # =========Saving and loading============
     def get_state_dict(self) -> dict:
+        """Get state dictionary for saving the model."""
         return {
             "ta_states": self._to_host(self.ta_states),
             "clause_weights": self._to_host(self.clause_weights),
@@ -333,3 +359,12 @@ class BaseDevice(abc.ABC, Generic[BuffersT, ConfigT, ArrayT]):
             self.patch_weights[:] = self.xp.asarray(state["patch_weights"])
             self._rng = copy.deepcopy(state["rng"])
             self.packed_clauses.is_clause_synced.fill(0)
+
+    def _restore_params(self, state: dict):
+        """Restore device from a given state."""
+        cfg = self.config
+        self.clause_weights = self.xp.array(state["clause_weights"], dtype=np.float32, order="C")
+        self.ta_states = self.xp.array(state["ta_states"], dtype=cfg._ta_dtype, order="C")
+        self.patch_weights = self.xp.array(state["patch_weights"], dtype=np.int32, order="C")
+        self._rng = copy.deepcopy(state["rng"])
+        self._init_packed_clauses()

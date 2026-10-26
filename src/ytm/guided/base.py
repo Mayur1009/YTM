@@ -1,4 +1,4 @@
-from typing import Unpack
+from typing import Unpack, cast
 
 import numpy as np
 
@@ -8,8 +8,6 @@ from .config import T_Config, TMConfig
 
 
 class BaseTM(CoreBaseTM):
-    config: TMConfig
-
     @staticmethod
     def _config_cls() -> type[TMConfig]:
         return TMConfig
@@ -35,6 +33,10 @@ class BaseTM(CoreBaseTM):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
         config = self._config_cls()(n_clauses=n_clauses, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
         super().__init__(config, DeviceConfig(**dev_kw))
+
+    @property
+    def config(self) -> TMConfig:
+        return cast(TMConfig, self.dev.config)
 
     def _fit(
         self,

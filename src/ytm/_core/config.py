@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 
@@ -162,6 +162,7 @@ class BaseTMConfig:
     ta_init: Literal["random", "middle", "random_include"] | str | int | TAInit = "middle"
 
     # clause weights
+    weight_init: Any = 1
     weighted: bool = True
     max_weight: float = float(1 << 30)
     allow_polarity_change: bool = True

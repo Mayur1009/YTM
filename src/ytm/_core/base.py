@@ -17,9 +17,12 @@ class BaseTM(abc.ABC):
     @abc.abstractmethod
     def _config_cls() -> type[BaseTMConfig]: ...
 
-    @property
-    def _rng(self) -> np.random.Generator:
-        return self.dev._rng
+    @staticmethod
+    @abc.abstractmethod
+    def _device_cls(kind: str) -> type[BaseDevice]: ...
+
+    def _build_device(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None) -> BaseDevice:
+        return self._device_cls(device_config.kind)(config, device_config, state)
 
     @property
     def config(self) -> BaseTMConfig:
@@ -31,12 +34,9 @@ class BaseTM(abc.ABC):
         """Device settings, see :class:`~ytm._core.device_config.DeviceConfig`. Use :meth:`to` to change the device."""
         return self.dev.device_config
 
-    @staticmethod
-    @abc.abstractmethod
-    def _device_cls(kind: str) -> type[BaseDevice]: ...
-
-    def _build_device(self, config: BaseTMConfig, device_config: DeviceConfig, state: dict | None = None) -> BaseDevice:
-        return self._device_cls(device_config.kind)(config, device_config, state)
+    @property
+    def _rng(self) -> np.random.Generator:
+        return self.dev._rng
 
     def to(self, device: str, **device_kwargs) -> None:
         """Move the model to another device, in place.
@@ -51,6 +51,10 @@ class BaseTM(abc.ABC):
             Options not given go back to their defaults.
         """
         self.dev = self._build_device(self.config, DeviceConfig(device=device, **device_kwargs), self.dev.get_state_dict())
+
+    def set_threads(self, n: int) -> None:
+        """Set the number of threads to use with OpenMP. Only applicable for CPU device."""
+        self.dev.set_threads(max(1, n))
 
     def __getstate__(self) -> dict:
         """Config is saved as its constructor arguments, minus `ta_init`: its only use is at construction."""
@@ -189,10 +193,6 @@ class BaseTM(abc.ABC):
             WAC score per sample and input feature.
         """
         return self.dev.wac(self.config.prepare_X(X), target_classes, polarity, force_repack)
-
-    def set_threads(self, n: int) -> None:
-        """Set the number of threads to use with OpenMP. Only applicable for CPU device."""
-        self.dev.set_threads(max(1, n))
 
     # == getters ==
     def get_weights(self) -> np.ndarray:

@@ -31,45 +31,6 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
         self.lib: CDLL = self.toolchain.compile(self._build_code())
         self.set_threads(self._n_threads)
 
-    def _to_host(self, arr: np.ndarray) -> np.ndarray:
-        return arr.copy()
-
-    def _to_dev(self, arr: np.ndarray) -> np.ndarray:
-        return np.asarray(arr, order="C")
-
-    def _code_sections(self) -> dict[str, str]:
-        core = pathlib.Path(__file__).parent
-        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
-        return {name: (core / name).read_text() for name in names}
-
-    def _fit_apply_fb(self, e: int) -> None:
-        """T1b first, then T1a and T2, so a full clause's decrements land before its T2 increments."""
-        buf = self.buf
-        self.lib.update_t1b(
-            buf.p_rng_keys,
-            c_int(e),
-            buf.p_t1b_n,
-            buf.p_t1b_cid,
-            buf.p_t1b_cnt,
-            buf.p_lit_drop_mask,
-            self.p_ta_states,
-            self.p_is_clause_synced,
-        )
-        self.lib.update_t1a_t2(
-            buf.p_rng_keys,
-            c_int(e),
-            buf.p_selected_pids,
-            buf.p_X,
-            self.p_literal_offsets,
-            buf.p_lit_drop_mask,
-            buf.p_t1a_t2_n,
-            buf.p_t1a_t2_cid,
-            buf.p_t1a_cnt,
-            buf.p_t2_cnt,
-            self.p_ta_states,
-            self.p_is_clause_synced,
-        )
-
     def _bind(self):
         cfg = self.config
         pc = self.packed_clauses
@@ -94,6 +55,17 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
 
         self.p_therm_bits = self.therm_bits.ctypes.data_as(fbound_p)
         self.p_literal_offsets = self.literal_offsets.ctypes.data_as(nlits_p)
+
+    def _to_host(self, arr: np.ndarray) -> np.ndarray:
+        return arr.copy()
+
+    def _to_dev(self, arr: np.ndarray) -> np.ndarray:
+        return np.asarray(arr, order="C")
+
+    def _code_sections(self) -> dict[str, str]:
+        core = pathlib.Path(__file__).parent
+        names = ("cpu.h", "common.h", "rng.h", "feedback.h", "pack_clauses.h", "pack_clauses.c", "evaluate.c", "interpret.c", "feedback.c")
+        return {name: (core / name).read_text() for name in names}
 
     def set_threads(self, n: int):
         self.lib.set_num_threads(c_int(max(1, n)))
@@ -142,6 +114,39 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
         buf = self.buf
         self.lib.vote_sum(buf.p_clause_output, self.p_clause_weights, c_int(1), buf.p_votes)
 
+    def _fit_apply_fb(self, e: int) -> None:
+        buf = self.buf
+        self.lib.update_t1b(
+            buf.p_rng_keys,
+            c_int(e),
+            buf.p_t1b_n,
+            buf.p_t1b_cid,
+            buf.p_t1b_cnt,
+            buf.p_lit_drop_mask,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
+        self.lib.update_t1a_t2(
+            buf.p_rng_keys,
+            c_int(e),
+            buf.p_selected_pids,
+            buf.p_X,
+            self.p_literal_offsets,
+            buf.p_lit_drop_mask,
+            buf.p_t1a_t2_n,
+            buf.p_t1a_t2_cid,
+            buf.p_t1a_cnt,
+            buf.p_t2_cnt,
+            self.p_ta_states,
+            self.p_is_clause_synced,
+        )
+
+    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
+        class_sums = np.empty((bs, self.config.n_classes), dtype=np.float32)
+        clause_outputs = self._clause_outputs(Xb, bs)
+        self.lib.vote_sum(clause_outputs.ctypes.data_as(int8_p), self.p_clause_weights, c_int(bs), class_sums.ctypes.data_as(float_p))
+        return class_sums
+
     def _clause_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         cfg = self.config
         Xb = np.asarray(Xb, dtype=cfg._fbound_dtype, order="C")
@@ -158,12 +163,6 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
             clause_outputs.ctypes.data_as(int8_p),
         )
         return clause_outputs
-
-    def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
-        class_sums = np.empty((bs, self.config.n_classes), dtype=np.float32)
-        clause_outputs = self._clause_outputs(Xb, bs)
-        self.lib.vote_sum(clause_outputs.ctypes.data_as(int8_p), self.p_clause_weights, c_int(bs), class_sums.ctypes.data_as(float_p))
-        return class_sums
 
     def _patch_outputs(self, Xb: np.ndarray, bs: int) -> np.ndarray:
         cfg = self.config

@@ -1,15 +1,13 @@
-from typing import Unpack
+from typing import cast
 
 import numpy as np
 
 from .._core.base import BaseTM as CoreBaseTM
 from .._core.device_config import DeviceConfig, split_device_kwargs
-from .config import T_Config, TMConfig
+from .config import TMConfig
 
 
 class BaseTM(CoreBaseTM):
-    config: TMConfig
-
     @staticmethod
     def _config_cls() -> type[TMConfig]:
         return TMConfig
@@ -31,11 +29,15 @@ class BaseTM(CoreBaseTM):
         s: float,
         dim: int | tuple[int, ...],
         n_classes: int,
-        **opt: Unpack[T_Config],
+        **opt,
     ):
         cfg_kw, dev_kw = split_device_kwargs(dict(opt))
         config = self._config_cls()(n_clauses=n_clauses, T=T, s=s, dim=dim, n_classes=n_classes, **cfg_kw)
         super().__init__(config, DeviceConfig(**dev_kw))
+
+    @property
+    def config(self) -> TMConfig:
+        return cast(TMConfig, self.dev.config)
 
     def _fit(
         self,
@@ -54,6 +56,18 @@ class BaseTM(CoreBaseTM):
         label_probs = np.asarray(self._label_sampler(encoded_Y, label_sampling), dtype=np.float32, order="C")
 
         self.dev.fit_epoch(X, encoded_Y, clause_drop_p, label_probs=label_probs)
+
+    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
+        return np.where(Y == 1, self.config._T_max, self.config._T_min).astype(np.float32)
+
+    def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
+        cfg = self.config
+        if cfg.n_classes == 1:
+            return np.ones_like(encoded_Y, dtype=np.float32)
+
+        label_probs = np.full_like(encoded_Y, cfg.q / (cfg.n_classes - 1), dtype=np.float32)
+        label_probs[encoded_Y == cfg._T_max] = 1.0
+        return label_probs
 
     def score(self, X: np.ndarray, force_repack: bool = False, clip_class_sums: bool = False) -> np.ndarray:
         """Calculate class sums for the given X.
@@ -86,15 +100,3 @@ class BaseTM(CoreBaseTM):
         """
         t_min, t_max = self.config._T_min, self.config._T_max
         return (np.clip(class_sums, t_min, t_max) - t_min) / (t_max - t_min)
-
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        return np.where(Y == 1, self.config._T_max, self.config._T_min).astype(np.float32)
-
-    def _label_sampler(self, encoded_Y: np.ndarray, label_sampling: bool) -> np.ndarray:
-        cfg = self.config
-        if cfg.n_classes == 1:
-            return np.ones_like(encoded_Y, dtype=np.float32)
-
-        label_probs = np.full_like(encoded_Y, cfg.q / (cfg.n_classes - 1), dtype=np.float32)
-        label_probs[encoded_Y == cfg._T_max] = 1.0
-        return label_probs

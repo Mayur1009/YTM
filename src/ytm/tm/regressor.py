@@ -1,4 +1,4 @@
-from typing import Unpack
+from typing import Unpack, cast
 
 import numpy as np
 
@@ -34,8 +34,6 @@ class RegressionTM(BaseTM):
         of :class:`~ytm._core.device_config.DeviceConfig`.
     """
 
-    config: RegressionConfig
-
     @staticmethod
     def _config_cls() -> type[RegressionConfig]:
         return RegressionConfig
@@ -52,9 +50,9 @@ class RegressionTM(BaseTM):
         opt.setdefault("negative_clauses", False)
         super().__init__(n_clauses, (0.0, float(T)), s, dim, 1, y_range=y_range, **opt)
 
-    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
-        lo, hi = self.config.y_range
-        return ((Y - lo) / (hi - lo)).astype(np.float32) * self.config._T_max
+    @property
+    def config(self) -> RegressionConfig:
+        return cast(RegressionConfig, self.dev.config)
 
     def fit(
         self,
@@ -81,6 +79,10 @@ class RegressionTM(BaseTM):
         """
         assert X.shape[0] == Y.shape[0], "X and Y must have the same number of samples"
         return self._fit(X, self.config.prepare_Y(Y), shuffle, clause_drop_p)
+
+    def _encode_Y(self, Y: np.ndarray) -> np.ndarray:
+        lo, hi = self.config.y_range
+        return ((Y - lo) / (hi - lo)).astype(np.float32) * self.config._T_max
 
     def predict(self, X: np.ndarray, clip_class_sums: bool = True, force_repack: bool = False):
         """Predict the target of each sample: the class sum scaled from ``[0, T]`` back to ``y_range``.
