@@ -21,15 +21,6 @@ def _cuda_usable() -> bool:
 DEVICES = ["cpu:1"] + (["cuda"] if _cuda_usable() else [])
 
 
-def pytest_addoption(parser):
-    parser.addoption(
-        "--seed",
-        type=int,
-        default=42,
-        help="seed for the rng that generates the per-test seed lists in tests/benchmarks",
-    )
-
-
 @pytest.fixture(params=DEVICES)
 def device(request) -> str:
     return request.param
