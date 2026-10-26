@@ -36,146 +36,118 @@ def _get_unsigned_type(val: int):
 class BaseTMConfig:
     """Settings shared by all TM models.
 
-    Parameters
-    ----------
-    n_clauses : int
-        Number of clauses per class or clause bank, at least 1. When ``coalesced``, all classes
-        share one clause bank, so total clauses = ``n_clauses``. When not coalesced, total
-        clauses = ``n_clauses * n_classes``.
-
-    s : float
-        Specificity, at least 1.0.
-
-    dim : int or tuple of int
-        Input shape: ``D``, ``(H, W)`` or ``(H, W, C)``. Missing trailing sizes are set to 1.
-
-    n_classes : int
-        Number of outputs (classes or labels).
-
-    feat_mins, feat_maxs : int or array-like of int, default=0, 1
-        Inclusive integer range of each feature. For binary features, use 0 and 1 (the
-        defaults). For thermometer encoded features, a feature uses ``feat_maxs - feat_mins``
-        thermometer bits.
-
-        - A single int sets the same min or max for all features.
-        - Without convolution, an array with one entry per feature sets min and max per feature.
-        - With convolution, pass an int, or a tuple of length ``C`` for min and max per channel.
-
-    patch_dim : tuple of (int, int), default=None
-        Convolution window ``(h, w)``. None means the whole image (no convolution).
-        An entry <= 0 or larger than the image uses the full size in that axis.
-
-    stride : tuple of (int, int), default=(1, 1)
-        Window step in y and x.
-
-    track_patch_weights : bool, default=True
-        Count, per clause and patch, which patches the clause picks. Needed by ``wic`` on
-        convolutional models.
-
-    coalesced : bool, default=True
-        One clause bank shared by all classes with per-class weights. False gives each class
-        its own bank.
-
-    negative_clauses : bool, default=True
-        Start half the clauses with negative polarity (voting against a class).
-
-    negated_literals : bool, default=True
-        Append the negation of each literal. Doubles the literal count.
-
-    position_literals : bool, default=True
-        Add thermometer-coded patch position literals. Only used when there is more than one patch.
-
-    max_includes : int, default=None
-        Literal budget of a clause. None, <= 0 or more than the literal count means no limit.
-
-    n_states : int, default=256
-        TA states per literal, at least 2.
-
-    include_state : int, default=None
-        Lowest state that counts as include. None or -1 means ``n_states // 2``.
-
-    ta_init : str, int or TAInit, default="middle"
-        Initial TA states.
-
-        - ``"middle"``: just below include.
-        - ``"random"``: uniform over all states.
-        - ``"random_include"``: uniform over the two states around the include boundary.
-        - ``"random:N"``: uniform in a band of ``N`` states on each side of the boundary.
-        - An int sets every TA to that state.
-        - A ``TAInit`` (TA initializer) defines how to initialize the states or clauses.
-
-    weighted : bool, default=True
-        Learn clause weights. False keeps the initial weights.
-
-    max_weight : float, default=2**30
-        Largest weight magnitude.
-
-    allow_polarity_change : bool, default=True
-        Let a weight cross zero and flip the clause's polarity.
-
-    skip_t1a_fb, skip_t1b_fb, skip_t2_fb : bool, default=False
-        Turn off Type Ia, Type Ib or Type II feedback.
-
-    boost_tp_inc : bool, default=True
-        Type Ia increment steps for true literals always happen, instead of with probability
-        ``1 - 1/s``.
-
-    boost_tp_dec : bool, default=False
-        Type Ia decrement steps always happen, instead of with probability ``1/s``.
-
-    seed : int, default=None
-        RNG seed. None picks a random seed.
-
     See Also
     --------
     ytm._core.initializer : Available TA initializers.
     """
 
     n_clauses: int
+    """Number of clauses per class or clause bank, at least 1. When ``coalesced``, all classes
+    share one clause bank, so total clauses = ``n_clauses``. When not coalesced, total
+    clauses = ``n_clauses * n_classes``."""
+
     s: float
+    """Specificity, at least 1.0."""
+
     dim: int | tuple[int, ...]
+    """Input shape: ``D``, ``(H, W)`` or ``(H, W, C)``. Missing trailing sizes are set to 1."""
+
     n_classes: int
+    """Number of outputs (classes or labels)."""
 
     # discrete input
     feat_mins: int | Sequence[int] | np.ndarray = 0
+    """Inclusive integer range of each feature, together with ``feat_maxs``. For binary features, use 0 and 1
+    (the defaults). For thermometer encoded features, a feature uses ``feat_maxs - feat_mins`` thermometer bits.
+
+    - A single int sets the same min or max for all features.
+    - Without convolution, an array with one entry per feature sets min and max per feature.
+    - With convolution, pass an int, or a tuple of length ``C`` for min and max per channel.
+    """
+
     feat_maxs: int | Sequence[int] | np.ndarray = 1
+    """Upper end of the inclusive integer range of each feature. See ``feat_mins``."""
 
     # convolution
     patch_dim: tuple[int, int] | None = None
+    """Convolution window ``(h, w)``. None means the whole image (no convolution).
+    An entry <= 0 or larger than the image uses the full size in that axis."""
+
     stride: tuple[int, int] = (1, 1)
+    """Window step in y and x."""
 
     # convolutional interpretability
     track_patch_weights: bool = True
+    """Count, per clause and patch, which patches the clause picks. Needed by ``wic`` on
+    convolutional models."""
 
     # clause bank
     coalesced: bool = True
+    """One clause bank shared by all classes with per-class weights. False gives each class
+    its own bank."""
+
     negative_clauses: bool = True
+    """Start half the clauses with negative polarity (voting against a class)."""
 
     # literals
     negated_literals: bool = True
+    """Append the negation of each literal. Doubles the literal count."""
+
     position_literals: bool = True
+    """Add thermometer-coded patch position literals. Only used when there is more than one patch."""
+
     max_includes: int | None = None
+    """Literal budget of a clause. None, <= 0 or more than the literal count means no limit."""
 
     # TA states
     n_states: int = 256
+    """TA states per literal, at least 2."""
+
     include_state: int | None = None
+    """Lowest state that counts as include. None or -1 means ``n_states // 2``."""
+
     ta_init: Literal["random", "middle", "random_include"] | str | int | TAInit = "middle"
+    """Initial TA states.
+
+    - ``"middle"``: just below include.
+    - ``"random"``: uniform over all states.
+    - ``"random_include"``: uniform over the two states around the include boundary.
+    - ``"random:N"``: uniform in a band of ``N`` states on each side of the boundary.
+    - An int sets every TA to that state.
+    - A ``TAInit`` (TA initializer) defines how to initialize the states or clauses.
+    """
 
     # clause weights
     weight_init: Any = 1
     weighted: bool = True
+    """Learn clause weights. False keeps the initial weights."""
+
     max_weight: float = float(1 << 30)
+    """Largest weight magnitude."""
+
     allow_polarity_change: bool = True
+    """Let a weight cross zero and flip the clause's polarity."""
 
     # feedback
     skip_t1a_fb: bool = False
+    """Turn off Type Ia feedback."""
+
     skip_t1b_fb: bool = False
+    """Turn off Type Ib feedback."""
+
     skip_t2_fb: bool = False
+    """Turn off Type II feedback."""
+
     boost_tp_inc: bool = True
+    """Type Ia increment steps for true literals always happen, instead of with probability
+    ``1 - 1/s``."""
+
     boost_tp_dec: bool = False
+    """Type Ia decrement steps always happen, instead of with probability ``1/s``."""
 
     # Random state
     seed: int | None = None
+    """RNG seed. None picks a random seed."""
 
     def __post_init__(self):
         self._resolve_scalars()

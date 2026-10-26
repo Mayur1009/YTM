@@ -1,10 +1,10 @@
 Loss-Guided TM
 ==============
 
-.. currentmodule:: ytm.guided
-
 Models
 ------
+
+.. currentmodule:: ytm.guided
 
 .. autosummary::
    :toctree: generated

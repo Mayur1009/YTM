@@ -1,10 +1,10 @@
 Tsetlin Machine
 ===============
 
-.. currentmodule:: ytm.tm
-
 Models
 ------
+
+.. currentmodule:: ytm.tm
 
 .. autosummary::
    :toctree: generated

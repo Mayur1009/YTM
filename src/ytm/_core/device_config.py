@@ -48,22 +48,15 @@ def parse_device(device: str) -> tuple[str, int]:
 
 @dataclass
 class DeviceConfig:
-    """Where and how a model runs.
-
-    Parameters
-    ----------
-    device : str, default="cpu:1"
-        ``"cpu[:n_threads]"`` or ``"cuda[:gpu_id]"``. See :func:`parse_device`.
-
-    block_size : int, default=256
-        CUDA threads per block. Rounded down to a multiple of the warp size and capped at the
-        GPU maximum. Not used on cpu.
-    """
+    """Where and how a model runs."""
 
     device: Literal["cpu", "cuda"] | str = "cpu:1"
+    """``"cpu[:n_threads]"`` or ``"cuda[:gpu_id]"``. See :func:`parse_device`."""
 
     # cuda
     block_size: int = 256
+    """CUDA threads per block. Rounded down to a multiple of the warp size and capped at the
+    GPU maximum. Not used on cpu."""
 
     kind: str = field(init=False)
     n: int = field(init=False)
