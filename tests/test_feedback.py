@@ -99,7 +99,7 @@ def test_conv_type1a_updates_position_and_feature_literals_of_the_selected_windo
 
 
 def _decide_setup(device):
-    tm = discrete("binary", device, n_clauses=6, max_includes=1)
+    tm = discrete("binary", device, n_clauses=6, max_includes=2)
     set_clauses(tm, {0: [0], 1: [0], 2: [1], 3: [1], 4: [0, 5], 5: [0, 5]})
     set_weights(tm, [[2, -2, 2, -2, 2, -2]])
     return tm
@@ -146,7 +146,7 @@ def test_decide_lists_each_clause_with_feedback_once(device, model, coalesced, t
     if threads > 1 and not device.startswith("cpu"):
         pytest.skip("thread count only applies to cpu")
     dev = f"cpu:{threads}" if device.startswith("cpu") else device
-    kw = dict(n_clauses=64, n_classes=3, coalesced=coalesced)
+    kw = {"n_clauses": 64, "n_classes": 3, "coalesced": coalesced}
     if model == "discrete":
         tm = discrete("multi", dev, **kw)
         Y, votes = [[50.0, -50.0, -50.0]], [-50.0, 50.0, 50.0]  # |prob| = 0.5, a mix of fb and none

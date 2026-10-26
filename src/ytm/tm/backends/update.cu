@@ -44,7 +44,7 @@ decide_feedback(const ull* __restrict__ rng_keys, const int8_t* __restrict__ cla
     const float* label_probs_e = &label_probs[(ull)e * CLASSES];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int clause_output = clause_output_arr[clause];
-        bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
+        bool has_space = (clause_len[clause] < (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
         NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 

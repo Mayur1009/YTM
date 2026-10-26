@@ -24,7 +24,7 @@ void decide_feedback(const ull* restrict rng_keys, const int8_t* restrict clause
 #pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
     for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
         int clause_output = clause_output_arr[clause];
-        bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
+        bool has_space = (clause_len[clause] < (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
         NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 

@@ -73,7 +73,7 @@ decide_feedback_grad(const ull* __restrict__ rng_keys, const int e, const float*
     const ull seed = rng_keys[e];
     GRID_STRIDE_LOOP(clause, (ull)TOTAL_CLAUSES) {
         int ck = clause_output[clause];
-        bool has_space = (clause_len[clause] <= (NLITS_T)MAX_INCLUDED_LITERALS);
+        bool has_space = (clause_len[clause] < (NLITS_T)MAX_INCLUDED_LITERALS);
         bool dropped = (clause_drop_mask[clause] == 1);
         NCLASSES_T n1a = 0, n1b = 0, n2 = 0;
 
@@ -140,7 +140,7 @@ decide_feedback_delta_l(const ull* __restrict__ rng_keys, const int e, const flo
             continue;
 
         int ck = clause_output[clause_id];
-        bool has_space = (clause_len[clause_id] <= (NLITS_T)MAX_INCLUDED_LITERALS);
+        bool has_space = (clause_len[clause_id] < (NLITS_T)MAX_INCLUDED_LITERALS);
         float delta_L = *loss - loss_neg_ck[clause_id];
         float update_prob = 1.0f - expf(-lambda_ * fabsf(delta_L));
         uint8_t fb = select_fb_delta_l(seed, clause_id, update_prob, delta_L, ck, has_space);
