@@ -20,3 +20,6 @@ wandb
 
 # bench results
 bench/results/
+
+# docs build
+docs/_build/

@@ -40,6 +40,14 @@ bench-cuda = [
     "pycuda",
     { include-group = "bench" },
 ]
+docs = [
+    "sphinx",
+    "sphinx-autoapi",
+    "numpydoc",
+    "myst-parser",
+    "sphinx-copybutton",
+    "pydata-sphinx-theme",
+]
 
 # Pytest
 [tool.pytest.ini_options]
@@ -82,11 +90,16 @@ cuda = "*"
 [tool.pixi.feature.bench.target.osx-arm64.activation.env]
 CC = "$PIXI_PROJECT_ROOT/bench/tmu_cc_temp_workaround.sh"
 
+## Docs
+[tool.pixi.feature.docs.tasks]
+docs = "sphinx-build -b html docs docs/_build/html"
+
 [tool.pixi.environments]
 default = { features = ["dev"], solve-group = "default" }
 cuda = { features = ["dev", "cuda"], solve-group = "cuda" }
 bench = { features = ["bench"], solve-group = "default" }
 bench-cuda = { features = ["cuda", "bench-cuda"], solve-group = "cuda" }
+docs = { features = ["docs"], solve-group = "default" }
 
 # LSPs, linters and foramtters
 [tool.basedpyright]
