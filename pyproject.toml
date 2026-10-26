@@ -42,7 +42,6 @@ bench-cuda = [
 ]
 docs = [
     "sphinx",
-    "sphinx-autoapi",
     "numpydoc",
     "myst-parser",
     "sphinx-copybutton",

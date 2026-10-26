@@ -1,7 +1,8 @@
 project = "YTM"
 
 extensions = [
-    "autoapi.extension",
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
     "numpydoc",
@@ -11,9 +12,9 @@ extensions = [
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 exclude_patterns = ["_build"]
 
-autoapi_dirs = ["../src/ytm"]
-autoapi_ignore = ["*/_o/*", "*/_e/*"]
-autoapi_options = ["members", "undoc-members", "show-inheritance", "show-module-summary", "imported-members", "inherited-members"]
+autosummary_generate = True
+autodoc_default_options = {"members": True, "inherited-members": True, "show-inheritance": True}
+autodoc_mock_imports = ["cupy", "pynvml"]
 numpydoc_show_class_members = False
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),

@@ -45,7 +45,7 @@ class FitBuffers:
     chunk_start, chunk_end : int
         Sample range ``[chunk_start, chunk_end)`` currently loaded.
 
-    X : array of shape (chunk, *dim)
+    X : array of shape ``(chunk, *dim)``
         Inputs of the loaded chunk, cast for the kernels.
 
     Y : array of shape (chunk, n_classes)

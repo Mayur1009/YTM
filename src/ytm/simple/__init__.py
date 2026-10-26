@@ -142,7 +142,7 @@ class RegressionTM(BaseTM):
 
         Parameters
         ----------
-        X : array-like of bool, shape (N, *dim) or (N, prod(dim))
+        X : array-like of bool, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Binary inputs.
 
         clip_class_sums : bool, default=True

@@ -4,5 +4,6 @@
 ```{toctree}
 :hidden:
 
-autoapi/index
+api/index
+examples
 ```

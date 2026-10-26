@@ -329,7 +329,7 @@ class BaseTM:
 
         Parameters
         ----------
-        X : array-like of bool, shape (N, *dim) or (N, prod(dim))
+        X : array-like of bool, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Binary inputs.
 
         Y : array-like

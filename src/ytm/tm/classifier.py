@@ -28,7 +28,7 @@ class Classifier(BaseTM):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         Y : array-like of int
@@ -75,7 +75,7 @@ class MultiClassTM(Classifier):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         clip_class_sums : bool, default=False
@@ -141,7 +141,7 @@ class MultiOutputTM(Classifier):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         clip_class_sums : bool, default=False
@@ -216,7 +216,7 @@ class BinaryTM(Classifier):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         clip_class_sums : bool, default=False

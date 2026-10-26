@@ -77,7 +77,7 @@ class BaseTM(abc.ABC):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         force_repack : bool, default=False
@@ -99,7 +99,7 @@ class BaseTM(abc.ABC):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         force_repack : bool, default=False
@@ -117,7 +117,7 @@ class BaseTM(abc.ABC):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         force_repack : bool, default=False
@@ -175,7 +175,7 @@ class BaseTM(abc.ABC):
 
         Parameters
         ----------
-        X : array-like of int, shape (N, *dim) or (N, prod(dim))
+        X : array-like of int, shape ``(N, *dim)`` or ``(N, prod(dim))``
             Inputs, each feature within ``[feat_mins, feat_maxs]``.
 
         target_classes : array-like of int, shape (N,)
