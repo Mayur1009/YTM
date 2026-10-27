@@ -23,21 +23,21 @@ Requires Python >= 3.11.
 
 - Using `pip`:
     ```bash
-    pip install "ytm @ git+https://gitlab.com/Mayur1009/YTM.git"          # CPU
-    pip install "ytm[cuda] @ git+https://gitlab.com/Mayur1009/YTM.git"    # CPU + CUDA
+    pip install "ytm @ git+https://gitlab.com/cair/YTM.git"          # CPU
+    pip install "ytm[cuda] @ git+https://gitlab.com/cair/YTM.git"    # CPU + CUDA
     ```
 
 - Using `uv`:
     ```bash
-    uv add "ytm @ git+https://gitlab.com/Mayur1009/YTM.git"          # CPU
-    uv add "ytm[cuda] @ git+https://gitlab.com/Mayur1009/YTM.git"    # CPU + CUDA
+    uv add "ytm @ git+https://gitlab.com/cair/YTM.git"          # CPU
+    uv add "ytm[cuda] @ git+https://gitlab.com/cair/YTM.git"    # CPU + CUDA
     ```
 
 -  Using [pixi](https://pixi.sh) (*Recommended*):
     ```bash
     pixi add clang llvm-openmp                                                  # C compiler + OpenMP for CPU
-    pixi add --pypi ytm --git "https://gitlab.com/Mayur1009/YTM.git"            # CPU only
-    pixi add --pypi "ytm[cuda]" --git "https://gitlab.com/Mayur1009/YTM.git"    # CPU+CUDA
+    pixi add --pypi ytm --git "https://gitlab.com/cair/YTM.git"            # CPU only
+    pixi add --pypi "ytm[cuda]" --git "https://gitlab.com/cair/YTM.git"    # CPU+CUDA
     ```
 
 **Note:**
@@ -83,7 +83,7 @@ Requires Python >= 3.11.
 
 The environment needed is defined in `pyproject.toml`.
 ```bash
-git clone https://gitlab.com/Mayur1009/YTM.git && cd YTM
+git clone https://gitlab.com/cair/YTM.git && cd YTM
 pixi install              # CPU, includes clang and llvm-openmp
 pixi install -e cuda      # CUDA
 
