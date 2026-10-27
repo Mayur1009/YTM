@@ -99,3 +99,27 @@ void pack_clauses(const TA_STATE_T* restrict global_ta_states, const FBOUND_T* r
         is_clause_synced[clause] = 1;
     }
 }
+
+void bit_pack_clauses(const FBOUND_T* restrict clause_feat_bounds, const NFEAT_T* restrict clause_feat_ids,
+                      const NFEAT_T* restrict clause_n_feats, const int8_t* restrict has_contra,
+                      uint64_t* restrict clause_pos_bits, uint64_t* restrict clause_neg_bits) {
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
+    for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+        if (has_contra[clause])
+            continue;
+
+        const FBOUND_T* cfb = &clause_feat_bounds[feat_bounds_offset(clause, 0, 0)];
+        const NFEAT_T* cfids = &clause_feat_ids[feat_ids_offset(clause, 0)];
+        uint64_t* pos = &clause_pos_bits[clause * N_FEAT_CHUNKS];
+        uint64_t* neg = &clause_neg_bits[clause * N_FEAT_CHUNKS];
+
+        for (int i = 0; i < (int)clause_n_feats[clause]; i++) {
+            const int fid = (int)cfids[i];
+            const uint64_t bit = 1ULL << (fid % FEAT_CHUNK_SIZE);
+            if (cfb[i * 2])
+                pos[fid / FEAT_CHUNK_SIZE] |= bit;
+            else
+                neg[fid / FEAT_CHUNK_SIZE] |= bit;
+        }
+    }
+}

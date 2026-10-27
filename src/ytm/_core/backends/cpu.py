@@ -1,6 +1,6 @@
 import pathlib
 import warnings
-from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32
+from ctypes import CDLL, POINTER, c_float, c_int, c_int8, c_int32, c_uint32, c_uint64
 
 import numpy as np
 
@@ -10,6 +10,7 @@ from .toolchain import Toolchain
 int8_p = POINTER(c_int8)
 int32_p = POINTER(c_int32)
 uint32_p = POINTER(c_uint32)
+uint64_p = POINTER(c_uint64)
 float_p = POINTER(c_float)
 
 
@@ -142,8 +143,46 @@ class CPUDevice(BaseDevice[BuffersT, ConfigT, np.ndarray]):
         )
 
     def _infer_batch(self, Xb: np.ndarray, bs: int) -> np.ndarray:
-        class_sums = np.empty((bs, self.config.n_classes), dtype=np.float32)
-        clause_outputs = self._clause_outputs(Xb, bs)
+        cfg = self.config
+        class_sums = np.empty((bs, cfg.n_classes), dtype=np.float32)
+
+        if cfg._all_binary_feats:
+            n_chunks = (cfg._n_raw_patch_feats - 1 + 64) // 64
+
+            # These have to be zero allocated, to get correct results.
+            clause_pos_bits = np.zeros((cfg._total_clauses, n_chunks), dtype=np.uint64)
+            clause_neg_bits = np.zeros((cfg._total_clauses, n_chunks), dtype=np.uint64)
+            x_bits = np.zeros((bs, cfg._n_patches, n_chunks), dtype=np.uint64)
+
+            clause_outputs = np.empty((bs, cfg._total_clauses), dtype=np.int8)
+            Xb = np.asarray(Xb, dtype=cfg._fbound_dtype, order="C")
+
+            self.lib.bit_pack_clauses(
+                self.p_clause_feat_bounds,
+                self.p_clause_feat_ids,
+                self.p_clause_n_feats,
+                self.p_has_contra,
+                clause_pos_bits.ctypes.data_as(uint64_p),
+                clause_neg_bits.ctypes.data_as(uint64_p),
+            )
+            self.lib.bit_pack_X(
+                Xb.ctypes.data_as(POINTER(np.ctypeslib.as_ctypes_type(cfg._fbound_dtype))),
+                c_int(bs),
+                x_bits.ctypes.data_as(uint64_p),
+            )
+            self.lib.eval_infer_binary(
+                x_bits.ctypes.data_as(uint64_p),
+                c_int(bs),
+                self.p_clause_position_bounds,
+                clause_pos_bits.ctypes.data_as(uint64_p),
+                clause_neg_bits.ctypes.data_as(uint64_p),
+                self.p_has_contra,
+                self.p_clause_len,
+                clause_outputs.ctypes.data_as(int8_p),
+            )
+        else:
+            clause_outputs = self._clause_outputs(Xb, bs)
+
         self.lib.vote_sum(clause_outputs.ctypes.data_as(int8_p), self.p_clause_weights, c_int(bs), class_sums.ctypes.data_as(float_p))
         return class_sums
 

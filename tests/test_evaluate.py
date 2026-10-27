@@ -1,6 +1,7 @@
 import numpy as np
+import pytest
 
-from .support import discrete, set_clauses, set_weights
+from .support import discrete, set_clauses, set_ta_states, set_weights
 
 
 def _weights(shape, cells):
@@ -81,3 +82,63 @@ def test_position_literal_restricts_which_windows_count(device):
     set_weights(tm, [[3, 0]])
     X = np.array([[1, 1, 0, 1], [0, 0, 1, 0], [1, 1, 1, 0]]).reshape(3, 1, 4, 1)
     assert np.array_equal(tm.score(X, force_repack=True)[:, 0], [0, 3, 3])
+
+
+def _reference_score(tm, X):
+    cfg = tm.config
+    H, W, C = cfg._dim
+    h, w = cfg._patch_dim
+    sy, sx = cfg._stride
+    ny, nx = cfg._n_patches_y, cfg._n_patches_x
+    included = tm.get_ta_states() >= cfg._include_state
+    weights = tm.get_weights()
+    X = X.reshape(-1, H, W, C)
+
+    lits = []
+    for py in range(ny):
+        for px in range(nx):
+            feats = X[:, py * sy : py * sy + h, px * sx : px * sx + w, :].reshape(len(X), -1)
+            if cfg._n_position_feats:
+                pos = np.concatenate([np.arange(ny - 1) < py, np.arange(nx - 1) < px])
+                feats = np.concatenate([np.broadcast_to(pos, (len(X), len(pos))), feats], axis=1)
+            lits.append(np.concatenate([feats, 1 - feats], axis=1) if cfg.negated_literals else feats)
+    lits = np.stack(lits, axis=1).astype(bool)
+
+    sums = np.zeros((len(X), cfg.n_classes), dtype=np.float32)
+    for c in range(cfg.n_classes):
+        bank = included[0 if cfg.coalesced else c]
+        fires = ~(bank[None, None] & ~lits[:, :, None]).any(axis=3)
+        sums[:, c] = fires.any(axis=1).astype(np.float32) @ weights[c]
+    return sums
+
+
+@pytest.mark.parametrize(
+    "dim, patch_dim, stride",
+    [((200, 1, 1), None, (1, 1)), ((12, 12, 2), (6, 6), (2, 1)), ((9, 10, 1), (3, 4), (1, 2))],
+    ids=["flat_4_segments", "conv_depth2_stride", "conv_small"],
+)
+@pytest.mark.parametrize("coalesced", [True, False], ids=["coalesced", "banks"])
+@pytest.mark.parametrize("negated_literals", [True, False], ids=["negated", "plain"])
+def test_binary_features_match_a_reference_on_random_clauses(device, dim, patch_dim, stride, coalesced, negated_literals):
+    """Random sparse clauses on binary inputs: every segment, patch, stride and position bound must agree with a numpy reference."""
+    tm = discrete(
+        "multi",
+        device,
+        n_clauses=64,
+        n_classes=3,
+        dim=dim,
+        patch_dim=patch_dim,
+        stride=stride,
+        coalesced=coalesced,
+        negated_literals=negated_literals,
+    )
+    cfg = tm.config
+    rng = np.random.default_rng(0)
+    states = np.where(rng.random((cfg._total_clauses, cfg._n_literals)) < 0.01, cfg._include_state, cfg._include_state - 1)
+    set_ta_states(tm, states)
+    set_weights(tm, rng.integers(-5, 6, size=(cfg.n_classes, cfg._n_clauses)))
+
+    X = (rng.random((50, int(np.prod(dim)))) < 0.3).astype(np.uint8)
+    ref = _reference_score(tm, X)
+    assert np.unique(ref).size > 3
+    np.testing.assert_array_equal(tm.score(X.reshape(50, *dim), force_repack=True), ref)

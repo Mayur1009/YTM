@@ -12,6 +12,9 @@ typedef unsigned long long ull;
 #define RESTRICT restrict
 #define LANE_COUNT 1
 
+#define FEAT_CHUNK_SIZE 64
+#define N_FEAT_CHUNKS ((N_RAW_PATCH_FEATS - 1 + FEAT_CHUNK_SIZE) / FEAT_CHUNK_SIZE)
+
 typedef struct {
     float x, y;
 } float2;

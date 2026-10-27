@@ -120,6 +120,68 @@ void eval_infer(const FBOUND_T* restrict X, const int N, const PBOUND_T* restric
     }
 }
 
+static inline bool match_bits(const uint64_t* restrict x, const uint64_t* restrict pos, const uint64_t* restrict neg) {
+    int k = 0;
+    for (; k + 4 <= N_FEAT_CHUNKS; k += 4) {
+        uint64_t miss = 0;
+        for (int u = 0; u < 4; u++)
+            miss |= (pos[k + u] & ~x[k + u]) | (neg[k + u] & x[k + u]);
+        if (miss)
+            return false;
+    }
+    for (; k < N_FEAT_CHUNKS; k++)
+        if ((pos[k] & ~x[k]) | (neg[k] & x[k]))
+            return false;
+    return true;
+}
+
+void bit_pack_X(const FBOUND_T* restrict X, const int N, uint64_t* restrict x_bits) {
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
+    for (int e = 0; e < N; e++) {
+        const FBOUND_T* Xe = &X[sample_offset(e)];
+
+        for (int py = 0; py < N_PATCHES_Y; py++) {
+            for (int px = 0; px < N_PATCHES_X; px++) {
+                uint64_t* bits = &x_bits[((ull)e * N_PATCHES + py * N_PATCHES_X + px) * N_FEAT_CHUNKS];
+
+                for (int fid = 0; fid < N_RAW_PATCH_FEATS; fid++)
+                    if (get_feature_value(Xe, py, px, fid))
+                        bits[fid / FEAT_CHUNK_SIZE] |= 1ULL << (fid % FEAT_CHUNK_SIZE);
+            }
+        }
+    }
+}
+
+void eval_infer_binary(const uint64_t* restrict x_bits, const int N, const PBOUND_T* restrict clause_position_bounds,
+                       const uint64_t* restrict clause_pos_bits, const uint64_t* restrict clause_neg_bits,
+                       const int8_t* restrict has_contra, const NLITS_T* restrict clause_len,
+                       int8_t* restrict clause_outputs) {
+#pragma omp parallel for schedule(static) num_threads(ytm_n_threads)
+    for (int e = 0; e < N; e++) {
+        const uint64_t* xe = &x_bits[(ull)e * N_PATCHES * N_FEAT_CHUNKS];
+
+        for (ull clause = 0; clause < (ull)TOTAL_CLAUSES; clause++) {
+            int out = eval_trivial(clause, has_contra, clause_len);
+            if (out < 0) {
+                const uint64_t* pos = &clause_pos_bits[clause * N_FEAT_CHUNKS];
+                const uint64_t* neg = &clause_neg_bits[clause * N_FEAT_CHUNKS];
+
+                if (N_PATCHES > 1) {
+                    const PBOUND_T* pb = &clause_position_bounds[pos_bounds_offset(clause, 0)];
+                    out = 0;
+                    for (int py = pb[0]; !out && py <= pb[1]; py++)
+                        for (int px = pb[2]; !out && px <= pb[3]; px++)
+                            out = match_bits(&xe[(ull)(py * N_PATCHES_X + px) * N_FEAT_CHUNKS], pos, neg);
+                } else {
+                    out = match_bits(xe, pos, neg);
+                }
+            }
+
+            clause_outputs[clause_output_offset(e, clause)] = (int8_t)out;
+        }
+    }
+}
+
 /*
  * Clause outputs of the current sample during fit. Use reservior sampling to select one matching patch.
  *
